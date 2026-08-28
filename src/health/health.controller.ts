@@ -7,6 +7,7 @@ import {
   HttpHealthIndicator,
 } from '@nestjs/terminus';
 import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
 
 @ApiTags('health')
 @Controller('health')
@@ -207,21 +208,29 @@ export class HealthController {
   private async checkRedis(): Promise<{ status: string; latency: number }> {
     const startTime = Date.now();
     try {
-      // Check if Redis is configured
-      const redisUrl = this.config.get('REDIS_URL');
-      if (!redisUrl) {
-        return {
-          status: 'ok', // Not configured, so not critical
-          latency: 0,
-        };
-      }
+      const host = this.config.get<string>('REDIS_HOST', 'localhost');
+      const port = this.config.get<number>('REDIS_PORT', 6379);
+      const password = this.config.get<string>('REDIS_PASSWORD');
+      const redis = new Redis({
+        host,
+        port,
+        password: password || undefined,
+        lazyConnect: true,
+        connectTimeout: 1000,
+        maxRetriesPerRequest: 0,
+      });
 
-      // For now, return ok since Redis isn't implemented yet
-      // TODO: Implement actual Redis health check when Redis is added
-      return {
-        status: 'ok',
-        latency: Date.now() - startTime,
-      };
+      try {
+        await redis.connect();
+        await redis.ping();
+        const latency = Date.now() - startTime;
+        return {
+          status: latency > 1000 ? 'degraded' : 'ok',
+          latency,
+        };
+      } finally {
+        await redis.quit().catch(() => undefined);
+      }
     } catch (error) {
       return {
         status: 'degraded',
