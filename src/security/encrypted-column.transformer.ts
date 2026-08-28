@@ -1,5 +1,6 @@
 import { ValueTransformer } from 'typeorm';
 import { EncryptionService } from './encryption.service';
+import { DecryptionFailedException } from './decryption-failed.exception';
 
 export function encryptedColumnTransformer(
   fieldName: string,
@@ -19,7 +20,7 @@ export function encryptedColumnTransformer(
         return EncryptionService.getSingleton().decrypt(value);
       } catch (error) {
         EncryptionService.getSingleton().logDecryptionFailure(fieldName, error);
-        return null;
+        throw new DecryptionFailedException(fieldName, error);
       }
     },
   };
