@@ -14,12 +14,12 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
-import { CacheService } from '../cache/cache.service';
 import { EmailService } from '../email/email.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -44,7 +44,7 @@ export class SettlementsService {
     private config: ConfigService,
     private webhooks: WebhooksService,
     private adminAlerts: AdminAlertService,
-    private cache: CacheService,
+    private analytics: AnalyticsService,
     private emailService: EmailService,
     private merchantsService: MerchantsService,
     private notificationPrefs: NotificationPrefsService,
@@ -54,9 +54,8 @@ export class SettlementsService {
     private settlementQueue: Queue,
   ) {}
 
-  private async invalidateAnalyticsForMerchant(merchantId: string): Promise<void> {
-    await this.cache.delPattern(`analytics:${merchantId}:*`);
-    await this.cache.delPattern('analytics:admin:*');
+  private invalidateAnalyticsForMerchant(merchantId: string): void {
+    this.analytics.clearCacheForMerchant(merchantId);
   }
 
   async initiateSettlement(payment: Payment): Promise<void> {
@@ -261,7 +260,7 @@ export class SettlementsService {
       }
 
       // Invalidate analytics caches impacted by payment.settled.
-      await this.invalidateAnalyticsForMerchant(settlement.merchantId);
+      this.invalidateAnalyticsForMerchant(settlement.merchantId);
 
       for (const payment of payments) {
         await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
@@ -359,7 +358,7 @@ export class SettlementsService {
       }
 
       // Invalidate analytics caches impacted by payment.settled.
-      await this.invalidateAnalyticsForMerchant(settlement.merchantId);
+      this.invalidateAnalyticsForMerchant(settlement.merchantId);
 
       for (const payment of payments) {
         await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
