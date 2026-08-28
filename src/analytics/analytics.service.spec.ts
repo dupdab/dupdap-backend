@@ -374,4 +374,37 @@ describe('AnalyticsService', () => {
       );
     });
   });
+
+  describe('clearCacheForMerchant', () => {
+    it('should invalidate merchant-specific analytics keys', () => {
+      const merchantId = 'merchant-123';
+      service.clearCacheForMerchant(merchantId);
+
+      expect(cache.delPattern).toHaveBeenCalledWith(`analytics:${merchantId}:*`);
+    });
+
+    it('should also invalidate admin analytics keys', () => {
+      service.clearCacheForMerchant('merchant-123');
+
+      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
+    });
+
+    it('should only invalidate the specified merchant, not other merchants', () => {
+      cache.delPattern.mockClear();
+
+      service.clearCacheForMerchant('merchant-abc');
+
+      // Should not have called with patterns for other merchants
+      expect(cache.delPattern).toHaveBeenCalledWith('analytics:merchant-abc:*');
+      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
+      expect(cache.delPattern).not.toHaveBeenCalledWith('analytics:merchant-xyz:*');
+    });
+
+    it('should invalidate cache immediately and not wait', () => {
+      service.clearCacheForMerchant('merchant-456');
+
+      expect(cache.delPattern).toHaveBeenCalledWith('analytics:merchant-456:*');
+      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
+    });
+  });
 });
