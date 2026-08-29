@@ -24,10 +24,19 @@ function ipInCidr(ip: string, cidr: string): boolean {
   }
 }
 
+/**
+ * Resolve the client IP for allowlist checks.
+ *
+ * We deliberately do NOT parse `X-Forwarded-For` by hand: that header is
+ * attacker-controlled unless a trusted reverse proxy overwrites it. Instead we
+ * rely on Express's `req.ip`, which honours the app's `trust proxy` setting
+ * (configured in `main.ts` from the `TRUST_PROXY` env var). When no trusted
+ * proxy is configured, `req.ip` is the raw socket address and cannot be
+ * spoofed; when one is, Express derives the left-most untrusted address for us.
+ * `req.socket.remoteAddress` is the last-resort fallback.
+ */
 function getClientIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
-  return req.ip ?? '';
+  return req.ip ?? req.socket?.remoteAddress ?? '';
 }
 
 @Injectable()
