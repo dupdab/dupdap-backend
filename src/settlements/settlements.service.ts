@@ -20,6 +20,7 @@ import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
+import { CronJobService } from '../cron/cron-job.service';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -52,6 +53,7 @@ export class SettlementsService {
     private stellar: StellarService,
     @InjectQueue(QUEUE_NAMES.settlement)
     private settlementQueue: Queue,
+    private cronJobService: CronJobService,
   ) {}
 
   private async invalidateAnalyticsForMerchant(merchantId: string): Promise<void> {
@@ -120,33 +122,37 @@ export class SettlementsService {
 
   @Cron('0 */15 * * * *')
   async batchSmallConfirmedPayments(): Promise<void> {
-    const confirmedPayments = await this.paymentsRepo.find({
-      where: {
-        status: PaymentStatus.CONFIRMED,
-        settlementId: IsNull(),
-        amountUsd: LessThan(SMALL_BATCH_THRESHOLD_USD),
-      },
-      order: {
-        merchantId: 'ASC',
-        confirmedAt: 'ASC',
-        createdAt: 'ASC',
-      },
+    await this.cronJobService.run('batch-small-confirmed-payments', async () => {
+      const confirmedPayments = await this.paymentsRepo.find({
+        where: {
+          status: PaymentStatus.CONFIRMED,
+          settlementId: IsNull(),
+          amountUsd: LessThan(SMALL_BATCH_THRESHOLD_USD),
+        },
+        order: {
+          merchantId: 'ASC',
+          confirmedAt: 'ASC',
+          createdAt: 'ASC',
+        },
+      });
+
+      if (confirmedPayments.length === 0) {
+        return 0;
+      }
+
+      const groups = new Map<string, Payment[]>();
+      for (const payment of confirmedPayments) {
+        const list = groups.get(payment.merchantId) ?? [];
+        list.push(payment);
+        groups.set(payment.merchantId, list);
+      }
+
+      for (const payments of groups.values()) {
+        await this.flushMerchantBatch(payments);
+      }
+
+      return confirmedPayments.length;
     });
-
-    if (confirmedPayments.length === 0) {
-      return;
-    }
-
-    const groups = new Map<string, Payment[]>();
-    for (const payment of confirmedPayments) {
-      const list = groups.get(payment.merchantId) ?? [];
-      list.push(payment);
-      groups.set(payment.merchantId, list);
-    }
-
-    for (const payments of groups.values()) {
-      await this.flushMerchantBatch(payments);
-    }
   }
 
   private async flushMerchantBatch(payments: Payment[]): Promise<void> {

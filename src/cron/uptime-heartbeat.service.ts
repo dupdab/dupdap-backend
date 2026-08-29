@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { CronJobService } from './cron-job.service';
 
 /**
  * Pings the Better Uptime heartbeat URL every 5 minutes.
@@ -16,7 +17,10 @@ import axios from 'axios';
 export class UptimeHeartbeatService {
   private readonly logger = new Logger(UptimeHeartbeatService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly cronJobService: CronJobService,
+  ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async ping(): Promise<void> {
@@ -24,10 +28,12 @@ export class UptimeHeartbeatService {
     if (!url) return;
 
     try {
-      await axios.get(url, { timeout: 5_000 });
-      this.logger.debug('Heartbeat ping sent');
+      await this.cronJobService.run('uptime-heartbeat', async () => {
+        await axios.get(url, { timeout: 5_000 });
+        this.logger.debug('Heartbeat ping sent');
+        return 1;
+      });
     } catch (err) {
-      // Log but don't throw — a failed ping is not fatal to the app
       this.logger.warn(
         `Heartbeat ping failed: ${err instanceof Error ? err.message : String(err)}`,
       );
