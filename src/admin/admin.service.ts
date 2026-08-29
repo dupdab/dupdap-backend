@@ -44,6 +44,27 @@ export class AdminService {
     private readonly stellarMonitor: StellarMonitorService,
   ) {}
 
+  /**
+   * Persist an audit-trail row for a state-mutating admin action.
+   * Consumed by the PCI-DSS compliance reports (#704, #207).
+   */
+  private async writeAuditLog(entry: {
+    actor?: string;
+    action: string;
+    resourceType: string;
+    resourceId?: string | null;
+    details?: Record<string, any> | null;
+  }): Promise<void> {
+    const log = this.auditLogRepo.create({
+      actor: entry.actor ?? 'system',
+      action: entry.action,
+      resourceType: entry.resourceType,
+      resourceId: entry.resourceId ?? null,
+      details: entry.details ?? null,
+    });
+    await this.auditLogRepo.save(log);
+  }
+
   async findAllMerchants(page = 1, limit = 20) {
     const [merchants, total] = await this.merchantsRepo.findAndCount({
       skip: (page - 1) * limit,
@@ -60,16 +81,24 @@ export class AdminService {
     return this.sanitize(merchant);
   }
 
-  async updateMerchantStatus(id: string, status: MerchantStatus) {
+  async updateMerchantStatus(id: string, status: MerchantStatus, actorId = 'system') {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
 
+    const previousStatus = merchant.status;
     merchant.status = status;
     await this.merchantsRepo.save(merchant);
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'MERCHANT_STATUS_UPDATED',
+      resourceType: 'merchant',
+      resourceId: id,
+      details: { previousStatus, status },
+    });
     return this.sanitize(merchant);
   }
 
-  async bulkUpdateMerchantStatus(ids: string[], status: MerchantStatus) {
+  async bulkUpdateMerchantStatus(ids: string[], status: MerchantStatus, actorId = 'system') {
     const results = {
       success: [] as string[],
       failed: [] as { id: string; error: string }[],
@@ -77,7 +106,7 @@ export class AdminService {
 
     for (const id of ids) {
       try {
-        await this.updateMerchantStatus(id, status);
+        await this.updateMerchantStatus(id, status, actorId);
         results.success.push(id);
       } catch (error) {
         results.failed.push({ id, error: error.message });
@@ -257,6 +286,7 @@ export class AdminService {
     password: string,
     businessName: string,
     actorRole: MerchantRole,
+    actorId = 'system',
   ) {
     if (actorRole !== MerchantRole.SUPERADMIN) {
       throw new ForbiddenException('Only SUPERADMIN can create admin users');
@@ -271,10 +301,17 @@ export class AdminService {
     });
     const saved = await this.merchantsRepo.save(merchant);
     console.log(`[AdminService] Admin user created: ${saved.id} (${email})`);
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'ADMIN_CREATED',
+      resourceType: 'admin',
+      resourceId: saved.id,
+      details: { email, businessName },
+    });
     return this.sanitize(saved);
   }
 
-  async deleteAdmin(id: string, actorRole: MerchantRole) {
+  async deleteAdmin(id: string, actorRole: MerchantRole, actorId = 'system') {
     if (actorRole !== MerchantRole.SUPERADMIN) {
       throw new ForbiddenException('Only SUPERADMIN can delete admin users');
     }
@@ -284,6 +321,13 @@ export class AdminService {
       throw new BadRequestException('Target user is not an ADMIN');
     }
     await this.merchantsRepo.remove(merchant);
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'ADMIN_DELETED',
+      resourceType: 'admin',
+      resourceId: id,
+      details: { email: merchant.email },
+    });
     return { deleted: true, id };
   }
 
@@ -325,20 +369,34 @@ export class AdminService {
 
   // ── Sandbox Environment Management (#708) ──────────────────────────────────
 
-  async toggleSandboxMode(id: string, enabled: boolean) {
+  async toggleSandboxMode(id: string, enabled: boolean, actorId = 'system') {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     merchant.sandboxMode = enabled;
     await this.merchantsRepo.save(merchant);
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'SANDBOX_MODE_TOGGLED',
+      resourceType: 'merchant',
+      resourceId: id,
+      details: { enabled },
+    });
     return this.sanitize(merchant);
   }
 
-  async resetSandboxData(merchantId: string) {
+  async resetSandboxData(merchantId: string, actorId = 'system') {
     const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
     if (!merchant) throw new NotFoundException('Merchant not found');
 
     const payments = await this.paymentsRepo.find({ where: { merchantId } });
     await this.paymentsRepo.remove(payments);
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'DATA_PURGED',
+      resourceType: 'merchant',
+      resourceId: merchantId,
+      details: { scope: 'sandbox-payments', deleted: payments.length },
+    });
     return { deleted: payments.length };
   }
 
@@ -435,25 +493,37 @@ export class AdminService {
 
   // ── Generic Record Management (#soft-delete) ───────────────────────────────
 
-  async restoreRecord(entity: string, id: string) {
+  async restoreRecord(entity: string, id: string, actorId = 'system') {
     if (entity === 'merchants') {
       const record = await this.merchantsRepo.findOne({ where: { id }, withDeleted: true });
       if (!record) throw new NotFoundException('Merchant not found');
       if (!record.deletedAt) throw new BadRequestException('Merchant is not deleted');
       await this.merchantsRepo.restore(id);
-      return { success: true, id };
     } else if (entity === 'payments') {
       const record = await this.paymentsRepo.findOne({ where: { id }, withDeleted: true });
       if (!record) throw new NotFoundException('Payment not found');
       if (!record.deletedAt) throw new BadRequestException('Payment is not deleted');
       await this.paymentsRepo.restore(id);
-      return { success: true, id };
     } else {
       throw new BadRequestException('Invalid entity type');
     }
+
+    await this.writeAuditLog({
+      actor: actorId,
+      action: 'RECORD_RESTORED',
+      resourceType: entity,
+      resourceId: id,
+    });
+    return { success: true, id };
   }
 
-  async deleteRecord(entity: string, id: string, hard: boolean, actorRole: MerchantRole) {
+  async deleteRecord(
+    entity: string,
+    id: string,
+    hard: boolean,
+    actorRole: MerchantRole,
+    actorId = 'system',
+  ) {
     if (hard && actorRole !== MerchantRole.SUPERADMIN) {
       throw new ForbiddenException('Only SUPERADMIN can hard delete records');
     }
@@ -461,26 +531,33 @@ export class AdminService {
     if (entity === 'merchants') {
       const record = await this.merchantsRepo.findOne({ where: { id }, withDeleted: true });
       if (!record) throw new NotFoundException('Merchant not found');
-      
+
       if (hard) {
         await this.merchantsRepo.delete(id);
       } else {
         await this.merchantsRepo.softDelete(id);
       }
-      return { success: true, id, hardDeleted: hard };
     } else if (entity === 'payments') {
       const record = await this.paymentsRepo.findOne({ where: { id }, withDeleted: true });
       if (!record) throw new NotFoundException('Payment not found');
-      
+
       if (hard) {
         await this.paymentsRepo.delete(id);
       } else {
         await this.paymentsRepo.softDelete(id);
       }
-      return { success: true, id, hardDeleted: hard };
     } else {
       throw new BadRequestException('Invalid entity type');
     }
+
+    await this.writeAuditLog({
+      actor: actorId,
+      action: hard ? 'RECORD_HARD_DELETED' : 'RECORD_DELETED',
+      resourceType: entity,
+      resourceId: id,
+      details: { hardDeleted: hard },
+    });
+    return { success: true, id, hardDeleted: hard };
   }
 
   async getAdminPayments(query: {

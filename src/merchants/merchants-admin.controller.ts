@@ -1,23 +1,20 @@
-import {
-  Controller,
-  ForbiddenException,
-  Param,
-  Patch,
-  Req,
-  Body,
-} from '@nestjs/common';
+import { Controller, Param, Patch, Body, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Request } from 'express';
-import { Merchant } from './entities/merchant.entity';
+import { Merchant, MerchantRole } from './entities/merchant.entity';
 import { MerchantsService } from './merchants.service';
+import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @ApiTags('admin/merchants')
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(MerchantRole.ADMIN, MerchantRole.SUPERADMIN)
 @Controller({ path: 'admin/merchants', version: '1' })
 export class MerchantsAdminController {
   constructor(private readonly merchantsService: MerchantsService) {}
@@ -28,12 +25,7 @@ export class MerchantsAdminController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Admin only' })
   @ApiResponse({ status: 404, description: 'Merchant not found' })
-  verify(@Param('id') id: string, @Req() req: Request): Promise<Merchant> {
-    const user = (req as Request & { user?: { isAdmin?: boolean } }).user;
-    if (!user?.isAdmin) {
-      throw new ForbiddenException('Admin only');
-    }
-
+  verify(@Param('id') id: string): Promise<Merchant> {
     return this.merchantsService.verifyMerchant(id);
   }
 
@@ -46,13 +38,7 @@ export class MerchantsAdminController {
   async setMerchantFee(
     @Param('id') id: string,
     @Body('customFeeRate') customFeeRate: number | null,
-    @Req() req: Request,
   ): Promise<Merchant> {
-    const user = (req as Request & { user?: { isAdmin?: boolean } }).user;
-    if (!user?.isAdmin) {
-      throw new ForbiddenException('Admin only');
-    }
-
     return this.merchantsService.updateMerchantFee(id, customFeeRate);
   }
 }
