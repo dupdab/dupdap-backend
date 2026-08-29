@@ -5,6 +5,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { QUEUE_LIST, QUEUE_NAMES } from './queue.constants';
+import { CronJobService } from '../cron/cron-job.service';
 
 const DEPTH_ALERT_THRESHOLD = 1_000;
 
@@ -29,6 +30,7 @@ export class QueueMetricsService {
     @InjectQueue(QUEUE_NAMES.notification) private notificationQ: Queue,
     @InjectQueue(QUEUE_NAMES.stellarMonitor) private stellarMonitorQ: Queue,
     private readonly adminAlerts: AdminAlertService,
+    private readonly cronJobService: CronJobService,
   ) {}
 
   private get queues(): Record<string, Queue> {
@@ -52,31 +54,34 @@ export class QueueMetricsService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async checkThresholds(): Promise<void> {
-    const metrics = await this.getMetrics();
-    for (const m of metrics) {
-      if (m.waiting >= DEPTH_ALERT_THRESHOLD) {
-        this.logger.warn(`Queue "${m.name}" depth = ${m.waiting} (threshold: ${DEPTH_ALERT_THRESHOLD})`);
-        await this.adminAlerts.raise({
-          type: AdminAlertType.STELLAR_MONITOR,
-          dedupeKey: `queue.depth.${m.name}`,
-          message: `Queue "${m.name}" waiting depth is ${m.waiting}, exceeds threshold of ${DEPTH_ALERT_THRESHOLD}`,
-          metadata: { queue: m.name, waiting: m.waiting },
-          thresholdValue: DEPTH_ALERT_THRESHOLD,
-        });
-      }
+    await this.cronJobService.run('queue-metrics-check', async () => {
+      const metrics = await this.getMetrics();
+      for (const m of metrics) {
+        if (m.waiting >= DEPTH_ALERT_THRESHOLD) {
+          this.logger.warn(`Queue "${m.name}" depth = ${m.waiting} (threshold: ${DEPTH_ALERT_THRESHOLD})`);
+          await this.adminAlerts.raise({
+            type: AdminAlertType.STELLAR_MONITOR,
+            dedupeKey: `queue.depth.${m.name}`,
+            message: `Queue "${m.name}" waiting depth is ${m.waiting}, exceeds threshold of ${DEPTH_ALERT_THRESHOLD}`,
+            metadata: { queue: m.name, waiting: m.waiting },
+            thresholdValue: DEPTH_ALERT_THRESHOLD,
+          });
+        }
 
-      const prev = this.previousCompleted.get(m.name) ?? 0;
-      if (prev > 0 && m.completed === prev) {
-        this.logger.warn(`Queue "${m.name}" processing rate has dropped to zero`);
-        await this.adminAlerts.raise({
-          type: AdminAlertType.STELLAR_MONITOR,
-          dedupeKey: `queue.stalled.${m.name}`,
-          message: `Queue "${m.name}" processing rate dropped to zero (completed count unchanged)`,
-          metadata: { queue: m.name, completed: m.completed },
-          thresholdValue: 0,
-        });
+        const prev = this.previousCompleted.get(m.name) ?? 0;
+        if (prev > 0 && m.completed === prev) {
+          this.logger.warn(`Queue "${m.name}" processing rate has dropped to zero`);
+          await this.adminAlerts.raise({
+            type: AdminAlertType.STELLAR_MONITOR,
+            dedupeKey: `queue.stalled.${m.name}`,
+            message: `Queue "${m.name}" processing rate dropped to zero (completed count unchanged)`,
+            metadata: { queue: m.name, completed: m.completed },
+            thresholdValue: 0,
+          });
+        }
+        this.previousCompleted.set(m.name, m.completed);
       }
-      this.previousCompleted.set(m.name, m.completed);
-    }
+      return metrics.length;
+    });
   }
 }

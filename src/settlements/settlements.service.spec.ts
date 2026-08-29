@@ -4,11 +4,11 @@ import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
-import { CacheService } from '../cache/cache.service';
 import { EmailService } from '../email/email.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { StellarService } from '../stellar/stellar.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 describe('SettlementsService batching', () => {
   let service: SettlementsService;
@@ -22,7 +22,7 @@ describe('SettlementsService batching', () => {
     adminAlerts: {
       raise: jest.fn().mockResolvedValue(null),
     } as unknown as AdminAlertService,
-    cache: { delPattern: jest.fn().mockResolvedValue(undefined) } as unknown as CacheService,
+    analytics: { clearCacheForMerchant: jest.fn() } as unknown as AnalyticsService,
     emailService: { queue: jest.fn().mockResolvedValue(undefined) } as unknown as EmailService,
     merchantsService: { findOne: jest.fn().mockResolvedValue({ email: 'merchant@example.com' }) } as unknown as MerchantsService,
     notificationPrefs: { isEnabled: jest.fn().mockResolvedValue(false) } as unknown as NotificationPrefsService,
@@ -56,7 +56,7 @@ describe('SettlementsService batching', () => {
       deps().config,
       deps().webhooks,
       deps().adminAlerts,
-      deps().cache,
+      deps().analytics,
       deps().emailService,
       deps().merchantsService,
       deps().notificationPrefs,
@@ -173,5 +173,119 @@ describe('SettlementsService batching', () => {
     expect(settlementsRepo.create).not.toHaveBeenCalled();
     expect(settlementQueue.add).not.toHaveBeenCalled();
     expect(paymentsRepo.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('SettlementsService cache invalidation', () => {
+  let service: SettlementsService;
+  let settlementsRepo: any;
+  let paymentsRepo: any;
+  let analytics: AnalyticsService;
+
+  const deps = () => ({
+    config: { get: jest.fn() } as unknown as ConfigService,
+    webhooks: { dispatch: jest.fn().mockResolvedValue(undefined) } as unknown as WebhooksService,
+    adminAlerts: {
+      raise: jest.fn().mockResolvedValue(null),
+    } as unknown as AdminAlertService,
+    analytics: { clearCacheForMerchant: jest.fn() } as unknown as AnalyticsService,
+    emailService: { queue: jest.fn().mockResolvedValue(undefined) } as unknown as EmailService,
+    merchantsService: { findOne: jest.fn().mockResolvedValue({ email: 'merchant@example.com' }) } as unknown as MerchantsService,
+    notificationPrefs: { isEnabled: jest.fn().mockResolvedValue(false) } as unknown as NotificationPrefsService,
+    stellar: {
+      invokeContract: jest.fn().mockResolvedValue('mock-contract-hash'),
+    } as unknown as StellarService,
+  });
+
+  beforeEach(() => {
+    settlementsRepo = {
+      create: jest.fn((input) => ({ id: 'settlement-1', ...input } as Settlement)),
+      save: jest.fn(async (settlement: Settlement) => settlement),
+      findOne: jest.fn(),
+      findAndCount: jest.fn(),
+    };
+
+    paymentsRepo = {
+      save: jest.fn(async (payment: Payment) => payment),
+      find: jest.fn(),
+      findOne: jest.fn(),
+      createQueryBuilder: jest.fn(),
+    };
+
+    const settlementQueue = {
+      add: jest.fn().mockResolvedValue(undefined),
+    };
+
+    service = new SettlementsService(
+      settlementsRepo as any,
+      paymentsRepo as any,
+      deps().config,
+      deps().webhooks,
+      deps().adminAlerts,
+      deps().analytics,
+      deps().emailService,
+      deps().merchantsService,
+      deps().notificationPrefs,
+      deps().stellar,
+      settlementQueue as any,
+    );
+
+    analytics = deps().analytics;
+    jest.restoreAllMocks();
+  });
+
+  it('should invalidate merchant analytics cache when settlement completes successfully', async () => {
+    const payment = { id: 'p1', status: PaymentStatus.SETTLING } as Payment;
+    const settlement = {
+      id: 'settlement-1',
+      merchantId: 'merchant-abc',
+      payments: [payment],
+      status: SettlementStatus.PROCESSING,
+    } as Settlement;
+
+    settlementsRepo.findOne.mockResolvedValue(settlement);
+    deps().config.get.mockReturnValue('http://partner-api');
+
+    const axios = require('axios');
+    jest.mock('axios', () => ({
+      post: jest.fn().mockResolvedValue({ data: { reference: 'ref-123' } }),
+    }));
+
+    await service.executeFiatTransfer(settlement);
+
+    expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-abc');
+  });
+
+  it('should invalidate merchant analytics cache when partner callback succeeds', async () => {
+    const payment = { id: 'p1', status: PaymentStatus.SETTLING } as Payment;
+    const settlement = {
+      id: 'settlement-1',
+      merchantId: 'merchant-xyz',
+      payments: [payment],
+    } as Settlement;
+
+    settlementsRepo.findOne.mockResolvedValue(settlement);
+
+    await service.handlePartnerCallback({ reference: 'settlement-1', status: 'success' });
+
+    expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-xyz');
+  });
+
+  it('should call clearCacheForMerchant with correct merchant ID only', async () => {
+    const payment = { id: 'p1', status: PaymentStatus.SETTLING } as Payment;
+    const settlement = {
+      id: 'settlement-1',
+      merchantId: 'merchant-123',
+      payments: [payment],
+    } as Settlement;
+
+    settlementsRepo.findOne.mockResolvedValue(settlement);
+
+    await service.handlePartnerCallback({ reference: 'settlement-1', status: 'success' });
+
+    expect(analytics.clearCacheForMerchant).toHaveBeenCalledTimes(1);
+    expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-123');
+    // Verify it doesn't invalidate other merchants
+    expect(analytics.clearCacheForMerchant).not.toHaveBeenCalledWith('merchant-456');
   });
 });

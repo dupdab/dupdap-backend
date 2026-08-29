@@ -6,6 +6,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Queue } from 'bull';
 import { CacheService } from '../cache/cache.service';
 import { DEFAULT_QUEUE_JOB, QUEUE_NAMES } from '../queues/queue.constants';
+import { CronJobService } from '../cron/cron-job.service';
 import {
   PaymentConfirmedEventDto,
   SettlementCompletedEventDto,
@@ -34,6 +35,7 @@ export class SorobanEventIndexer {
     private readonly cache: CacheService,
     private readonly eventEmitter: EventEmitter2,
     @InjectQueue(QUEUE_NAMES.sorobanEventDlq) private readonly dlq: Queue,
+    private readonly cronJobService: CronJobService,
   ) {
     this.rpcUrl = this.config.get<string>(
       'SOROBAN_RPC_URL',
@@ -59,38 +61,44 @@ export class SorobanEventIndexer {
 
     this.polling = true;
     try {
-      const lastLedger = (await this.cache.get<number>(CURSOR_KEY)) ?? 0;
-      let startLedger = lastLedger > 0 ? lastLedger + 1 : undefined;
-      let latestSeenLedger = lastLedger;
-      let pageCursor: string | undefined;
+      await this.cronJobService.run('soroban-event-indexer', async () => {
+        const lastLedger = (await this.cache.get<number>(CURSOR_KEY)) ?? 0;
+        let startLedger = lastLedger > 0 ? lastLedger + 1 : undefined;
+        let latestSeenLedger = lastLedger;
+        let pageCursor: string | undefined;
+        let eventCount = 0;
 
-      while (true) {
-        const { events, latestLedger } = await this.getEvents(startLedger, pageCursor);
-        latestSeenLedger = Math.max(latestSeenLedger, latestLedger);
+        while (true) {
+          const { events, latestLedger } = await this.getEvents(startLedger, pageCursor);
+          latestSeenLedger = Math.max(latestSeenLedger, latestLedger);
 
-        if (!events.length) break;
+          if (!events.length) break;
 
-        for (const event of events) {
-          try {
-            const dto = this.parseEvent(event);
-            if (!dto) continue;
-            await this.dispatch(dto);
-            latestSeenLedger = Math.max(latestSeenLedger, event.ledger ?? latestSeenLedger);
-          } catch (error) {
-            await this.enqueueDeadLetter(event, error as Error);
+          for (const event of events) {
+            try {
+              const dto = this.parseEvent(event);
+              if (!dto) continue;
+              await this.dispatch(dto);
+              eventCount++;
+              latestSeenLedger = Math.max(latestSeenLedger, event.ledger ?? latestSeenLedger);
+            } catch (error) {
+              await this.enqueueDeadLetter(event, error as Error);
+            }
           }
+
+          if (events.length < PAGE_LIMIT) break;
+          pageCursor = events[events.length - 1]?.pagingToken;
+          startLedger = undefined;
         }
 
-        if (events.length < PAGE_LIMIT) break;
-        pageCursor = events[events.length - 1]?.pagingToken;
-        startLedger = undefined;
-      }
+        if (latestSeenLedger > lastLedger) {
+          await this.cache.set(CURSOR_KEY, latestSeenLedger, {
+            ttlSeconds: CURSOR_TTL_SECONDS,
+          });
+        }
 
-      if (latestSeenLedger > lastLedger) {
-        await this.cache.set(CURSOR_KEY, latestSeenLedger, {
-          ttlSeconds: CURSOR_TTL_SECONDS,
-        });
-      }
+        return eventCount;
+      });
     } finally {
       this.polling = false;
     }

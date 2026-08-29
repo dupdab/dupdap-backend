@@ -3,12 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InAppNotification } from './entities/in-app-notification.entity';
+import { CronJobService } from '../cron/cron-job.service';
 
 @Injectable()
 export class NotificationService {
   constructor(
     @InjectRepository(InAppNotification)
     private readonly repo: Repository<InAppNotification>,
+    private readonly cronJobService: CronJobService,
   ) {}
 
   async create(merchantId: string, type: string, message: string): Promise<InAppNotification> {
@@ -58,8 +60,11 @@ export class NotificationService {
   /** Auto-purge notifications older than 30 days — runs daily at midnight */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async purgeOldNotifications(): Promise<void> {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 30);
-    await this.repo.delete({ createdAt: LessThan(cutoff) });
+    await this.cronJobService.run('notification-purge', async () => {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const result = await this.repo.delete({ createdAt: LessThan(cutoff) });
+      return result.affected ?? 0;
+    });
   }
 }

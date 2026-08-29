@@ -753,6 +753,13 @@ export class AnalyticsService {
     return value.toISOString().slice(0, 7);
   }
 
+  clearCacheForMerchant(merchantId: string): void {
+    // Invalidate all analytics caches for a specific merchant when their data changes.
+    void this.cache.delPattern(`analytics:${merchantId}:*`);
+    // Also invalidate admin analytics that may aggregate this merchant's data.
+    void this.cache.delPattern('analytics:admin:*');
+  }
+
   clearCache() {
     // Best-effort; used only in tests / debugging.
     void this.cache.delPattern('analytics:*');
