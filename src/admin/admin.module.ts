@@ -8,6 +8,7 @@ import { Payment } from '../payments/entities/payment.entity';
 import { FeeConfig } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory } from '../fee-config/entities/fee-history.entity';
 import { CronModule } from '../cron/cron.module';
+import { CronJobLog } from '../cron/entities/cron-job-log.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { RatesModule } from '../rates/rates.module';
 import { CacheModule } from '../cache/cache.module';
@@ -23,6 +24,7 @@ import { StellarModule } from '../stellar/stellar.module';
       FeeConfig,
       FeeHistory,
       AuditLog,
+      CronJobLog,
     ]),
     CronModule,
     RatesModule,
