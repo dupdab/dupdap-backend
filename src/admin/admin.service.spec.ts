@@ -1,11 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import * as crypto from 'crypto';
 import { AdminService } from './admin.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { Settlement } from '../settlements/entities/settlement.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
-import { NotFoundException } from '@nestjs/common';
+import { AuditLog } from './entities/audit-log.entity';
+import { FilterService } from '../common/filter.service';
+import { CacheService } from '../cache/cache.service';
+import { StellarMonitorService } from '../stellar/stellar-monitor.service';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 describe('AdminService', () => {
   let service: AdminService;
@@ -13,9 +19,11 @@ describe('AdminService', () => {
   let paymentsRepo: any;
   let feeConfigRepo: any;
   let feeHistoryRepo: any;
+  let auditLogRepo: any;
 
   const mockRepository = () => ({
     findAndCount: jest.fn(),
+    find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
     create: jest.fn(),
@@ -35,6 +43,10 @@ describe('AdminService', () => {
           useFactory: mockRepository,
         },
         {
+          provide: getRepositoryToken(Settlement),
+          useFactory: mockRepository,
+        },
+        {
           provide: getRepositoryToken(FeeConfig),
           useValue: {
             find: jest.fn(),
@@ -49,6 +61,26 @@ describe('AdminService', () => {
             save: jest.fn(),
           },
         },
+        {
+          provide: getRepositoryToken(AuditLog),
+          useFactory: mockRepository,
+        },
+        {
+          provide: FilterService,
+          useValue: { buildWhereConditions: jest.fn().mockReturnValue({}) },
+        },
+        {
+          provide: CacheService,
+          useValue: {
+            getOrSet: jest.fn(),
+            del: jest.fn(),
+            delPattern: jest.fn(),
+          },
+        },
+        {
+          provide: StellarMonitorService,
+          useValue: { getLastRunStatus: jest.fn() },
+        },
       ],
     }).compile();
 
@@ -57,6 +89,7 @@ describe('AdminService', () => {
     paymentsRepo = module.get(getRepositoryToken(Payment));
     feeConfigRepo = module.get(getRepositoryToken(FeeConfig));
     feeHistoryRepo = module.get(getRepositoryToken(FeeHistory));
+    auditLogRepo = module.get(getRepositoryToken(AuditLog));
   });
 
   it('should be defined', () => {
@@ -221,6 +254,233 @@ describe('AdminService', () => {
       await expect(
         service.updateGlobalFee(FeeType.DEPOSIT, '0.005000', 'admin-123'),
       ).rejects.toThrow('Fee config for deposit not found');
+    });
+  });
+
+  // ── #214: hand-rolled RFC 6238 TOTP (admin 2FA) ───────────────────────────
+  describe('TOTP (admin 2FA)', () => {
+    // RFC 6238 Appendix B reference seed: ASCII "12345678901234567890".
+    const RFC_SEED = '12345678901234567890';
+    const RFC_SECRET_B32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    const call = (name: string, ...args: any[]) => (service as any)[name](...args);
+
+    afterEach(() => jest.restoreAllMocks());
+
+    describe('base32 codec', () => {
+      it('encodes the RFC 6238 seed to its canonical base32 form', () => {
+        expect(call('base32Encode', Buffer.from(RFC_SEED))).toBe(RFC_SECRET_B32);
+      });
+
+      it('round-trips random buffers of every length modulo 5 bits', () => {
+        for (const len of [1, 2, 3, 4, 5, 7, 10, 16, 20, 31]) {
+          const buf = crypto.randomBytes(len);
+          const encoded = call('base32Encode', buf);
+          expect(encoded).toMatch(/^[A-Z2-7]+$/);
+          expect(call('base32Decode', encoded).equals(buf)).toBe(true);
+        }
+      });
+
+      it('decodes case-insensitively and tolerates "=" padding and stray separators', () => {
+        const buf = Buffer.from('1234567890');
+        const canonical = call('base32Encode', buf); // GEZDGNBVGY3TQOJQ
+        expect(call('base32Decode', canonical.toLowerCase()).equals(buf)).toBe(true);
+        expect(call('base32Decode', canonical + '======').equals(buf)).toBe(true);
+        expect(
+          call('base32Decode', canonical.replace(/(.{4})/g, '$1 ').trim()).equals(buf),
+        ).toBe(true);
+      });
+    });
+
+    describe('totpCode — RFC 6238 Appendix B known-answer vectors', () => {
+      const vectors: Array<[number, string]> = [
+        [59, '287082'],
+        [1111111109, '081804'],
+        [1111111111, '050471'],
+        [1234567890, '005924'],
+        [2000000000, '279037'],
+        [20000000000, '353130'],
+      ];
+
+      it.each(vectors)('t=%d seconds -> %s', (time, expected) => {
+        expect(call('totpCode', RFC_SECRET_B32, time)).toBe(expected);
+      });
+
+      it('always returns a zero-padded 6-digit string', () => {
+        for (let t = 0; t < 30 * 40; t += 7) {
+          expect(call('totpCode', RFC_SECRET_B32, t)).toMatch(/^\d{6}$/);
+        }
+      });
+
+      it('is stable within a 30s step and rolls over at the boundary', () => {
+        expect(call('totpCode', RFC_SECRET_B32, 0)).toBe(call('totpCode', RFC_SECRET_B32, 29));
+        expect(call('totpCode', RFC_SECRET_B32, 0)).not.toBe(call('totpCode', RFC_SECRET_B32, 30));
+      });
+    });
+
+    describe('verifyTotpToken — clock-drift window', () => {
+      const nowSec = 1_700_000_037; // arbitrary point mid-step
+      const at = (s: number) => jest.spyOn(Date, 'now').mockReturnValue(s * 1000);
+
+      it('accepts the current step and ±1 step of drift', () => {
+        const code = call('totpCode', RFC_SECRET_B32, nowSec);
+        for (const skew of [-30, 0, 30]) {
+          at(nowSec + skew);
+          expect(call('verifyTotpToken', RFC_SECRET_B32, code)).toBe(true);
+        }
+      });
+
+      it('rejects a token that is more than one step stale or ahead', () => {
+        const code = call('totpCode', RFC_SECRET_B32, nowSec);
+        for (const skew of [-60, 60, 300]) {
+          at(nowSec + skew);
+          expect(call('verifyTotpToken', RFC_SECRET_B32, code)).toBe(false);
+        }
+      });
+
+      it('rejects malformed, empty and wrong-length tokens', () => {
+        at(nowSec);
+        // A numeric code guaranteed not to match any of the 3 accepted windows.
+        const accepted = new Set(
+          [-30, 0, 30].map((s) => call('totpCode', RFC_SECRET_B32, nowSec + s)),
+        );
+        let n = 0;
+        while (accepted.has(String(n).padStart(6, '0'))) n++;
+        const wrongCode = String(n).padStart(6, '0');
+
+        for (const bad of ['', 'abcdef', '12345', '1234567', wrongCode]) {
+          expect(call('verifyTotpToken', RFC_SECRET_B32, bad)).toBe(false);
+        }
+      });
+    });
+
+    describe('setupAdminTotp / verifyAdminTotp', () => {
+      it('setupAdminTotp persists a fresh 32-char base32 secret and returns an otpauth URI', async () => {
+        const merchant: any = { id: 'a1', email: 'admin@dupdub.test', totpSecret: null };
+        merchantsRepo.findOne.mockResolvedValue(merchant);
+        merchantsRepo.save.mockImplementation(async (m: any) => m);
+
+        const { secret, otpauthUri } = await service.setupAdminTotp('a1');
+
+        expect(secret).toMatch(/^[A-Z2-7]{32}$/);
+        expect(merchant.totpSecret).toBe(secret);
+        expect(otpauthUri).toBe(
+          `otpauth://totp/DupDub:admin@dupdub.test?secret=${secret}&issuer=DupDub`,
+        );
+        expect(merchantsRepo.save).toHaveBeenCalledWith(merchant);
+      });
+
+      it('setupAdminTotp throws NotFoundException for an unknown user', async () => {
+        merchantsRepo.findOne.mockResolvedValue(null);
+        await expect(service.setupAdminTotp('nope')).rejects.toThrow(NotFoundException);
+      });
+
+      it('verifyAdminTotp enables 2FA and persists on a valid token', async () => {
+        const nowSec = 1_700_000_037;
+        jest.spyOn(Date, 'now').mockReturnValue(nowSec * 1000);
+        const merchant: any = { id: 'a1', totpSecret: RFC_SECRET_B32, totpEnabled: false };
+        merchantsRepo.findOne.mockResolvedValue(merchant);
+        merchantsRepo.save.mockImplementation(async (m: any) => m);
+
+        const res = await service.verifyAdminTotp(
+          'a1',
+          call('totpCode', RFC_SECRET_B32, nowSec),
+        );
+
+        expect(res).toEqual({ success: true });
+        expect(merchant.totpEnabled).toBe(true);
+        expect(merchantsRepo.save).toHaveBeenCalledWith(merchant);
+      });
+
+      it('verifyAdminTotp rejects an invalid token without enabling 2FA', async () => {
+        const nowSec = 1_700_000_037;
+        jest.spyOn(Date, 'now').mockReturnValue(nowSec * 1000);
+        const merchant: any = { id: 'a1', totpSecret: RFC_SECRET_B32, totpEnabled: false };
+        merchantsRepo.findOne.mockResolvedValue(merchant);
+
+        const accepted = new Set(
+          [-30, 0, 30].map((s) => call('totpCode', RFC_SECRET_B32, nowSec + s)),
+        );
+        let n = 0;
+        while (accepted.has(String(n).padStart(6, '0'))) n++;
+
+        const res = await service.verifyAdminTotp('a1', String(n).padStart(6, '0'));
+
+        expect(res).toEqual({ success: false });
+        expect(merchant.totpEnabled).toBe(false);
+        expect(merchantsRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('verifyAdminTotp throws BadRequestException when TOTP was never set up', async () => {
+        merchantsRepo.findOne.mockResolvedValue({ id: 'a1', totpSecret: null });
+        await expect(service.verifyAdminTotp('a1', '123456')).rejects.toThrow(
+          BadRequestException,
+        );
+      });
+    });
+  });
+
+  // ── #215: CSV / formula injection in audit-log export ─────────────────────
+  describe('audit-log CSV export (toCsv)', () => {
+    const toCsv = (rows: any[]) => (service as any).toCsv(rows);
+
+    it('returns a quoted header row when there is no data', () => {
+      expect(toCsv([])).toBe(
+        '"id","actor","action","resourceType","resourceId","details","createdAt"\n',
+      );
+    });
+
+    it('quotes fields and escapes embedded commas, quotes and newlines', () => {
+      const line = toCsv([
+        {
+          id: '1',
+          actor: 'ada, admin',
+          action: 'say "hi"',
+          resourceType: 'a\nb',
+          resourceId: 'r1',
+          details: { note: 'x,y' },
+          createdAt: '2026-08-29',
+        },
+      ]).split('\r\n')[1];
+
+      expect(line).toBe(
+        '"1","ada, admin","say ""hi""","a\nb","r1","{""note"":""x,y""}","2026-08-29"',
+      );
+    });
+
+    it('neutralises formula-injection payloads with a leading apostrophe', () => {
+      const row = toCsv([
+        {
+          id: '1',
+          actor: '=1+1',
+          action: '+SUM(A1:A9)',
+          resourceType: '-2+3',
+          resourceId: '@cmd',
+          details: '=HYPERLINK("http://evil","x")',
+          createdAt: 'ok',
+        },
+      ]).split('\r\n')[1];
+
+      expect(row).toContain('"\'=1+1"');
+      expect(row).toContain('"\'+SUM(A1:A9)"');
+      expect(row).toContain('"\'-2+3"');
+      expect(row).toContain('"\'@cmd"');
+      expect(row).toContain('"\'=HYPERLINK(""http://evil"",""x"")"');
+      expect(row.startsWith('"1","\'=1+1"')).toBe(true);
+    });
+
+    it('renders null/undefined as empty quoted fields', () => {
+      const row = toCsv([
+        {
+          id: '1',
+          actor: null,
+          action: undefined,
+          resourceType: 'x',
+          resourceId: 'y',
+          details: null,
+          createdAt: 'z',
+        },
+      ]).split('\r\n')[1];
+      expect(row).toBe('"1","","","x","y","","z"');
     });
   });
 });
