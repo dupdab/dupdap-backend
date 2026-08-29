@@ -38,14 +38,17 @@ export class GroupsController {
 
   @Get('search')
   @ApiOperation({ summary: 'Search groups by name with pagination' })
-  search(@Query() dto: SearchGroupsDto) {
-    return this.groupsService.searchGroups(dto);
+  search(@Query() dto: SearchGroupsDto, @Req() req: any) {
+    return this.groupsService.searchGroups(dto, req.user.id);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get group by ID' })
-  findOne(@Param('id', ParseUUIDPipe) id: string): Promise<GroupResponseDto> {
-    return this.groupsService.getGroup(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+  ): Promise<GroupResponseDto> {
+    return this.groupsService.getGroup(id, req.user.id);
   }
 
   @Patch(':id')

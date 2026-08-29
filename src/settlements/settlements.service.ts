@@ -14,12 +14,12 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
-import { CacheService } from '../cache/cache.service';
 import { EmailService } from '../email/email.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
+import { CronJobService } from '../cron/cron-job.service';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -44,7 +44,7 @@ export class SettlementsService {
     private config: ConfigService,
     private webhooks: WebhooksService,
     private adminAlerts: AdminAlertService,
-    private cache: CacheService,
+    private analytics: AnalyticsService,
     private emailService: EmailService,
     private merchantsService: MerchantsService,
     private notificationPrefs: NotificationPrefsService,
@@ -52,11 +52,11 @@ export class SettlementsService {
     private stellar: StellarService,
     @InjectQueue(QUEUE_NAMES.settlement)
     private settlementQueue: Queue,
+    private cronJobService: CronJobService,
   ) {}
 
-  private async invalidateAnalyticsForMerchant(merchantId: string): Promise<void> {
-    await this.cache.delPattern(`analytics:${merchantId}:*`);
-    await this.cache.delPattern('analytics:admin:*');
+  private invalidateAnalyticsForMerchant(merchantId: string): void {
+    this.analytics.clearCacheForMerchant(merchantId);
   }
 
   async initiateSettlement(payment: Payment): Promise<void> {
@@ -120,33 +120,37 @@ export class SettlementsService {
 
   @Cron('0 */15 * * * *')
   async batchSmallConfirmedPayments(): Promise<void> {
-    const confirmedPayments = await this.paymentsRepo.find({
-      where: {
-        status: PaymentStatus.CONFIRMED,
-        settlementId: IsNull(),
-        amountUsd: LessThan(SMALL_BATCH_THRESHOLD_USD),
-      },
-      order: {
-        merchantId: 'ASC',
-        confirmedAt: 'ASC',
-        createdAt: 'ASC',
-      },
+    await this.cronJobService.run('batch-small-confirmed-payments', async () => {
+      const confirmedPayments = await this.paymentsRepo.find({
+        where: {
+          status: PaymentStatus.CONFIRMED,
+          settlementId: IsNull(),
+          amountUsd: LessThan(SMALL_BATCH_THRESHOLD_USD),
+        },
+        order: {
+          merchantId: 'ASC',
+          confirmedAt: 'ASC',
+          createdAt: 'ASC',
+        },
+      });
+
+      if (confirmedPayments.length === 0) {
+        return 0;
+      }
+
+      const groups = new Map<string, Payment[]>();
+      for (const payment of confirmedPayments) {
+        const list = groups.get(payment.merchantId) ?? [];
+        list.push(payment);
+        groups.set(payment.merchantId, list);
+      }
+
+      for (const payments of groups.values()) {
+        await this.flushMerchantBatch(payments);
+      }
+
+      return confirmedPayments.length;
     });
-
-    if (confirmedPayments.length === 0) {
-      return;
-    }
-
-    const groups = new Map<string, Payment[]>();
-    for (const payment of confirmedPayments) {
-      const list = groups.get(payment.merchantId) ?? [];
-      list.push(payment);
-      groups.set(payment.merchantId, list);
-    }
-
-    for (const payments of groups.values()) {
-      await this.flushMerchantBatch(payments);
-    }
   }
 
   private async flushMerchantBatch(payments: Payment[]): Promise<void> {
@@ -261,7 +265,7 @@ export class SettlementsService {
       }
 
       // Invalidate analytics caches impacted by payment.settled.
-      await this.invalidateAnalyticsForMerchant(settlement.merchantId);
+      this.invalidateAnalyticsForMerchant(settlement.merchantId);
 
       for (const payment of payments) {
         await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
@@ -359,7 +363,7 @@ export class SettlementsService {
       }
 
       // Invalidate analytics caches impacted by payment.settled.
-      await this.invalidateAnalyticsForMerchant(settlement.merchantId);
+      this.invalidateAnalyticsForMerchant(settlement.merchantId);
 
       for (const payment of payments) {
         await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {

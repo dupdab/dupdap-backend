@@ -28,6 +28,7 @@ export class QueueAdminController {
     @InjectQueue(QUEUE_NAMES.webhook) private webhookQ: Queue,
     @InjectQueue(QUEUE_NAMES.notification) private notificationQ: Queue,
     @InjectQueue(QUEUE_NAMES.stellarMonitor) private stellarMonitorQ: Queue,
+    @InjectQueue(QUEUE_NAMES.sorobanEventDlq) private sorobanEventDlqQ: Queue,
     private readonly metricsService: QueueMetricsService,
   ) {}
 
@@ -43,6 +44,7 @@ export class QueueAdminController {
       [QUEUE_NAMES.webhook]: this.webhookQ,
       [QUEUE_NAMES.notification]: this.notificationQ,
       [QUEUE_NAMES.stellarMonitor]: this.stellarMonitorQ,
+      [QUEUE_NAMES.sorobanEventDlq]: this.sorobanEventDlqQ,
     };
     const queue = map[name];
     if (!queue) throw new NotFoundException(`Queue "${name}" not found. Valid: ${QUEUE_LIST.join(', ')}`);

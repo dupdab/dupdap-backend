@@ -1,9 +1,11 @@
 import { Controller, Get, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { IsEnum } from 'class-validator';
 import { AmlService } from './aml.service';
 import { AmlFlagStatus } from './entities/aml-flag.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 
-class ReviewFlagDto {
+export class ReviewFlagDto {
+  @IsEnum(AmlFlagStatus)
   status: AmlFlagStatus;
   reviewedBy: string;
   note?: string;
