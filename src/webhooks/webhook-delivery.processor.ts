@@ -131,27 +131,33 @@ export class WebhookDeliveryProcessor {
   }
 
   private async markWebhookSuccess(webhookId: string) {
-    const webhook = await this.webhookRepo.findOne({
-      where: { id: webhookId },
-    });
-    if (!webhook) return;
-
-    webhook.lastDeliveredAt = new Date();
-    webhook.failureCount = 0;
-    await this.webhookRepo.save(webhook);
+    // Atomic write — avoids a read-modify-write race with concurrent deliveries.
+    await this.webhookRepo.update(
+      { id: webhookId },
+      { failureCount: 0, lastDeliveredAt: new Date() },
+    );
   }
 
   private async markWebhookFailure(webhookId: string, lastError: string) {
+    // Atomic increment (UPDATE ... SET failureCount = failureCount + 1) so that
+    // concurrent deliveries for the same webhook can't lose an increment to a
+    // last-write-wins race and under-count towards the auto-deactivation threshold.
+    const { affected } = await this.webhookRepo.increment(
+      { id: webhookId },
+      'failureCount',
+      1,
+    );
+    if (!affected) return;
+
     const webhook = await this.webhookRepo.findOne({
       where: { id: webhookId },
     });
     if (!webhook) return;
 
-    webhook.failureCount += 1;
-    if (webhook.failureCount >= 10) {
+    if (webhook.failureCount >= 10 && webhook.isActive) {
+      await this.webhookRepo.update({ id: webhookId }, { isActive: false });
       webhook.isActive = false;
     }
-    await this.webhookRepo.save(webhook);
 
     const merchant = await this.merchantRepo.findOne({
       where: { id: webhook.merchantId },

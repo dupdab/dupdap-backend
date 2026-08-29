@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Merchant } from '../../merchants/entities/merchant.entity';
+import { encryptedColumnTransformer } from '../../security/encrypted-column.transformer';
 
 @Entity('webhooks')
 export class Webhook {
@@ -29,7 +30,10 @@ export class Webhook {
   events: string[];
 
   @Exclude()
-  @Column({ nullable: true })
+  @Column({
+    nullable: true,
+    transformer: encryptedColumnTransformer('webhooks.secret'),
+  })
   secret: string;
 
   @Column({ default: true })

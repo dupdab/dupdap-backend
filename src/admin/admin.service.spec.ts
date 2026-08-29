@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import * as crypto from 'crypto';
 import { AdminService } from './admin.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { Settlement } from '../settlements/entities/settlement.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
 import { Settlement } from '../settlements/entities/settlement.entity';

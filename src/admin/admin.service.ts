@@ -429,15 +429,39 @@ export class AdminService {
   }
 
   private toCsv(data: AuditLog[]): string {
-    if (data.length === 0) return 'id,actor,action,resourceType,resourceId,details,createdAt\n';
+    const columns = ['id', 'actor', 'action', 'resourceType', 'resourceId', 'details', 'createdAt'];
+    const headerLine = columns.map(c => this.csvField(c)).join(',');
 
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(row => 
-      Object.values(row).map(val => 
-        typeof val === 'object' ? JSON.stringify(val) : val
-      ).join(',')
+    if (data.length === 0) return headerLine + '\n';
+
+    const rows = data.map(row =>
+      columns
+        .map(col => {
+          const val = (row as Record<string, unknown>)[col];
+          return this.csvField(val);
+        })
+        .join(','),
     );
-    return [headers, ...rows].join('\n');
+    return [headerLine, ...rows].join('\r\n');
+  }
+
+  /**
+   * Renders a single CSV field: JSON-encodes objects, always double-quotes the
+   * value (escaping embedded quotes), and neutralises CSV/formula-injection by
+   * prefixing a leading =, +, -, @, tab or CR with a single quote so Excel/Sheets
+   * won't evaluate it as a formula.
+   */
+  private csvField(val: unknown): string {
+    if (val === null || val === undefined) return '""';
+
+    let str =
+      typeof val === 'object' ? JSON.stringify(val) : String(val);
+
+    if (/^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
+
+    return `"${str.replace(/"/g, '""')}"`;
   }
 
   // ── TOTP helpers ───────────────────────────────────────────────────────────
