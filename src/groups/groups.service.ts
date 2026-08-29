@@ -64,13 +64,26 @@ export class GroupsService {
 
   // ── Read ────────────────────────────────────────────────────────────────────
 
-  async getGroup(id: string): Promise<GroupResponseDto> {
+  async getGroup(id: string, userId: string): Promise<GroupResponseDto> {
     const group = await this.repo.findByIdWithMembers(id);
     if (!group) throw new NotFoundException(`Group ${id} not found`);
-    return GroupResponseDto.from(group);
+
+    const isMember = group.members?.some((m) => m.userId === userId) ?? false;
+
+    // Private groups must not be enumerable by non-members: behave as if the
+    // group does not exist rather than leaking its name/config.
+    if (!group.isPublic && !isMember) {
+      throw new NotFoundException(`Group ${id} not found`);
+    }
+
+    // Non-members of a public group get a preview only (no invite code / gate config).
+    return GroupResponseDto.from(group, isMember);
   }
 
-  async searchGroups(dto: SearchGroupsDto): Promise<{
+  async searchGroups(
+    dto: SearchGroupsDto,
+    userId: string,
+  ): Promise<{
     data: GroupResponseDto[];
     total: number;
     page: number;
@@ -78,9 +91,11 @@ export class GroupsService {
   }> {
     const page = dto.page ?? 1;
     const limit = dto.limit ?? 20;
-    const [groups, total] = await this.repo.search(dto.name, page, limit);
+    const [groups, total] = await this.repo.search(dto.name, page, limit, userId);
     return {
-      data: groups.map(GroupResponseDto.from),
+      // Search is a discovery endpoint: never expose invite codes / gate config
+      // here, even for groups the caller belongs to.
+      data: groups.map((g) => GroupResponseDto.from(g, false)),
       total,
       page,
       limit,

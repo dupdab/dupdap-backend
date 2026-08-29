@@ -25,15 +25,33 @@ export class GroupsRepository extends Repository<Group> {
       .getOne();
   }
 
+  /**
+   * Search groups by name. Results are limited to public groups plus any
+   * private groups the requester already belongs to, so that `isPublic: false`
+   * groups (and their invite codes) are never discoverable by outsiders.
+   */
   async search(
     name: string | undefined,
     page: number,
     limit: number,
+    requesterId: string,
   ): Promise<[Group[], number]> {
     const qb = this.createQueryBuilder('g')
       .leftJoin('g.members', 'm')
       .addSelect('COUNT(m.id)', 'memberCount')
       .where('g.deletedAt IS NULL')
+      .andWhere(
+        (sub) => {
+          const memberGroups = sub
+            .subQuery()
+            .select('gm.groupId')
+            .from(GroupMember, 'gm')
+            .where('gm.userId = :requesterId')
+            .getQuery();
+          return `(g.isPublic = true OR g.id IN ${memberGroups})`;
+        },
+      )
+      .setParameter('requesterId', requesterId)
       .groupBy('g.id')
       .orderBy('g.createdAt', 'DESC')
       .skip((page - 1) * limit)
