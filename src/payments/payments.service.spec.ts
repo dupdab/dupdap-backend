@@ -9,6 +9,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -17,6 +18,7 @@ describe('PaymentsService', () => {
   let webhooks: WebhooksService;
   let notifications: NotificationsService;
   let merchants: MerchantsService;
+  let analytics: AnalyticsService;
 
   const mockMerchant = {
     id: 'merchant-123',
@@ -71,6 +73,12 @@ describe('PaymentsService', () => {
             findOne: jest.fn(),
           },
         },
+        {
+          provide: AnalyticsService,
+          useValue: {
+            clearCacheForMerchant: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -81,6 +89,7 @@ describe('PaymentsService', () => {
     webhooks = module.get<WebhooksService>(WebhooksService);
     notifications = module.get<NotificationsService>(NotificationsService);
     merchants = module.get<MerchantsService>(MerchantsService);
+    analytics = module.get<AnalyticsService>(AnalyticsService);
   });
 
   describe('refund', () => {
@@ -140,6 +149,45 @@ describe('PaymentsService', () => {
         expect.anything(),
         'REFUND-123',
       );
+    });
+  });
+
+  describe('confirmPayment', () => {
+    it('should confirm payment and invalidate analytics cache for the merchant', async () => {
+      const payment = {
+        id: 'payment-123',
+        merchantId: 'merchant-456',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+        confirmedAt: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+
+      const result = await service.confirmPayment('payment-123', 'GDXYZ123');
+
+      expect(result.status).toBe(PaymentStatus.CONFIRMED);
+      expect(result.customerWalletAddress).toBe('GDXYZ123');
+      expect(result.confirmedAt).toBeDefined();
+      expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-456');
+    });
+
+    it('should call clearCacheForMerchant with correct merchant ID', async () => {
+      const payment = {
+        id: 'payment-789',
+        merchantId: 'merchant-999',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+
+      await service.confirmPayment('payment-789', 'GABBCD456');
+
+      expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-999');
+      expect(analytics.clearCacheForMerchant).toHaveBeenCalledTimes(1);
     });
   });
 });

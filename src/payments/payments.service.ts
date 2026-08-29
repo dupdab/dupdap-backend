@@ -14,6 +14,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { SorobanService, PaymentExpiredError } from '../blockchain-wallet/soroban.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -37,6 +38,7 @@ export class PaymentsService {
     private notifications: NotificationsService,
     private merchants: MerchantsService,
     private soroban: SorobanService,
+    private analytics: AnalyticsService,
   ) {}
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
@@ -113,7 +115,12 @@ export class PaymentsService {
     payment.status = PaymentStatus.CONFIRMED;
     payment.customerWalletAddress = customerAddress;
     payment.confirmedAt = new Date();
-    return this.paymentsRepo.save(payment);
+    const saved = await this.paymentsRepo.save(payment);
+
+    // Invalidate merchant analytics caches since funnel and comparison data may have changed.
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    return saved;
   }
 
   /**
