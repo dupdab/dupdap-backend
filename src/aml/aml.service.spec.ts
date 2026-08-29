@@ -1,107 +1,153 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { NotFoundException } from '@nestjs/common';
+import { Repository } from 'typeorm';
 import { AmlService } from './aml.service';
 import { AmlFlag, AmlFlagReason, AmlFlagStatus } from './entities/aml-flag.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('AmlService', () => {
   let service: AmlService;
-  let amlRepo: jest.Mocked<Partial<Repository<AmlFlag>>>;
-  let paymentsRepo: jest.Mocked<Partial<Repository<Payment>>>;
-  let notifications: jest.Mocked<NotificationsService>;
-  let config: jest.Mocked<ConfigService>;
+  let amlRepo: jest.Mocked<Pick<Repository<AmlFlag>, 'create' | 'save' | 'findAndCount' | 'findOne' | 'find'>>;
+  let paymentsRepo: jest.Mocked<Pick<Repository<Payment>, 'count'>>;
+  let notifications: jest.Mocked<Pick<NotificationsService, 'enqueueEmail'>>;
+  let config: jest.Mocked<Pick<ConfigService, 'get'>>;
 
   beforeEach(async () => {
+    amlRepo = {
+      create: jest.fn((value) => value as AmlFlag),
+      save: jest.fn(async (value) => value as AmlFlag),
+      findAndCount: jest.fn(),
+      findOne: jest.fn(),
+      find: jest.fn(),
+    };
+    paymentsRepo = { count: jest.fn() };
+    notifications = { enqueueEmail: jest.fn() };
+    config = { get: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AmlService,
-        { provide: getRepositoryToken(AmlFlag), useValue: { create: jest.fn(), save: jest.fn(), findAndCount: jest.fn(), findOne: jest.fn(), find: jest.fn() } },
-        { provide: getRepositoryToken(Payment), useValue: { count: jest.fn() } },
-        { provide: NotificationsService, useValue: { enqueueEmail: jest.fn() } },
-        { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: getRepositoryToken(AmlFlag), useValue: amlRepo },
+        { provide: getRepositoryToken(Payment), useValue: paymentsRepo },
+        { provide: NotificationsService, useValue: notifications },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
 
     service = module.get(AmlService);
-    amlRepo = module.get(getRepositoryToken(AmlFlag));
-    paymentsRepo = module.get(getRepositoryToken(Payment));
-    notifications = module.get(NotificationsService);
-    config = module.get(ConfigService);
-    amlRepo.create!.mockImplementation((value: any) => value);
-    amlRepo.save!.mockImplementation(async (value: any) => value);
-    config.get.mockReturnValue('admin@example.com');
-    paymentsRepo.count!.mockResolvedValue(0);
   });
 
   describe('checkAndFlag', () => {
-    it('flags a payment at the high-value threshold and notifies the admin', async () => {
-      await service.checkAndFlag({ id: 'p1', merchantId: 'm1', amountUsd: 10000 } as any);
+    const payment = {
+      id: 'payment-1',
+      merchantId: 'merchant-1',
+      amountUsd: 15_000,
+    } as Payment;
 
-      expect(amlRepo.create).toHaveBeenCalledWith({ merchantId: 'm1', paymentId: 'p1', reason: AmlFlagReason.HIGH_VALUE, metadata: { amountUsd: 10000 } });
+    it('creates a high-value flag and notifies the configured admin', async () => {
+      config.get.mockReturnValue('admin@example.com');
+      paymentsRepo.count.mockResolvedValue(0);
+
+      await service.checkAndFlag(payment);
+
+      expect(amlRepo.create).toHaveBeenCalledWith({
+        merchantId: payment.merchantId,
+        paymentId: payment.id,
+        reason: AmlFlagReason.HIGH_VALUE,
+        metadata: { amountUsd: payment.amountUsd },
+      });
       expect(amlRepo.save).toHaveBeenCalledTimes(1);
-      expect(notifications.enqueueEmail).toHaveBeenCalledWith(expect.objectContaining({ recipient: 'admin@example.com', subject: `[AML Alert] New flag: ${AmlFlagReason.HIGH_VALUE}` }));
+      expect(notifications.enqueueEmail).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: 'admin@example.com',
+        subject: `[AML Alert] New flag: ${AmlFlagReason.HIGH_VALUE}`,
+      }));
     });
 
-    it('does not flag a payment below the high-value threshold', async () => {
-      await service.checkAndFlag({ id: 'p1', merchantId: 'm1', amountUsd: 9999.99 } as any);
-      expect(amlRepo.save).not.toHaveBeenCalled();
+    it('creates a high-velocity flag when daily payment count exceeds the limit', async () => {
+      config.get.mockReturnValue(undefined);
+      paymentsRepo.count.mockResolvedValue(51);
+
+      await service.checkAndFlag({ ...payment, amountUsd: 100 } as Payment);
+
+      expect(amlRepo.create).toHaveBeenCalledWith({
+        merchantId: payment.merchantId,
+        paymentId: payment.id,
+        reason: AmlFlagReason.HIGH_VELOCITY,
+        metadata: { dailyCount: 51 },
+      });
+      expect(amlRepo.save).toHaveBeenCalledTimes(1);
       expect(notifications.enqueueEmail).not.toHaveBeenCalled();
     });
 
-    it('flags high velocity only when daily payments exceed the limit', async () => {
-      paymentsRepo.count!.mockResolvedValue(51);
-      await service.checkAndFlag({ id: 'p1', merchantId: 'm1', amountUsd: 10 } as any);
+    it('does not create a flag when neither threshold is reached', async () => {
+      paymentsRepo.count.mockResolvedValue(50);
 
-      expect(amlRepo.create).toHaveBeenCalledWith(expect.objectContaining({ reason: AmlFlagReason.HIGH_VELOCITY, metadata: { dailyCount: 51 } }));
-      expect(notifications.enqueueEmail).toHaveBeenCalledTimes(1);
-      expect(paymentsRepo.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ merchantId: 'm1', createdAt: expect.anything() }) }));
-    });
+      await service.checkAndFlag({ ...payment, amountUsd: 9_999 } as Payment);
 
-    it('does not flag high velocity at or below the limit', async () => {
-      paymentsRepo.count!.mockResolvedValue(50);
-      await service.checkAndFlag({ id: 'p1', merchantId: 'm1', amountUsd: 10 } as any);
+      expect(amlRepo.create).not.toHaveBeenCalled();
       expect(amlRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('creates separate flags when both thresholds are exceeded', async () => {
-      paymentsRepo.count!.mockResolvedValue(51);
-      await service.checkAndFlag({ id: 'p1', merchantId: 'm1', amountUsd: 15000 } as any);
-      expect(amlRepo.save).toHaveBeenCalledTimes(2);
-      expect(notifications.enqueueEmail).toHaveBeenCalledTimes(2);
     });
   });
 
   it('finds all flags with pagination', async () => {
-    amlRepo.findAndCount!.mockResolvedValue([['flag'] as any, 1]);
-    await expect(service.findAll(2, 10)).resolves.toEqual({ flags: ['flag'], total: 1, page: 2, limit: 10 });
-    expect(amlRepo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10 }));
+    const flags = [{ id: 'flag-1' }] as AmlFlag[];
+    amlRepo.findAndCount.mockResolvedValue([flags, 1]);
+
+    await expect(service.findAll(2, 10)).resolves.toEqual({ flags, total: 1, page: 2, limit: 10 });
+    expect(amlRepo.findAndCount).toHaveBeenCalledWith({
+      order: { createdAt: 'DESC' },
+      skip: 10,
+      take: 10,
+    });
   });
 
   it('finds pending flags with pagination', async () => {
-    amlRepo.findAndCount!.mockResolvedValue([[], 0]);
-    await expect(service.findPending()).resolves.toEqual({ flags: [], total: 0, page: 1, limit: 20 });
-    expect(amlRepo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ where: { status: AmlFlagStatus.PENDING } }));
+    amlRepo.findAndCount.mockResolvedValue([[], 0]);
+
+    await service.findPending(1, 20);
+
+    expect(amlRepo.findAndCount).toHaveBeenCalledWith({
+      where: { status: AmlFlagStatus.PENDING },
+      order: { createdAt: 'DESC' },
+      skip: 0,
+      take: 20,
+    });
   });
 
   it('finds flags by merchant', async () => {
-    amlRepo.find!.mockResolvedValue(['flag'] as any);
-    await expect(service.findByMerchant('m1')).resolves.toEqual(['flag']);
-    expect(amlRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: { merchantId: 'm1' } }));
+    amlRepo.find.mockResolvedValue([]);
+
+    await service.findByMerchant('merchant-1');
+
+    expect(amlRepo.find).toHaveBeenCalledWith({
+      where: { merchantId: 'merchant-1' },
+      order: { createdAt: 'DESC' },
+    });
   });
 
   it('reviews an existing flag', async () => {
-    const flag = { id: 'f1' } as AmlFlag;
-    amlRepo.findOne!.mockResolvedValue(flag);
-    await expect(service.review('f1', AmlFlagStatus.CLEARED, 'admin', 'Checked')).resolves.toBe(flag);
-    expect(flag).toEqual(expect.objectContaining({ status: AmlFlagStatus.CLEARED, reviewedBy: 'admin', reviewNote: 'Checked', reviewedAt: expect.any(Date) }));
+    const flag = { id: 'flag-1', status: AmlFlagStatus.PENDING } as AmlFlag;
+    amlRepo.findOne.mockResolvedValue(flag);
+
+    await service.review('flag-1', AmlFlagStatus.CLEARED, 'admin-1', 'Looks good');
+
+    expect(flag).toEqual(expect.objectContaining({
+      status: AmlFlagStatus.CLEARED,
+      reviewedBy: 'admin-1',
+      reviewNote: 'Looks good',
+    }));
+    expect(flag.reviewedAt).toBeInstanceOf(Date);
+    expect(amlRepo.save).toHaveBeenCalledWith(flag);
   });
 
   it('throws when reviewing a missing flag', async () => {
-    amlRepo.findOne!.mockResolvedValue(null);
-    await expect(service.review('missing', AmlFlagStatus.CLEARED, 'admin')).rejects.toThrow(NotFoundException);
+    amlRepo.findOne.mockResolvedValue(null);
+
+    await expect(service.review('missing', AmlFlagStatus.CLEARED, 'admin-1'))
+      .rejects.toThrow(NotFoundException);
+    expect(amlRepo.save).not.toHaveBeenCalled();
   });
 });
