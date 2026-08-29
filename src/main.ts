@@ -16,6 +16,22 @@ import { getCorrelationId } from './common/correlation-id.context';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { version } = require('../package.json') as { version: string };
 
+/**
+ * Parse the `TRUST_PROXY` env var into a value Express's `trust proxy` setting
+ * understands. Defaults to `false` (trust nothing) so that `req.ip` and any
+ * `X-Forwarded-For`-derived value cannot be spoofed by external clients. Set it
+ * explicitly to match your deployment, e.g. `loopback`, a hop count like `1`,
+ * or a comma-separated list of trusted proxy IPs/subnets.
+ */
+function parseTrustProxy(raw: string | undefined): boolean | number | string | string[] {
+  const value = (raw ?? '').trim();
+  if (value === '' || value.toLowerCase() === 'false') return false;
+  if (value.toLowerCase() === 'true') return true;
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  if (value.includes(',')) return value.split(',').map((s) => s.trim()).filter(Boolean);
+  return value;
+}
+
 async function bootstrap(): Promise<void> {
   startTelemetry(readTelemetryConfig());
 
@@ -69,6 +85,15 @@ async function bootstrap(): Promise<void> {
   sentryService.init();
 
   const config = app.get(ConfigService);
+
+  // Trust proxy must be set explicitly: it controls whether Express derives
+  // `req.ip` from `X-Forwarded-For`. Left at the safe default (`false`),
+  // untrusted clients cannot spoof their source IP past IpAllowlistGuard.
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .set('trust proxy', parseTrustProxy(config.get<string>('TRUST_PROXY')));
+
   const port = parseInt(String(config.get('PORT', 3000)), 10);
   const apiPrefix = String(config.get('API_PREFIX', 'api/v1'));
 
