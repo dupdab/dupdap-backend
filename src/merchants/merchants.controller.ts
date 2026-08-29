@@ -12,6 +12,7 @@ import { MerchantsService } from './merchants.service';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { GenerateApiKeyDto } from './dto/generate-api-key.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { Scopes } from '../auth/decorators/scopes.decorator';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { UpdateNotificationPrefsDto, NotificationPrefsResponseDto } from '../notifications/dto/notification-prefs.dto';
 
@@ -35,6 +36,7 @@ export class MerchantsController {
   }
 
   @Patch('me')
+  @Scopes('merchant:manage')
   @ApiOperation({ summary: 'Update merchant profile' })
   @ApiOkResponse({ description: 'Updated merchant' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
@@ -45,6 +47,7 @@ export class MerchantsController {
   }
 
   @Post('api-keys')
+  @Scopes('merchant:manage')
   @ApiOperation({ summary: 'Generate API key' })
   @ApiOkResponse({ description: 'New API key payload' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT' })
