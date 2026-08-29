@@ -5,6 +5,12 @@ import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity'
 import { Payment } from '../payments/entities/payment.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
+import { Settlement } from '../settlements/entities/settlement.entity';
+import { AuditLog } from './entities/audit-log.entity';
+import { FilterService } from '../common/filter.service';
+import { CacheService } from '../cache/cache.service';
+import { StellarMonitorService } from '../stellar/stellar-monitor.service';
+import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { NotFoundException } from '@nestjs/common';
 
 describe('AdminService', () => {
@@ -13,12 +19,18 @@ describe('AdminService', () => {
   let paymentsRepo: any;
   let feeConfigRepo: any;
   let feeHistoryRepo: any;
+  let auditLogRepo: any;
 
   const mockRepository = () => ({
     findAndCount: jest.fn(),
+    find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
-    create: jest.fn(),
+    create: jest.fn((x) => x),
+    remove: jest.fn(),
+    delete: jest.fn(),
+    softDelete: jest.fn(),
+    restore: jest.fn(),
     createQueryBuilder: jest.fn(),
   });
 
@@ -32,6 +44,10 @@ describe('AdminService', () => {
         },
         {
           provide: getRepositoryToken(Payment),
+          useFactory: mockRepository,
+        },
+        {
+          provide: getRepositoryToken(Settlement),
           useFactory: mockRepository,
         },
         {
@@ -49,6 +65,26 @@ describe('AdminService', () => {
             save: jest.fn(),
           },
         },
+        {
+          provide: getRepositoryToken(AuditLog),
+          useFactory: mockRepository,
+        },
+        {
+          provide: FilterService,
+          useValue: { buildWhereConditions: jest.fn().mockReturnValue({}) },
+        },
+        {
+          provide: CacheService,
+          useValue: {
+            getOrSet: jest.fn(),
+            del: jest.fn(),
+            delPattern: jest.fn(),
+          },
+        },
+        {
+          provide: StellarMonitorService,
+          useValue: { getLastRunStatus: jest.fn() },
+        },
       ],
     }).compile();
 
@@ -57,6 +93,7 @@ describe('AdminService', () => {
     paymentsRepo = module.get(getRepositoryToken(Payment));
     feeConfigRepo = module.get(getRepositoryToken(FeeConfig));
     feeHistoryRepo = module.get(getRepositoryToken(FeeHistory));
+    auditLogRepo = module.get(getRepositoryToken(AuditLog));
   });
 
   it('should be defined', () => {
@@ -221,6 +258,94 @@ describe('AdminService', () => {
       await expect(
         service.updateGlobalFee(FeeType.DEPOSIT, '0.005000', 'admin-123'),
       ).rejects.toThrow('Fee config for deposit not found');
+    });
+  });
+
+  // ── Audit Trail (#207) ────────────────────────────────────────────────────
+  describe('audit logging for state-mutating actions', () => {
+    const expectAuditLog = (match: Record<string, any>) => {
+      expect(auditLogRepo.save).toHaveBeenCalledWith(expect.objectContaining(match));
+    };
+
+    it('updateMerchantStatus writes an audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1', status: MerchantStatus.PENDING });
+      merchantsRepo.save.mockResolvedValue({});
+
+      await service.updateMerchantStatus('m1', MerchantStatus.ACTIVE, 'admin-1');
+
+      expectAuditLog({
+        actor: 'admin-1',
+        action: 'MERCHANT_STATUS_UPDATED',
+        resourceType: 'merchant',
+        resourceId: 'm1',
+      });
+    });
+
+    it('bulkUpdateMerchantStatus writes an audit log per merchant', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'x', status: MerchantStatus.PENDING });
+      merchantsRepo.save.mockResolvedValue({});
+
+      await service.bulkUpdateMerchantStatus(['m1', 'm2'], MerchantStatus.ACTIVE, 'admin-1');
+
+      expect(auditLogRepo.save).toHaveBeenCalledTimes(2);
+    });
+
+    it('createAdmin writes an audit log', async () => {
+      merchantsRepo.save.mockResolvedValue({ id: 'a1', email: 'a@test.com' });
+
+      await service.createAdmin('a@test.com', 'pw', 'Biz', MerchantRole.SUPERADMIN, 'admin-1');
+
+      expectAuditLog({ action: 'ADMIN_CREATED', resourceType: 'admin', resourceId: 'a1' });
+    });
+
+    it('deleteAdmin writes an audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'a1', role: MerchantRole.ADMIN, email: 'a@test.com' });
+
+      await service.deleteAdmin('a1', MerchantRole.SUPERADMIN, 'admin-1');
+
+      expectAuditLog({ action: 'ADMIN_DELETED', resourceType: 'admin', resourceId: 'a1' });
+    });
+
+    it('toggleSandboxMode writes an audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1' });
+      merchantsRepo.save.mockResolvedValue({});
+
+      await service.toggleSandboxMode('m1', true, 'admin-1');
+
+      expectAuditLog({ action: 'SANDBOX_MODE_TOGGLED', resourceType: 'merchant', resourceId: 'm1' });
+    });
+
+    it('resetSandboxData writes an audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1' });
+      paymentsRepo.find.mockResolvedValue([{ id: 'p1' }]);
+
+      await service.resetSandboxData('m1', 'admin-1');
+
+      expectAuditLog({ action: 'DATA_PURGED', resourceType: 'merchant', resourceId: 'm1' });
+    });
+
+    it('restoreRecord writes an audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1', deletedAt: new Date() });
+
+      await service.restoreRecord('merchants', 'm1', 'admin-1');
+
+      expectAuditLog({ action: 'RECORD_RESTORED', resourceType: 'merchants', resourceId: 'm1' });
+    });
+
+    it('deleteRecord writes a soft-delete audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1' });
+
+      await service.deleteRecord('merchants', 'm1', false, MerchantRole.ADMIN, 'admin-1');
+
+      expectAuditLog({ action: 'RECORD_DELETED', resourceType: 'merchants', resourceId: 'm1' });
+    });
+
+    it('deleteRecord writes a hard-delete audit log', async () => {
+      merchantsRepo.findOne.mockResolvedValue({ id: 'm1' });
+
+      await service.deleteRecord('merchants', 'm1', true, MerchantRole.SUPERADMIN, 'admin-1');
+
+      expectAuditLog({ action: 'RECORD_HARD_DELETED', resourceType: 'merchants', resourceId: 'm1' });
     });
   });
 });

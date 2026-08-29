@@ -14,6 +14,7 @@ import { RatesModule } from '../rates/rates.module';
 import { CacheModule } from '../cache/cache.module';
 import { Settlement } from '../settlements/entities/settlement.entity';
 import { StellarModule } from '../stellar/stellar.module';
+import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 
 @Module({
   imports: [

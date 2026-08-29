@@ -49,14 +49,22 @@ export class AdminController {
 
   @Patch('merchants/:id/status')
   @ApiOperation({ summary: 'Update merchant status' })
-  updateStatus(@Param('id') id: string, @Body('status') status: MerchantStatus) {
-    return this.adminService.updateMerchantStatus(id, status);
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: MerchantStatus,
+    @Req() req: Request & { user: { id: string } },
+  ) {
+    return this.adminService.updateMerchantStatus(id, status, req.user?.id);
   }
 
   @Patch('merchants/bulk/status')
   @ApiOperation({ summary: 'Bulk update merchant status' })
-  bulkUpdateStatus(@Body('ids') ids: string[], @Body('status') status: MerchantStatus) {
-    return this.adminService.bulkUpdateMerchantStatus(ids, status);
+  bulkUpdateStatus(
+    @Body('ids') ids: string[],
+    @Body('status') status: MerchantStatus,
+    @Req() req: Request & { user: { id: string } },
+  ) {
+    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id);
   }
 
   @Get('stats')
@@ -127,6 +135,7 @@ export class AdminController {
       dto.password,
       dto.businessName,
       req.user.role,
+      req.user?.id,
     );
   }
 
@@ -136,7 +145,7 @@ export class AdminController {
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: MerchantRole } },
   ) {
-    return this.adminService.deleteAdmin(id, req.user.role);
+    return this.adminService.deleteAdmin(id, req.user.role, req.user?.id);
   }
 
   @Post('users/:id/2fa/setup')
@@ -170,14 +179,18 @@ export class AdminController {
   toggleSandboxMode(
     @Param('id') id: string,
     @Body('enabled') enabled: boolean,
+    @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.toggleSandboxMode(id, enabled);
+    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id);
   }
 
   @Post('merchants/:id/sandbox/reset')
   @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
-  resetSandboxData(@Param('id') id: string) {
-    return this.adminService.resetSandboxData(id);
+  resetSandboxData(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { id: string } },
+  ) {
+    return this.adminService.resetSandboxData(id, req.user?.id);
   }
 
   // ── Audit Log Viewer ───────────────────────────────────────────────────────
@@ -233,8 +246,9 @@ export class AdminController {
   restoreRecord(
     @Param('entity') entity: string,
     @Param('id') id: string,
+    @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.restoreRecord(entity, id);
+    return this.adminService.restoreRecord(entity, id, req.user?.id);
   }
 
   @Delete(':entity/:id')
@@ -246,7 +260,7 @@ export class AdminController {
     @Req() req: Request & { user: { id: string; role: MerchantRole } },
   ) {
     const isHard = hard === 'true';
-    return this.adminService.deleteRecord(entity, id, isHard, req.user.role);
+    return this.adminService.deleteRecord(entity, id, isHard, req.user.role, req.user?.id);
   }
 
   // ── PCI-DSS Compliance Reports (#704) ─────────────────────────────────────
