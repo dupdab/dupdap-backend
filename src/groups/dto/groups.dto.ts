@@ -117,22 +117,34 @@ export class GroupResponseDto {
   memberCount: number;
   createdAt: Date;
 
-  static from(group: import('../entities/group.entity').Group): GroupResponseDto {
+  /**
+   * @param includeSensitive when false (the caller is not a member/owner of the
+   *   group) the invite code and gate/on-chain configuration are omitted so a
+   *   private group can only ever be a non-actionable "public preview".
+   */
+  static from(
+    group: import('../entities/group.entity').Group,
+    includeSensitive = true,
+  ): GroupResponseDto {
     const dto = new GroupResponseDto();
     dto.id = group.id;
     dto.name = group.name;
     dto.description = group.description;
     dto.avatarUrl = group.avatarUrl;
-    dto.createdBy = group.createdBy;
     dto.maxMembers = group.maxMembers;
     dto.isPublic = group.isPublic;
-    dto.inviteCode = group.inviteCode;
     dto.isTokenGated = group.isTokenGated;
-    dto.gateTokenAddress = group.gateTokenAddress;
-    dto.gateMinBalance = group.gateMinBalance;
-    dto.onChainId = group.onChainId;
     dto.memberCount = group.members?.length ?? 0;
     dto.createdAt = group.createdAt;
+
+    if (includeSensitive) {
+      dto.createdBy = group.createdBy;
+      dto.inviteCode = group.inviteCode;
+      dto.gateTokenAddress = group.gateTokenAddress;
+      dto.gateMinBalance = group.gateMinBalance;
+      dto.onChainId = group.onChainId;
+    }
+
     return dto;
   }
 }

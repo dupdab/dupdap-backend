@@ -92,16 +92,41 @@ describe('GroupsService', () => {
   // ── getGroup ────────────────────────────────────────────────────────────────
 
   describe('getGroup', () => {
-    it('returns group response dto', async () => {
+    it('returns full group response dto for a member', async () => {
       repo.findByIdWithMembers.mockResolvedValue(mockGroup());
-      const result = await service.getGroup('group-uuid');
+      const result = await service.getGroup('group-uuid', 'user-1');
       expect(result.id).toBe('group-uuid');
       expect(result.memberCount).toBe(1);
+      expect(result.inviteCode).toBe('ABCDEF123456');
+    });
+
+    it('returns a preview (no invite code / gate config) for a non-member of a public group', async () => {
+      repo.findByIdWithMembers.mockResolvedValue(
+        mockGroup({ isPublic: true, gateTokenAddress: 'USDC:GABC', gateMinBalance: 10 }),
+      );
+      const result = await service.getGroup('group-uuid', 'outsider');
+      expect(result.id).toBe('group-uuid');
+      expect(result.name).toBe('Test Group');
+      expect(result.inviteCode).toBeUndefined();
+      expect(result.gateTokenAddress).toBeUndefined();
+      expect(result.gateMinBalance).toBeUndefined();
+      expect(result.onChainId).toBeUndefined();
+    });
+
+    it('hides a private group from non-members (404)', async () => {
+      repo.findByIdWithMembers.mockResolvedValue(mockGroup({ isPublic: false }));
+      await expect(service.getGroup('group-uuid', 'outsider')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns full detail of a private group to its members', async () => {
+      repo.findByIdWithMembers.mockResolvedValue(mockGroup({ isPublic: false }));
+      const result = await service.getGroup('group-uuid', 'user-1');
+      expect(result.inviteCode).toBe('ABCDEF123456');
     });
 
     it('throws NotFoundException for missing group', async () => {
       repo.findByIdWithMembers.mockResolvedValue(null);
-      await expect(service.getGroup('bad-id')).rejects.toThrow(NotFoundException);
+      await expect(service.getGroup('bad-id', 'user-1')).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -110,9 +135,22 @@ describe('GroupsService', () => {
   describe('searchGroups', () => {
     it('returns paginated results', async () => {
       repo.search.mockResolvedValue([[mockGroup()], 1]);
-      const result = await service.searchGroups({ name: 'Test', page: 1, limit: 10 });
+      const result = await service.searchGroups({ name: 'Test', page: 1, limit: 10 }, 'user-1');
       expect(result.total).toBe(1);
       expect(result.data).toHaveLength(1);
+    });
+
+    it('scopes the repository search to the requester', async () => {
+      repo.search.mockResolvedValue([[], 0]);
+      await service.searchGroups({ name: 'Test', page: 2, limit: 10 }, 'user-9');
+      expect(repo.search).toHaveBeenCalledWith('Test', 2, 10, 'user-9');
+    });
+
+    it('never leaks invite codes in search results', async () => {
+      repo.search.mockResolvedValue([[mockGroup()], 1]);
+      const result = await service.searchGroups({ page: 1, limit: 10 }, 'user-1');
+      expect(result.data[0].inviteCode).toBeUndefined();
+      expect(result.data[0].gateTokenAddress).toBeUndefined();
     });
   });
 
