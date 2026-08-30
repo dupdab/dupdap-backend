@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
+import * as crypto from "crypto";
 import {
   WEBHOOK_DELIVERY_JOB,
   WEBHOOK_DELIVERY_QUEUE,
@@ -40,8 +41,13 @@ export class WebhookDeliveryService {
       attemptNumber: 1,
     };
 
+    const jobId = crypto
+      .createHash("sha256")
+      .update(`${webhook.id}:${event}:${body}`)
+      .digest("hex");
+
     await this.webhookQueue.add(WEBHOOK_DELIVERY_JOB, jobPayload, {
-      jobId: `${webhook.id}:${event}:${Date.now()}`,
+      jobId,
       removeOnComplete: true,
       removeOnFail: false,
     });
