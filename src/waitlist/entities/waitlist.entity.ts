@@ -20,6 +20,15 @@ export class WaitlistEntry {
   @Column({ default: false })
   notified: boolean;
 
+  @Column({ default: false })
+  approved: boolean;
+
+  @Column({ default: false })
+  unsubscribed: boolean;
+
+  @Column({ default: 0 })
+  referralCount: number;
+
   @CreateDateColumn()
   createdAt: Date;
 }

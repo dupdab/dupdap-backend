@@ -1,15 +1,3 @@
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
 import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -21,12 +9,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { CacheModule } from '../cache/cache.module';
+import { EmailModule } from '../email/email.module';
 
 @Global()
 @Module({
   imports: [
     TypeOrmModule.forFeature([Merchant]),
-    CacheModule,
+    CacheModule, EmailModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -38,7 +27,7 @@ import { CacheModule } from '../cache/cache.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtAuthGuard],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard],
+  exports: [AuthService, JwtAuthGuard],
 })
 export class AuthModule {}

@@ -43,4 +43,5 @@ export class WaitlistController {
   getStats(): Promise<WaitlistStatsDto> {
     return this.waitlistService.getStats();
   }
+
 }

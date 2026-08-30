@@ -16,6 +16,9 @@ const TEMPLATES_DIR = path.join(__dirname, 'templates');
 
 const SUBJECTS: Record<string, string> = {
   welcome: 'Welcome to DupDub',
+  'password-reset': 'Reset your DupDub password',
+  'waitlist-approved': 'Your DupDub account is ready',
+  'waitlist-campaign': 'DupDub update',
   'payment-confirmed': 'Payment Confirmed',
   'settlement-completed': 'Settlement Completed',
   'payment-failed': 'Payment Failed',

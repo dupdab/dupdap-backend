@@ -1,4 +1,6 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createHash, randomBytes } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
@@ -8,6 +10,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import type { AuthTokenResponseDto } from './dto/auth-token-response.dto';
 import { CacheService } from '../cache/cache.service';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class AuthService {
@@ -16,6 +19,8 @@ export class AuthService {
     private merchantsRepo: Repository<Merchant>,
     private jwtService: JwtService,
     private cacheService: CacheService,
+    private emailService: EmailService,
+    private config: ConfigService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthTokenResponseDto> {
@@ -54,6 +59,32 @@ export class AuthService {
     await this.cacheService.set(`session:blacklist:${jti}`, true, { ttlSeconds });
   }
 
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    const merchant = await this.merchantsRepo.findOne({ where: { email } });
+    if (!merchant) return { message: 'If that email exists, a reset link has been sent' };
+
+    const token = randomBytes(32).toString('hex');
+    merchant.passwordResetToken = this.hashToken(token);
+    merchant.passwordResetExpiresAt = new Date(Date.now() + 3_600_000);
+    await this.merchantsRepo.save(merchant);
+    await this.emailService.queue(merchant.email, 'password-reset', {
+      resetUrl: `${this.config.get('FRONTEND_URL')}/reset-password?token=${token}`,
+    }, merchant.id);
+    return { message: 'If that email exists, a reset link has been sent' };
+  }
+
+  async resetPassword(token: string, password: string): Promise<{ message: string }> {
+    const merchant = await this.merchantsRepo.findOne({ where: { passwordResetToken: this.hashToken(token) } });
+    if (!merchant || !merchant.passwordResetExpiresAt || merchant.passwordResetExpiresAt <= new Date()) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+    merchant.passwordHash = await bcrypt.hash(password, 12);
+    merchant.passwordResetToken = null;
+    merchant.passwordResetExpiresAt = null;
+    await this.merchantsRepo.save(merchant);
+    return { message: 'Password reset successfully' };
+  }
+
   async isBlacklisted(jti: string): Promise<boolean> {
     const entry = await this.cacheService.get<boolean>(`session:blacklist:${jti}`);
     return entry === true;
@@ -73,5 +104,9 @@ export class AuthService {
 
   private signToken(sub: string, email: string, role?: string): string {
     return this.jwtService.sign({ sub, email, role });
+  }
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 }

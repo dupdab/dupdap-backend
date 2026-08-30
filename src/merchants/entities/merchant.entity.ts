@@ -38,6 +38,14 @@ export class Merchant {
   @Column()
   passwordHash: string;
 
+  @Exclude()
+  @Column({ nullable: true })
+  passwordResetToken: string | null;
+
+  @Exclude()
+  @Column({ nullable: true, type: 'timestamptz' })
+  passwordResetExpiresAt: Date | null;
+
   @Column()
   businessName: string;
 
