@@ -41,6 +41,7 @@ export class PaymentsController {
 
   @Post('batch')
   @Scopes('payments:write')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Create up to 20 payment requests in a single contract invocation',
     description:
