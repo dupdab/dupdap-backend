@@ -33,8 +33,10 @@ export class CreatePaymentDto {
   })
   metadata?: Record<string, any>;
 
-  @ApiPropertyOptional({ example: 30, description: 'Expiry in minutes (default 30)' })
+  @ApiPropertyOptional({ example: 30, description: 'Expiry in minutes (default 30, max 1440)' })
   @IsOptional()
   @IsNumber()
+  @IsPositive()
+  @Max(1440)
   expiryMinutes?: number;
 }
