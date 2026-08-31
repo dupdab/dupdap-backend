@@ -4,7 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Merchant } from '../../merchants/entities/merchant.entity';
+import { Merchant, MerchantStatus } from '../../merchants/entities/merchant.entity';
 import { CacheService } from '../../cache/cache.service';
 
 @Injectable()
@@ -42,6 +42,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // DB fallback
     const merchant = await this.merchantsRepo.findOne({ where: { id: payload.sub } });
     if (!merchant) throw new UnauthorizedException('Merchant not found');
+    if (merchant.status === MerchantStatus.SUSPENDED) {
+      throw new UnauthorizedException('Account suspended');
+    }
 
     const result = { merchantId: merchant.id, email: merchant.email, role: merchant.role };
 
