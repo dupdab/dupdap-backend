@@ -39,7 +39,7 @@ import { IdempotencyInterceptor } from './idempotency.interceptor';
 
 @ApiTags('Payments')
 @ApiBearerAuth()
-@Controller('api/v1/payments')
+@Controller('payments')
 @UseGuards(ThrottlerGuard, MerchantGuard)
 @UseInterceptors(ClassSerializerInterceptor)
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
