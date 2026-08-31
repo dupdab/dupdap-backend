@@ -258,12 +258,18 @@ export class PaymentsService {
   async refund(id: string, merchantId: string, dto: RefundPaymentDto): Promise<Payment> {
     const merchant = await this.merchants.findOne(merchantId);
 
+    let payment: Payment;
+    let refundAmountUsd: number;
+    let txHash: string;
+
+    // Step 1: the actual financial action — Stellar transfer + DB save —
+    // is isolated in its own try/catch (the real refund-failure path).
     // Read-check-transfer-write happens under a row lock inside a DB
     // transaction so two concurrent refund calls for the same payment
     // (double-click, retried request) cannot both pass the status check
     // before either has saved — preventing a duplicate Stellar payout.
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         const payment = await manager.findOne(Payment, {
           where: { id, merchantId },
           lock: { mode: 'pessimistic_write' },
@@ -334,37 +340,57 @@ export class PaymentsService {
 
         const saved = await manager.save(payment);
 
-        // Dispatch webhook
-        await this.webhooks.dispatch(merchantId, 'payment.refunded', {
-          paymentId: payment.id,
-          reference: payment.reference,
-          refundAmountUsd,
-          refundTxHash: txHash,
-          reason: dto.reason,
-        });
-
-        // Send emails
-        await this.notifications.enqueueEmail({
-          recipient: merchant.email,
-          subject: `Refund processed: ${payment.reference}`,
-          html: `<p>A refund of $${refundAmountUsd} has been processed for payment ${payment.reference}.</p><p>Reason: ${dto.reason}</p>`,
-        });
-
-        if (payment.customerEmail) {
-          await this.notifications.enqueueEmail({
-            recipient: payment.customerEmail,
-            subject: `Refund received from ${merchant.businessName}`,
-            html: `<p>A refund of $${refundAmountUsd} has been processed for your payment ${payment.reference}.</p><p>The funds have been sent back to your Stellar wallet.</p>`,
-          });
-        }
-
-        return saved;
+        return { saved, refundAmountUsd, txHash };
       });
+
+      payment = result.saved;
+      refundAmountUsd = result.refundAmountUsd;
+      txHash = result.txHash;
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof NotFoundException) {
         throw err;
       }
       throw new BadRequestException(`Stellar refund failed: ${err.message}`);
     }
+
+    // Step 2: webhook + email dispatch happens *after* the financial action
+    // has already succeeded and been saved. Failures here (e.g. a webhook
+    // queue error) must not be reported as a refund failure — the funds have
+    // genuinely moved. Log and continue on a best-effort basis instead.
+    try {
+      await this.webhooks.dispatch(merchantId, 'payment.refunded', {
+        paymentId: payment.id,
+        reference: payment.reference,
+        refundAmountUsd,
+        refundTxHash: txHash,
+        reason: dto.reason,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Refund webhook dispatch failed for payment ${payment.id} (refund already completed): ${err.message}`,
+      );
+    }
+
+    try {
+      await this.notifications.enqueueEmail({
+        recipient: merchant.email,
+        subject: `Refund processed: ${payment.reference}`,
+        html: `<p>A refund of $${refundAmountUsd} has been processed for payment ${payment.reference}.</p><p>Reason: ${dto.reason}</p>`,
+      });
+
+      if (payment.customerEmail) {
+        await this.notifications.enqueueEmail({
+          recipient: payment.customerEmail,
+          subject: `Refund received from ${merchant.businessName}`,
+          html: `<p>A refund of $${refundAmountUsd} has been processed for your payment ${payment.reference}.</p><p>The funds have been sent back to your Stellar wallet.</p>`,
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `Refund notification email failed for payment ${payment.id} (refund already completed): ${err.message}`,
+      );
+    }
+
+    return payment;
   }
 }
