@@ -53,13 +53,19 @@ export class AmlService {
     await this.amlRepo.save(flag);
     this.logger.warn(`AML flag created: ${reason} for merchant ${merchantId}`);
 
-    const adminEmail = this.configService.get<string>('ADMIN_EMAIL');
+    // Use the same config key as AdminAlertService (src/alerts/admin-alert.service.ts)
+    // so AML alerts actually send in environments configured per .env.example / README.
+    const adminEmail = this.configService.get<string>('ADMIN_ALERT_EMAIL');
     if (adminEmail) {
       await this.notificationsService.enqueueEmail({
         recipient: adminEmail,
         subject: `[AML Alert] New flag: ${reason}`,
         text: `A new AML flag has been raised.\n\nReason: ${reason}\nMerchant ID: ${merchantId}\nPayment ID: ${paymentId}\nDetails: ${JSON.stringify(metadata, null, 2)}\n\nPlease review at /admin/aml.`,
       });
+    } else {
+      this.logger.warn(
+        `ADMIN_ALERT_EMAIL is not configured — skipping AML alert email for flag ${reason} (merchant ${merchantId})`,
+      );
     }
   }
 
