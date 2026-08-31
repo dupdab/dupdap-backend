@@ -123,6 +123,26 @@ export class PaymentsService {
     return saved;
   }
 
+  async applySorobanPaymentConfirmed(event: { paymentReference: string; txHash?: string; amount?: number; asset?: string; from?: string }): Promise<void> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: event.paymentReference } });
+    if (!payment) {
+      this.logger.warn(`Soroban payment confirmed for unknown payment ${event.paymentReference}`);
+      return;
+    }
+
+    if (payment.status === PaymentStatus.CONFIRMED) {
+      return;
+    }
+
+    payment.status = PaymentStatus.CONFIRMED;
+    payment.confirmedAt = new Date();
+    if (event.txHash) payment.txHash = event.txHash;
+    if (event.from) payment.customerWalletAddress = event.from;
+    await this.paymentsRepo.save(payment);
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+  }
+
   /**
    * create_batch — mirrors the Soroban contract's create_batch(payments: Vec<PaymentInput>).
    *
