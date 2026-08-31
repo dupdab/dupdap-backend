@@ -203,8 +203,14 @@ export class PaymentsService {
       });
     }
 
-    // ── Persist all records in one shot (atomic) ──────────────────────────────
-    const saved = await this.paymentsRepo.save(records);
+    // ── Persist all records inside one DB transaction. A plain array save()
+    //    is not guaranteed atomic against constraint violations that only
+    //    manifest at insert time (e.g. a unique-constraint collision) or a
+    //    connection loss mid-batch — wrapping in a transaction backs the
+    //    "no partial writes" contract documented above with the database. ──
+    const saved = await this.dataSource.transaction(async (manager) => {
+      return manager.save(records);
+    });
 
     // ── Emit PaymentCreated event for each entry (mirrors contract event log) ─
     for (const event of events) {
