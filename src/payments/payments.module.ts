@@ -11,6 +11,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { SorobanService } from '../blockchain-wallet/soroban.service';
+import { IdempotencyInterceptor } from './idempotency.interceptor';
 
 @Module({
   imports: [
