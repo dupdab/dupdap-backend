@@ -47,6 +47,10 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, merchant.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
+    if (merchant.status === MerchantStatus.SUSPENDED) {
+      throw new UnauthorizedException('Account suspended');
+    }
+
     const token = this.signToken(merchant.id, merchant.email, merchant.role);
     return { accessToken: token, merchant };
   }
