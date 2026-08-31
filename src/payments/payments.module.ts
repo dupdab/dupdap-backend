@@ -11,6 +11,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { SorobanService } from '../blockchain-wallet/soroban.service';
+import { AmlModule } from '../aml/aml.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { SorobanService } from '../blockchain-wallet/soroban.service';
     NotificationsModule,
     MerchantsModule,
     ConfigModule,
+    forwardRef(() => AmlModule),
   ],
   controllers: [PaymentsController, PublicPaymentController],
   providers: [PaymentsService, IdempotencyInterceptor, SorobanService],

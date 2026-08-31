@@ -15,6 +15,7 @@ import { MerchantsService } from '../merchants/merchants.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { SorobanService, PaymentExpiredError } from '../blockchain-wallet/soroban.service';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { AmlService } from '../aml/aml.service';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -39,6 +40,7 @@ export class PaymentsService {
     private merchants: MerchantsService,
     private soroban: SorobanService,
     private analytics: AnalyticsService,
+    private aml: AmlService,
   ) {}
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
@@ -119,6 +121,13 @@ export class PaymentsService {
 
     // Invalidate merchant analytics caches since funnel and comparison data may have changed.
     this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    // Run AML high-value/high-velocity checks now that the payment is confirmed.
+    try {
+      await this.aml.checkAndFlag(saved);
+    } catch (err) {
+      this.logger.error(`AML check failed for payment ${saved.id}: ${err.message}`);
+    }
 
     return saved;
   }

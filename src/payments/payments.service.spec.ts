@@ -10,6 +10,7 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { AmlService } from '../aml/aml.service';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -19,6 +20,7 @@ describe('PaymentsService', () => {
   let notifications: NotificationsService;
   let merchants: MerchantsService;
   let analytics: AnalyticsService;
+  let aml: AmlService;
 
   const mockMerchant = {
     id: 'merchant-123',
@@ -79,6 +81,12 @@ describe('PaymentsService', () => {
             clearCacheForMerchant: jest.fn(),
           },
         },
+        {
+          provide: AmlService,
+          useValue: {
+            checkAndFlag: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -90,6 +98,7 @@ describe('PaymentsService', () => {
     notifications = module.get<NotificationsService>(NotificationsService);
     merchants = module.get<MerchantsService>(MerchantsService);
     analytics = module.get<AnalyticsService>(AnalyticsService);
+    aml = module.get<AmlService>(AmlService);
   });
 
   describe('refund', () => {
@@ -188,6 +197,40 @@ describe('PaymentsService', () => {
 
       expect(analytics.clearCacheForMerchant).toHaveBeenCalledWith('merchant-999');
       expect(analytics.clearCacheForMerchant).toHaveBeenCalledTimes(1);
+    });
+
+    it('should run the AML high-value/high-velocity check on confirmation', async () => {
+      const payment = {
+        id: 'payment-321',
+        merchantId: 'merchant-321',
+        amountUsd: 15000,
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+
+      const result = await service.confirmPayment('payment-321', 'GDEF789');
+
+      expect(aml.checkAndFlag).toHaveBeenCalledWith(result);
+      expect(aml.checkAndFlag).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not block confirmation if the AML check throws', async () => {
+      const payment = {
+        id: 'payment-654',
+        merchantId: 'merchant-654',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+      jest.spyOn(aml, 'checkAndFlag').mockRejectedValue(new Error('aml down'));
+
+      const result = await service.confirmPayment('payment-654', 'GABCXYZ');
+      expect(result.status).toBe(PaymentStatus.CONFIRMED);
     });
   });
 });
