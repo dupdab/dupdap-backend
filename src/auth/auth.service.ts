@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -72,6 +73,6 @@ export class AuthService {
   }
 
   private signToken(sub: string, email: string, role?: string): string {
-    return this.jwtService.sign({ sub, email, role });
+    return this.jwtService.sign({ sub, email, role, jti: randomUUID() });
   }
 }
