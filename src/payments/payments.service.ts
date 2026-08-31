@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
 import * as StellarSdk from '@stellar/stellar-sdk';
@@ -39,6 +39,7 @@ export class PaymentsService {
     private merchants: MerchantsService,
     private soroban: SorobanService,
     private analytics: AnalyticsService,
+    private dataSource: DataSource,
   ) {}
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
@@ -255,85 +256,100 @@ export class PaymentsService {
   }
 
   async refund(id: string, merchantId: string, dto: RefundPaymentDto): Promise<Payment> {
-    const payment = await this.findOne(id, merchantId);
-
-    if (payment.status !== PaymentStatus.SETTLED) {
-      throw new BadRequestException('Only settled payments can be refunded');
-    }
-
-    if (!payment.customerWalletAddress) {
-      throw new BadRequestException('Customer wallet address is unknown. Manual refund required.');
-    }
-
     const merchant = await this.merchants.findOne(merchantId);
 
-    // Determine refund amount
-    const refundAmountUsd = dto.amountUsd || payment.amountUsd;
-    if (refundAmountUsd > payment.amountUsd) {
-      throw new BadRequestException('Refund amount cannot exceed original payment amount');
-    }
-
-    // Determine asset and amount for Stellar transfer
-    let asset: StellarSdk.Asset;
-    let amountStr: string;
-
-    if (payment.amountUsdc) {
-      asset = this.stellar.getUsdcAsset();
-      // If partial refund, we need to calculate USDC amount based on ratio
-      const ratio = refundAmountUsd / payment.amountUsd;
-      const amountUsdc = payment.amountUsdc * ratio;
-      amountStr = amountUsdc.toFixed(7);
-    } else {
-      asset = StellarSdk.Asset.native();
-      const ratio = refundAmountUsd / payment.amountUsd;
-      const amountXlm = payment.amountXlm * ratio;
-      amountStr = amountXlm.toFixed(7);
-    }
-
-    const memo = `REFUND-${payment.reference.split('-').pop()}`;
-
+    // Read-check-transfer-write happens under a row lock inside a DB
+    // transaction so two concurrent refund calls for the same payment
+    // (double-click, retried request) cannot both pass the status check
+    // before either has saved — preventing a duplicate Stellar payout.
     try {
-      const txHash = await this.stellar.sendPayment(
-        payment.customerWalletAddress,
-        amountStr,
-        asset,
-        memo,
-      );
-
-      payment.status = PaymentStatus.REFUNDED;
-      payment.refundAmountUsd = refundAmountUsd;
-      payment.refundReason = dto.reason;
-      payment.refundTxHash = txHash;
-      payment.refundedAt = new Date();
-
-      const saved = await this.paymentsRepo.save(payment);
-
-      // Dispatch webhook
-      await this.webhooks.dispatch(merchantId, 'payment.refunded', {
-        paymentId: payment.id,
-        reference: payment.reference,
-        refundAmountUsd,
-        refundTxHash: txHash,
-        reason: dto.reason,
-      });
-
-      // Send emails
-      await this.notifications.enqueueEmail({
-        recipient: merchant.email,
-        subject: `Refund processed: ${payment.reference}`,
-        html: `<p>A refund of $${refundAmountUsd} has been processed for payment ${payment.reference}.</p><p>Reason: ${dto.reason}</p>`,
-      });
-
-      if (payment.customerEmail) {
-        await this.notifications.enqueueEmail({
-          recipient: payment.customerEmail,
-          subject: `Refund received from ${merchant.businessName}`,
-          html: `<p>A refund of $${refundAmountUsd} has been processed for your payment ${payment.reference}.</p><p>The funds have been sent back to your Stellar wallet.</p>`,
+      return await this.dataSource.transaction(async (manager) => {
+        const payment = await manager.findOne(Payment, {
+          where: { id, merchantId },
+          lock: { mode: 'pessimistic_write' },
         });
-      }
+        if (!payment) throw new NotFoundException('Payment not found');
 
-      return saved;
+        if (payment.status !== PaymentStatus.SETTLED) {
+          throw new BadRequestException('Only settled payments can be refunded');
+        }
+
+        if (!payment.customerWalletAddress) {
+          throw new BadRequestException(
+            'Customer wallet address is unknown. Manual refund required.',
+          );
+        }
+
+        // Determine refund amount
+        const refundAmountUsd = dto.amountUsd || payment.amountUsd;
+        if (refundAmountUsd > payment.amountUsd) {
+          throw new BadRequestException('Refund amount cannot exceed original payment amount');
+        }
+
+        // Determine asset and amount for Stellar transfer
+        let asset: StellarSdk.Asset;
+        let amountStr: string;
+
+        if (payment.amountUsdc) {
+          asset = this.stellar.getUsdcAsset();
+          // If partial refund, we need to calculate USDC amount based on ratio
+          const ratio = refundAmountUsd / payment.amountUsd;
+          const amountUsdc = payment.amountUsdc * ratio;
+          amountStr = amountUsdc.toFixed(7);
+        } else {
+          asset = StellarSdk.Asset.native();
+          const ratio = refundAmountUsd / payment.amountUsd;
+          const amountXlm = payment.amountXlm * ratio;
+          amountStr = amountXlm.toFixed(7);
+        }
+
+        const memo = `REFUND-${payment.reference.split('-').pop()}`;
+
+        const txHash = await this.stellar.sendPayment(
+          payment.customerWalletAddress,
+          amountStr,
+          asset,
+          memo,
+        );
+
+        payment.status = PaymentStatus.REFUNDED;
+        payment.refundAmountUsd = refundAmountUsd;
+        payment.refundReason = dto.reason;
+        payment.refundTxHash = txHash;
+        payment.refundedAt = new Date();
+
+        const saved = await manager.save(payment);
+
+        // Dispatch webhook
+        await this.webhooks.dispatch(merchantId, 'payment.refunded', {
+          paymentId: payment.id,
+          reference: payment.reference,
+          refundAmountUsd,
+          refundTxHash: txHash,
+          reason: dto.reason,
+        });
+
+        // Send emails
+        await this.notifications.enqueueEmail({
+          recipient: merchant.email,
+          subject: `Refund processed: ${payment.reference}`,
+          html: `<p>A refund of $${refundAmountUsd} has been processed for payment ${payment.reference}.</p><p>Reason: ${dto.reason}</p>`,
+        });
+
+        if (payment.customerEmail) {
+          await this.notifications.enqueueEmail({
+            recipient: payment.customerEmail,
+            subject: `Refund received from ${merchant.businessName}`,
+            html: `<p>A refund of $${refundAmountUsd} has been processed for your payment ${payment.reference}.</p><p>The funds have been sent back to your Stellar wallet.</p>`,
+          });
+        }
+
+        return saved;
+      });
     } catch (err) {
+      if (err instanceof BadRequestException || err instanceof NotFoundException) {
+        throw err;
+      }
       throw new BadRequestException(`Stellar refund failed: ${err.message}`);
     }
   }
