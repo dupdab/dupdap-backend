@@ -13,6 +13,12 @@ const config: ConnectionOptions = {
   migrations: [path.join(__dirname, 'src/database/migrations/*{.ts,.js}')],
   migrationsTableName: 'typeorm_migrations',
   synchronize: false,
+  extra: {
+    max: parseInt(process.env.DB_POOL_MAX || '10', 10),
+    min: parseInt(process.env.DB_POOL_MIN || '2', 10),
+    connectionTimeoutMillis: parseInt(process.env.DB_ACQUIRE_TIMEOUT_MS || '10000', 10),
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '60000', 10),
+  },
   cli: {
     migrationsDir: 'src/database/migrations',
   },
