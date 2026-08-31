@@ -6,6 +6,7 @@ import {
   Query,
   Body,
   Headers,
+  Request,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -61,10 +62,14 @@ export class PaymentController {
   })
   @ApiBody({ type: CreatePaymentDto })
   async createPayment(
+    @Request() req: { user: { merchantId: string } },
     @Body() createPaymentDto: CreatePaymentDto,
     @Headers('idempotency-key') _idempotencyKey?: string,
   ): Promise<CommonResponseDto<PaymentDetailsDto>> {
-    const payment = await this.paymentService.createPayment(createPaymentDto);
+    const payment = await this.paymentService.createPayment(
+      req.user.merchantId,
+      createPaymentDto,
+    );
     return {
       success: true,
       data: payment,
@@ -83,9 +88,13 @@ export class PaymentController {
   })
   @ApiQuery({ type: PaymentFiltersDto })
   async getPayments(
+    @Request() req: { user: { merchantId: string } },
     @Query() filters: PaymentFiltersDto,
   ): Promise<CommonResponseDto<PaymentListDto>> {
-    const result = await this.paymentService.getPayments(filters);
+    const result = await this.paymentService.getPayments(
+      req.user.merchantId,
+      filters,
+    );
     return {
       success: true,
       data: result,
@@ -106,9 +115,13 @@ export class PaymentController {
     description: 'Payment not found',
   })
   async getPaymentById(
+    @Request() req: { user: { merchantId: string } },
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CommonResponseDto<PaymentDetailsDto>> {
-    const payment = await this.paymentService.getPaymentById(id);
+    const payment = await this.paymentService.getPaymentById(
+      id,
+      req.user.merchantId,
+    );
     return {
       success: true,
       data: payment,
@@ -129,9 +142,13 @@ export class PaymentController {
     description: 'Payment not found',
   })
   async getPaymentStatus(
+    @Request() req: { user: { merchantId: string } },
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CommonResponseDto<PaymentStatusDto>> {
-    const status = await this.paymentService.getPaymentStatus(id);
+    const status = await this.paymentService.getPaymentStatus(
+      id,
+      req.user.merchantId,
+    );
     return {
       success: true,
       data: status,
@@ -161,9 +178,13 @@ export class PaymentController {
     description: 'Payment not found',
   })
   async getPaymentQrCode(
+    @Request() req: { user: { merchantId: string } },
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CommonResponseDto<{ qrCodeData: string; paymentUrl: string }>> {
-    const qrCode = await this.paymentService.generateQrCode(id);
+    const qrCode = await this.paymentService.generateQrCode(
+      id,
+      req.user.merchantId,
+    );
     return {
       success: true,
       data: qrCode,
@@ -190,11 +211,13 @@ export class PaymentController {
   })
   @ApiBody({ type: CancelPaymentDto })
   async cancelPayment(
+    @Request() req: { user: { merchantId: string } },
     @Param('id', ParseUUIDPipe) id: string,
     @Body() cancelDto: CancelPaymentDto,
   ): Promise<CommonResponseDto<PaymentDetailsDto>> {
     const payment = await this.paymentService.cancelPayment(
       id,
+      req.user.merchantId,
       cancelDto.reason,
     );
     return {
@@ -221,9 +244,13 @@ export class PaymentController {
     description: 'Payment not found',
   })
   async getPaymentByReference(
+    @Request() req: { user: { merchantId: string } },
     @Param('reference') reference: string,
   ): Promise<CommonResponseDto<PaymentDetailsDto>> {
-    const payment = await this.paymentService.getPaymentByReference(reference);
+    const payment = await this.paymentService.getPaymentByReference(
+      reference,
+      req.user.merchantId,
+    );
     return {
       success: true,
       data: payment,
@@ -248,9 +275,13 @@ export class PaymentController {
     description: 'Payment not found',
   })
   async getPaymentReceipt(
+    @Request() req: { user: { merchantId: string } },
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CommonResponseDto<PaymentReceiptDto>> {
-    const receipt = await this.paymentService.generateReceipt(id);
+    const receipt = await this.paymentService.generateReceipt(
+      id,
+      req.user.merchantId,
+    );
     return {
       success: true,
       data: receipt,

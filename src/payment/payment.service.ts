@@ -24,9 +24,11 @@ export class PaymentService {
   ) {}
 
   async createPayment(
+    merchantId: string,
     createPaymentDto: CreatePaymentDto,
   ): Promise<PaymentDetailsDto> {
     const payment = this.paymentRepository.create({
+      merchantId,
       amount: createPaymentDto.amount,
       currency: createPaymentDto.currency,
       description: createPaymentDto.description,
@@ -38,7 +40,10 @@ export class PaymentService {
     return this.mapToDetailsDto(saved);
   }
 
-  async getPayments(filters: PaymentFiltersDto): Promise<PaymentListDto> {
+  async getPayments(
+    merchantId: string,
+    filters: PaymentFiltersDto,
+  ): Promise<PaymentListDto> {
     const {
       page = 1,
       limit = 20,
@@ -50,7 +55,9 @@ export class PaymentService {
       sortOrder = 'desc',
     } = filters;
 
-    const query = this.paymentRepository.createQueryBuilder('payment');
+    const query = this.paymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.merchantId = :merchantId', { merchantId });
 
     if (status) {
       query.andWhere('payment.status = :status', { status });
@@ -89,28 +96,37 @@ export class PaymentService {
     };
   }
 
-  async getPaymentById(id: string): Promise<PaymentDetailsDto> {
-    const payment = await this.getPaymentDetails(id);
+  async getPaymentById(
+    id: string,
+    merchantId: string,
+  ): Promise<PaymentDetailsDto> {
+    const payment = await this.getPaymentDetails(id, merchantId);
     return this.mapToDetailsDto(payment);
   }
 
-  async getPaymentDetails(id: string): Promise<Payment> {
-    const payment = await this.paymentRepository.findOne({ where: { id } });
+  async getPaymentDetails(id: string, merchantId: string): Promise<Payment> {
+    const payment = await this.paymentRepository.findOne({
+      where: { id, merchantId },
+    });
     if (!payment) {
       throw new NotFoundException('Payment not found');
     }
     return payment;
   }
 
-  async getPaymentStatus(id: string): Promise<{ status: PaymentStatus }> {
-    const payment = await this.getPaymentDetails(id);
+  async getPaymentStatus(
+    id: string,
+    merchantId: string,
+  ): Promise<{ status: PaymentStatus }> {
+    const payment = await this.getPaymentDetails(id, merchantId);
     return { status: payment.status };
   }
 
   async generateQrCode(
     id: string,
+    merchantId: string,
   ): Promise<{ qrCodeData: string; paymentUrl: string }> {
-    const payment = await this.getPaymentDetails(id);
+    const payment = await this.getPaymentDetails(id, merchantId);
     const paymentUrl = `https://example.com/payment/${id}`;
     const qrCodeBuffer = await QRCode.toBuffer(paymentUrl);
     const qrCodeData = qrCodeBuffer.toString('base64');
@@ -121,8 +137,12 @@ export class PaymentService {
     };
   }
 
-  async cancelPayment(id: string, reason?: string): Promise<PaymentDetailsDto> {
-    const payment = await this.getPaymentDetails(id);
+  async cancelPayment(
+    id: string,
+    merchantId: string,
+    reason?: string,
+  ): Promise<PaymentDetailsDto> {
+    const payment = await this.getPaymentDetails(id, merchantId);
 
     if (payment.status !== PaymentStatus.PENDING) {
       throw new BadRequestException('Only pending payments can be cancelled');
@@ -137,9 +157,12 @@ export class PaymentService {
     return this.mapToDetailsDto(updated);
   }
 
-  async getPaymentByReference(reference: string): Promise<PaymentDetailsDto> {
+  async getPaymentByReference(
+    reference: string,
+    merchantId: string,
+  ): Promise<PaymentDetailsDto> {
     const payment = await this.paymentRepository.findOne({
-      where: { reference },
+      where: { reference, merchantId },
     });
     if (!payment) {
       throw new NotFoundException('Payment not found');
@@ -147,8 +170,11 @@ export class PaymentService {
     return this.mapToDetailsDto(payment);
   }
 
-  async generateReceipt(id: string): Promise<PaymentReceiptDto> {
-    const payment = await this.getPaymentDetails(id);
+  async generateReceipt(
+    id: string,
+    merchantId: string,
+  ): Promise<PaymentReceiptDto> {
+    const payment = await this.getPaymentDetails(id, merchantId);
 
     if (payment.status !== PaymentStatus.COMPLETED) {
       throw new BadRequestException(
@@ -169,7 +195,10 @@ export class PaymentService {
   }
 
   async handleNotify(id: string, data: any): Promise<void> {
-    const payment = await this.getPaymentDetails(id);
+    const payment = await this.paymentRepository.findOne({ where: { id } });
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
     if (data.status) {
       payment.status = data.status;
       await this.paymentRepository.save(payment);
