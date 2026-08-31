@@ -12,6 +12,7 @@ import { Payment } from '../../payments/entities/payment.entity';
 import { Settlement } from '../../settlements/entities/settlement.entity';
 import { Webhook } from '../../webhooks/entities/webhook.entity';
 import { encryptedColumnTransformer } from '../../security/encrypted-column.transformer';
+import { numericColumnTransformer } from '../../database/numeric-column.transformer';
 import { ApiScope } from '../../auth/scopes';
 
 export enum MerchantStatus {
@@ -76,10 +77,10 @@ export class Merchant {
   @Column({ nullable: true })
   apiKeyHash: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0, transformer: numericColumnTransformer })
   totalVolumeUsd: number;
 
-  @Column({ type: 'decimal', precision: 5, scale: 4, default: 0.015 })
+  @Column({ type: 'decimal', precision: 5, scale: 4, default: 0.015, transformer: numericColumnTransformer })
   feeRate: number;
 
   /** Per-merchant custom fee rate override. Null means use global default. */

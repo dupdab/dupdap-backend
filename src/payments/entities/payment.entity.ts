@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Settlement } from '../../settlements/entities/settlement.entity';
+import { numericColumnTransformer } from '../../database/numeric-column.transformer';
 
 export enum PaymentStatus {
   PENDING = 'pending',
@@ -47,13 +48,13 @@ export class Payment {
   @Column()
   merchantId: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6 })
+  @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
   amountUsd: number;
 
-  @Column({ type: 'decimal', precision: 18, scale: 7, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 7, nullable: true, transformer: numericColumnTransformer })
   amountXlm: number;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   amountUsdc: number;
 
   @Column({ nullable: true })
@@ -89,10 +90,10 @@ export class Payment {
   @Column({ nullable: true })
   qrCode: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   feeUsd: number;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   settlementAmountFiat: number;
 
   @Column({ nullable: true })
@@ -109,7 +110,7 @@ export class Payment {
   @Column({ nullable: true })
   confirmedAt: Date;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   refundAmountUsd: number;
 
   @Column({ nullable: true })
