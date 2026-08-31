@@ -100,6 +100,7 @@ export class MerchantsService {
 
     merchant.apiKey = rawKey.substring(0, 12) + '...';
     merchant.apiKeyHash = hash;
+    merchant.apiKeyLookupHash = crypto.createHash('sha256').update(rawKey).digest('hex');
     merchant.apiKeyScopes = scopes?.length ? scopes : API_KEY_SCOPES;
     await this.merchantsRepo.save(merchant);
 
