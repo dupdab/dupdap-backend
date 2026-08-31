@@ -7,6 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
   OneToMany,
+  Index,
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Payment } from '../../payments/entities/payment.entity';
@@ -20,6 +21,9 @@ export enum SettlementStatus {
 }
 
 @Entity('settlements')
+@Index('IDX_SETTLEMENT_MERCHANT_ID', ['merchantId'])
+@Index('IDX_SETTLEMENT_STATUS', ['status'])
+@Index('IDX_SETTLEMENT_MERCHANT_STATUS', ['merchantId', 'status'])
 export class Settlement {
   @PrimaryGeneratedColumn('uuid')
   id: string;
