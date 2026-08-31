@@ -349,6 +349,17 @@ export class SettlementsService {
       return;
     }
 
+    if (
+      (payload.status === 'success' &&
+        settlement.status === SettlementStatus.COMPLETED) ||
+      (payload.status === 'failed' && settlement.status === SettlementStatus.FAILED)
+    ) {
+      this.logger.log(
+        `Partner callback for settlement ${settlement.id} already in terminal state ${settlement.status}; skipping`,
+      );
+      return;
+    }
+
     const payments = settlement.payments ?? [];
 
     if (payload.status === 'success') {
