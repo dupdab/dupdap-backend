@@ -270,7 +270,10 @@ export class PaymentsService {
         });
         if (!payment) throw new NotFoundException('Payment not found');
 
-        if (payment.status !== PaymentStatus.SETTLED) {
+        if (
+          payment.status !== PaymentStatus.SETTLED &&
+          payment.status !== PaymentStatus.PARTIALLY_REFUNDED
+        ) {
           throw new BadRequestException('Only settled payments can be refunded');
         }
 
@@ -280,10 +283,17 @@ export class PaymentsService {
           );
         }
 
-        // Determine refund amount
-        const refundAmountUsd = dto.amountUsd || payment.amountUsd;
-        if (refundAmountUsd > payment.amountUsd) {
-          throw new BadRequestException('Refund amount cannot exceed original payment amount');
+        // Track cumulative refunds against the original amount instead of
+        // overwriting refundAmountUsd on every call, so a payment that has
+        // already been partially refunded can still be refunded further
+        // (up to the remaining un-refunded balance).
+        const alreadyRefundedUsd = payment.refundAmountUsd || 0;
+        const remainingRefundableUsd = payment.amountUsd - alreadyRefundedUsd;
+        const refundAmountUsd = dto.amountUsd || remainingRefundableUsd;
+        if (refundAmountUsd > remainingRefundableUsd) {
+          throw new BadRequestException(
+            'Refund amount cannot exceed the remaining un-refunded balance',
+          );
         }
 
         // Determine asset and amount for Stellar transfer
@@ -312,8 +322,12 @@ export class PaymentsService {
           memo,
         );
 
-        payment.status = PaymentStatus.REFUNDED;
-        payment.refundAmountUsd = refundAmountUsd;
+        const totalRefundedUsd = alreadyRefundedUsd + refundAmountUsd;
+        payment.status =
+          totalRefundedUsd >= payment.amountUsd
+            ? PaymentStatus.REFUNDED
+            : PaymentStatus.PARTIALLY_REFUNDED;
+        payment.refundAmountUsd = totalRefundedUsd;
         payment.refundReason = dto.reason;
         payment.refundTxHash = txHash;
         payment.refundedAt = new Date();
