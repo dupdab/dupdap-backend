@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Payment } from '../../payments/entities/payment.entity';
+import { numericColumnTransformer } from '../../database/numeric-column.transformer';
 
 export enum SettlementStatus {
   PENDING = 'pending',
@@ -34,19 +35,19 @@ export class Settlement {
   @OneToMany(() => Payment, (payment) => payment.settlement)
   payments: Payment[];
 
-  @Column({ type: 'decimal', precision: 18, scale: 6 })
+  @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
   totalAmountUsd: number;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6 })
+  @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
   feeAmountUsd: number;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6 })
+  @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
   netAmountUsd: number;
 
   @Column({ nullable: true })
   fiatCurrency: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true })
+  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   fiatAmount: number;
 
   @Column({ type: 'enum', enum: SettlementStatus, default: SettlementStatus.PENDING })
