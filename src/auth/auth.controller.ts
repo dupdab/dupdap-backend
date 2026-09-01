@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -6,16 +6,39 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiUnauthorizedResponse,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
+import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthTokenResponseDto } from './dto/auth-token-response.dto';
+import { JwtAuthGuard } from './guards/jwt.guard';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Invalidate the current JWT before its natural expiry' })
+  @ApiResponse({ status: 200, description: 'Session revoked' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid token' })
+  async logout(@Req() req: Request): Promise<{ success: boolean }> {
+    const payload = req.user as { jti?: string; sub?: string; exp?: number };
+    const jti = payload.jti ?? payload.sub;
+    const exp = payload.exp;
+
+    if (jti) {
+      const ttlSeconds = exp ? Math.max(Math.floor(exp - Date.now() / 1000), 0) : 3600;
+      await this.authService.logout(jti, ttlSeconds);
+    }
+
+    return { success: true };
+  }
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)

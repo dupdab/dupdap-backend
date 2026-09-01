@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
-import { IdempotencyInterceptor } from '../payment/idempotency.interceptor';
+import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { CacheService } from '../cache/cache.service';
 import { PaymentStatus } from './entities/payment.entity';
 
