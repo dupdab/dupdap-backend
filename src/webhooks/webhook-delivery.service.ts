@@ -46,6 +46,11 @@ export class WebhookDeliveryService {
       attemptNumber: 1,
     };
 
+    const jobId = crypto
+      .createHash("sha256")
+      .update(`${webhook.id}:${event}:${body}`)
+      .digest("hex");
+
     await this.webhookQueue.add(WEBHOOK_DELIVERY_JOB, jobPayload, {
       jobId: this.buildJobId(webhook.id, event, body, 1),
       removeOnComplete: true,
