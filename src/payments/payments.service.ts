@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
 import * as StellarSdk from '@stellar/stellar-sdk';
@@ -40,6 +40,7 @@ export class PaymentsService {
     private merchants: MerchantsService,
     private soroban: SorobanService,
     private analytics: AnalyticsService,
+    private dataSource: DataSource,
   ) {}
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
@@ -223,8 +224,14 @@ export class PaymentsService {
       });
     }
 
-    // ── Persist all records in one shot (atomic) ──────────────────────────────
-    const saved = await this.paymentsRepo.save(records);
+    // ── Persist all records inside one DB transaction. A plain array save()
+    //    is not guaranteed atomic against constraint violations that only
+    //    manifest at insert time (e.g. a unique-constraint collision) or a
+    //    connection loss mid-batch — wrapping in a transaction backs the
+    //    "no partial writes" contract documented above with the database. ──
+    const saved = await this.dataSource.transaction(async (manager) => {
+      return manager.save(records);
+    });
 
     // ── Emit PaymentCreated event for each entry (mirrors contract event log) ─
     for (const event of events) {
@@ -276,23 +283,11 @@ export class PaymentsService {
   }
 
   async refund(id: string, merchantId: string, dto: RefundPaymentDto): Promise<Payment> {
-    const payment = await this.findOne(id, merchantId);
-
-    if (payment.status !== PaymentStatus.SETTLED) {
-      throw new BadRequestException('Only settled payments can be refunded');
-    }
-
-    if (!payment.customerWalletAddress) {
-      throw new BadRequestException('Customer wallet address is unknown. Manual refund required.');
-    }
-
     const merchant = await this.merchants.findOne(merchantId);
 
-    // Determine refund amount
-    const refundAmountUsd = dto.amountUsd || payment.amountUsd;
-    if (refundAmountUsd > payment.amountUsd) {
-      throw new BadRequestException('Refund amount cannot exceed original payment amount');
-    }
+    let payment: Payment;
+    let refundAmountUsd: number;
+    let txHash: string;
 
     // Determine asset and amount for Stellar transfer
     let asset: StellarSdk.Asset;
@@ -310,25 +305,36 @@ export class PaymentsService {
       amountStr = amountXlm.toFixed(7);
     }
 
-    const memo = `REFUND-${payment.reference.split('-').pop()}`;
+        const totalRefundedUsd = alreadyRefundedUsd + refundAmountUsd;
+        payment.status =
+          totalRefundedUsd >= payment.amountUsd
+            ? PaymentStatus.REFUNDED
+            : PaymentStatus.PARTIALLY_REFUNDED;
+        payment.refundAmountUsd = totalRefundedUsd;
+        payment.refundReason = dto.reason;
+        payment.refundTxHash = txHash;
+        payment.refundedAt = new Date();
 
+        const saved = await manager.save(payment);
+
+        return { saved, refundAmountUsd, txHash };
+      });
+
+      payment = result.saved;
+      refundAmountUsd = result.refundAmountUsd;
+      txHash = result.txHash;
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof NotFoundException) {
+        throw err;
+      }
+      throw new BadRequestException(`Stellar refund failed: ${err.message}`);
+    }
+
+    // Step 2: webhook + email dispatch happens *after* the financial action
+    // has already succeeded and been saved. Failures here (e.g. a webhook
+    // queue error) must not be reported as a refund failure — the funds have
+    // genuinely moved. Log and continue on a best-effort basis instead.
     try {
-      const txHash = await this.stellar.sendPayment(
-        payment.customerWalletAddress,
-        amountStr,
-        asset,
-        memo,
-      );
-
-      payment.status = PaymentStatus.REFUNDED;
-      payment.refundAmountUsd = refundAmountUsd;
-      payment.refundReason = dto.reason;
-      payment.refundTxHash = txHash;
-      payment.refundedAt = new Date();
-
-      const saved = await this.paymentsRepo.save(payment);
-
-      // Dispatch webhook
       await this.webhooks.dispatch(merchantId, 'payment.refunded', {
         paymentId: payment.id,
         reference: payment.reference,
@@ -336,8 +342,13 @@ export class PaymentsService {
         refundTxHash: txHash,
         reason: dto.reason,
       });
+    } catch (err) {
+      this.logger.error(
+        `Refund webhook dispatch failed for payment ${payment.id} (refund already completed): ${err.message}`,
+      );
+    }
 
-      // Send emails
+    try {
       await this.notifications.enqueueEmail({
         recipient: merchant.email,
         subject: `Refund processed: ${payment.reference}`,
@@ -351,10 +362,12 @@ export class PaymentsService {
           html: `<p>A refund of $${refundAmountUsd} has been processed for your payment ${payment.reference}.</p><p>The funds have been sent back to your Stellar wallet.</p>`,
         });
       }
-
-      return saved;
     } catch (err) {
-      throw new BadRequestException(`Stellar refund failed: ${err.message}`);
+      this.logger.error(
+        `Refund notification email failed for payment ${payment.id} (refund already completed): ${err.message}`,
+      );
     }
+
+    return payment;
   }
 }
