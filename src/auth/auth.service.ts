@@ -1,8 +1,9 @@
 import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, IsNull } from 'typeorm';
+import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomUUID, createHash } from 'crypto';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -46,6 +47,10 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, merchant.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
+    if (merchant.status === MerchantStatus.SUSPENDED) {
+      throw new UnauthorizedException('Account suspended');
+    }
+
     const token = this.signToken(merchant.id, merchant.email, merchant.role);
     return { accessToken: token, merchant };
   }
@@ -60,18 +65,16 @@ export class AuthService {
   }
 
   async findMerchantByApiKey(rawKey: string): Promise<Merchant | null> {
-    const merchants = await this.merchantsRepo.find({
-      where: { apiKeyHash: Not(IsNull()) },
+    const lookupHash = createHash('sha256').update(rawKey).digest('hex');
+    const merchant = await this.merchantsRepo.findOne({
+      where: { apiKeyLookupHash: lookupHash },
     });
-    for (const m of merchants) {
-      if (m.apiKeyHash && (await bcrypt.compare(rawKey, m.apiKeyHash))) {
-        return m;
-      }
-    }
-    return null;
+
+    if (!merchant?.apiKeyHash) return null;
+    return (await bcrypt.compare(rawKey, merchant.apiKeyHash)) ? merchant : null;
   }
 
   private signToken(sub: string, email: string, role?: string): string {
-    return this.jwtService.sign({ sub, email, role });
+    return this.jwtService.sign({ sub, email, role, jti: randomUUID() });
   }
 }
