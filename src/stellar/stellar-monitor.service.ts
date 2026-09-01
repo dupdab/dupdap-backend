@@ -228,14 +228,25 @@ export class StellarMonitorService implements OnModuleInit {
       .getMany();
 
     for (const payment of expired) {
-      await this.stellar.invokeContract('expire', [payment.id]);
-      payment.status = PaymentStatus.EXPIRED;
-      await this.paymentsRepo.save(payment);
+      try {
+        await this.stellar.invokeContract('expire', [payment.id]);
+        payment.status = PaymentStatus.EXPIRED;
+        await this.paymentsRepo.save(payment);
 
-      await this.webhooks.dispatch(payment.merchantId, 'payment.expired', {
-        paymentId: payment.id,
-        reference: payment.reference,
-      });
+        await this.webhooks.dispatch(payment.merchantId, 'payment.expired', {
+          paymentId: payment.id,
+          reference: payment.reference,
+        });
+      } catch (err) {
+        this.logger.error(`Failed to expire payment ${payment.id}: ${err.message}`);
+        await this.adminAlerts.raise({
+          type: AdminAlertType.STELLAR_MONITOR,
+          dedupeKey: `stellar-monitor.expire:${payment.id}`,
+          message: `Failed to expire payment ${payment.reference}: ${err.message}`,
+          metadata: { paymentId: payment.id },
+          thresholdValue: 1,
+        });
+      }
     }
   }
 

@@ -11,7 +11,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { SorobanService } from '../blockchain-wallet/soroban.service';
-import { IdempotencyInterceptor } from './idempotency.interceptor';
+import { PaymentsSorobanListener } from './payments-soroban.listener';
 
 @Module({
   imports: [
@@ -24,7 +24,7 @@ import { IdempotencyInterceptor } from './idempotency.interceptor';
     ConfigModule,
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, SorobanService],
+  providers: [PaymentsService, IdempotencyInterceptor, SorobanService, PaymentsSorobanListener],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

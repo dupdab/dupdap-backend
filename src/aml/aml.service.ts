@@ -30,7 +30,7 @@ export class AmlService {
     }
 
     const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    startOfDay.setUTCHours(0, 0, 0, 0);
 
     const dailyCount = await this.paymentsRepo.count({
       where: { merchantId: payment.merchantId, createdAt: MoreThanOrEqual(startOfDay) },
