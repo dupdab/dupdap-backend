@@ -19,7 +19,7 @@ import { PublicPaymentViewDto } from './dto/public-payment-view.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
-import { IdempotencyInterceptor } from '../payment/idempotency.interceptor';
+import { IdempotencyInterceptor } from './idempotency.interceptor';
 
 @ApiTags('payments')
 @ApiBearerAuth('bearer')
