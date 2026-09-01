@@ -4,6 +4,7 @@ import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import * as QRCode from 'qrcode';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import Big from 'big.js';
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -44,7 +45,7 @@ export class PaymentsService {
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
     const xlmRate = await this.stellar.getXlmUsdRate();
-    const amountXlm = dto.amountUsd / xlmRate;
+    const amountXlm = new Big(dto.amountUsd).div(xlmRate);
 
     const memo = this.stellar.generateMemo();
     const depositAddress = this.stellar.getDepositAddress();
@@ -124,6 +125,26 @@ export class PaymentsService {
     return saved;
   }
 
+  async applySorobanPaymentConfirmed(event: { paymentReference: string; txHash?: string; amount?: number; asset?: string; from?: string }): Promise<void> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: event.paymentReference } });
+    if (!payment) {
+      this.logger.warn(`Soroban payment confirmed for unknown payment ${event.paymentReference}`);
+      return;
+    }
+
+    if (payment.status === PaymentStatus.CONFIRMED) {
+      return;
+    }
+
+    payment.status = PaymentStatus.CONFIRMED;
+    payment.confirmedAt = new Date();
+    if (event.txHash) payment.txHash = event.txHash;
+    if (event.from) payment.customerWalletAddress = event.from;
+    await this.paymentsRepo.save(payment);
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+  }
+
   /**
    * create_batch — mirrors the Soroban contract's create_batch(payments: Vec<PaymentInput>).
    *
@@ -164,7 +185,7 @@ export class PaymentsService {
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      const amountXlm = item.amountUsd / xlmRate;
+      const amountXlm = new Big(item.amountUsd).div(xlmRate);
       const memo = this.stellar.generateMemo();
 
       const stellarUri =
@@ -268,71 +289,21 @@ export class PaymentsService {
     let refundAmountUsd: number;
     let txHash: string;
 
-    // Step 1: the actual financial action — Stellar transfer + DB save —
-    // is isolated in its own try/catch (the real refund-failure path).
-    // Read-check-transfer-write happens under a row lock inside a DB
-    // transaction so two concurrent refund calls for the same payment
-    // (double-click, retried request) cannot both pass the status check
-    // before either has saved — preventing a duplicate Stellar payout.
-    try {
-      const result = await this.dataSource.transaction(async (manager) => {
-        const payment = await manager.findOne(Payment, {
-          where: { id, merchantId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!payment) throw new NotFoundException('Payment not found');
+    // Determine asset and amount for Stellar transfer
+    let asset: StellarSdk.Asset;
+    let amountStr: string;
 
-        if (
-          payment.status !== PaymentStatus.SETTLED &&
-          payment.status !== PaymentStatus.PARTIALLY_REFUNDED
-        ) {
-          throw new BadRequestException('Only settled payments can be refunded');
-        }
-
-        if (!payment.customerWalletAddress) {
-          throw new BadRequestException(
-            'Customer wallet address is unknown. Manual refund required.',
-          );
-        }
-
-        // Track cumulative refunds against the original amount instead of
-        // overwriting refundAmountUsd on every call, so a payment that has
-        // already been partially refunded can still be refunded further
-        // (up to the remaining un-refunded balance).
-        const alreadyRefundedUsd = payment.refundAmountUsd || 0;
-        const remainingRefundableUsd = payment.amountUsd - alreadyRefundedUsd;
-        const refundAmountUsd = dto.amountUsd || remainingRefundableUsd;
-        if (refundAmountUsd > remainingRefundableUsd) {
-          throw new BadRequestException(
-            'Refund amount cannot exceed the remaining un-refunded balance',
-          );
-        }
-
-        // Determine asset and amount for Stellar transfer
-        let asset: StellarSdk.Asset;
-        let amountStr: string;
-
-        if (payment.amountUsdc) {
-          asset = this.stellar.getUsdcAsset();
-          // If partial refund, we need to calculate USDC amount based on ratio
-          const ratio = refundAmountUsd / payment.amountUsd;
-          const amountUsdc = payment.amountUsdc * ratio;
-          amountStr = amountUsdc.toFixed(7);
-        } else {
-          asset = StellarSdk.Asset.native();
-          const ratio = refundAmountUsd / payment.amountUsd;
-          const amountXlm = payment.amountXlm * ratio;
-          amountStr = amountXlm.toFixed(7);
-        }
-
-        const memo = `REFUND-${payment.reference.split('-').pop()}`;
-
-        const txHash = await this.stellar.sendPayment(
-          payment.customerWalletAddress,
-          amountStr,
-          asset,
-          memo,
-        );
+    if (payment.amountUsdc) {
+      asset = this.stellar.getUsdcAsset();
+      const ratio = new Big(refundAmountUsd).div(payment.amountUsd);
+      const amountUsdc = new Big(payment.amountUsdc).times(ratio);
+      amountStr = amountUsdc.toFixed(7);
+    } else {
+      asset = StellarSdk.Asset.native();
+      const ratio = new Big(refundAmountUsd).div(payment.amountUsd);
+      const amountXlm = new Big(payment.amountXlm).times(ratio);
+      amountStr = amountXlm.toFixed(7);
+    }
 
         const totalRefundedUsd = alreadyRefundedUsd + refundAmountUsd;
         payment.status =

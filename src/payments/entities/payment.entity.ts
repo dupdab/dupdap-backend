@@ -7,6 +7,7 @@ import {
   DeleteDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Settlement } from '../../settlements/entities/settlement.entity';
@@ -34,6 +35,8 @@ export enum PaymentNetwork {
 }
 
 @Entity('payments')
+@Index(['merchantId', 'status'])
+@Index(['merchantId', 'createdAt'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -45,6 +48,7 @@ export class Payment {
   @JoinColumn({ name: 'merchantId' })
   merchant: Merchant;
 
+  @Index()
   @Column()
   merchantId: string;
 

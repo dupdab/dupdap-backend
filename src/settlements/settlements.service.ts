@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import Big from 'big.js';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
@@ -19,6 +20,7 @@ import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 
 export interface PartnerCallbackPayload {
@@ -59,33 +61,37 @@ export class SettlementsService {
     this.analytics.clearCacheForMerchant(merchantId);
   }
 
+  private toBig(value: number | string): Big {
+    return new Big(value);
+  }
+
   async initiateSettlement(payment: Payment): Promise<void> {
-    const amountUsd = Number(payment.amountUsd);
-    if (amountUsd < SMALL_BATCH_THRESHOLD_USD) {
+    const amountUsd = this.toBig(payment.amountUsd);
+    if (amountUsd.lt(SMALL_BATCH_THRESHOLD_USD)) {
       this.logger.debug(
         `Payment ${payment.id} below ${SMALL_BATCH_THRESHOLD_USD} USD batch threshold; waiting for batch window.`,
       );
       return;
     }
 
-    const feeUsd = amountUsd * BATCH_FEE_RATE;
-    const netUsd = amountUsd - feeUsd;
+    const feeUsd = amountUsd.times(BATCH_FEE_RATE);
+    const netUsd = amountUsd.minus(feeUsd);
     const LARGE_SETTLEMENT_THRESHOLD = 10000;
 
     const settlement = this.settlementsRepo.create({
       merchantId: payment.merchantId,
-      totalAmountUsd: amountUsd,
-      feeAmountUsd: feeUsd,
-      netAmountUsd: netUsd,
+      totalAmountUsd: amountUsd.toNumber(),
+      feeAmountUsd: feeUsd.toNumber(),
+      netAmountUsd: netUsd.toNumber(),
       fiatCurrency: 'NGN',
-      status: netUsd >= LARGE_SETTLEMENT_THRESHOLD ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
-      requiresApproval: netUsd >= LARGE_SETTLEMENT_THRESHOLD,
+      status: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      requiresApproval: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD),
     });
 
     const saved = await this.settlementsRepo.save(settlement);
 
     payment.status = PaymentStatus.SETTLING;
-    payment.feeUsd = feeUsd;
+    payment.feeUsd = feeUsd.toNumber();
     payment.settlementId = saved.id;
     await this.paymentsRepo.save(payment);
 
@@ -107,7 +113,7 @@ export class SettlementsService {
         metadata: {
           merchantId: saved.merchantId,
           paymentId: payment.id,
-          amount: netUsd,
+          amount: netUsd.toNumber(),
         },
         thresholdValue: 1,
       });
@@ -161,24 +167,24 @@ export class SettlementsService {
     );
 
     let batch: Payment[] = [];
-    let runningTotal = 0;
+    let runningTotal = new Big(0);
 
     for (const payment of ordered) {
       batch.push(payment);
-      runningTotal += Number(payment.amountUsd);
+      runningTotal = runningTotal.plus(this.toBig(payment.amountUsd));
 
       const oldest = batch[0];
       const oldestAt = new Date(oldest.confirmedAt ?? oldest.createdAt).getTime();
       const isOldEnough = Date.now() - oldestAt >= BATCH_WINDOW_MINUTES * 60 * 1000;
       const shouldFlush =
-        runningTotal >= SMALL_BATCH_THRESHOLD_USD ||
+        runningTotal.gte(SMALL_BATCH_THRESHOLD_USD) ||
         batch.length >= MAX_BATCH_PAYMENT_COUNT ||
         isOldEnough;
 
       if (shouldFlush) {
         await this.createBatchSettlement(batch);
         batch = [];
-        runningTotal = 0;
+        runningTotal = new Big(0);
       }
     }
   }
@@ -188,25 +194,25 @@ export class SettlementsService {
       return;
     }
 
-    const totalAmountUsd = payments.reduce((sum, payment) => sum + Number(payment.amountUsd), 0);
-    const feeAmountUsd = totalAmountUsd * BATCH_FEE_RATE;
-    const netAmountUsd = totalAmountUsd - feeAmountUsd;
+    const totalAmountUsd = payments.reduce((sum, payment) => sum.plus(this.toBig(payment.amountUsd)), new Big(0));
+    const feeAmountUsd = totalAmountUsd.times(BATCH_FEE_RATE);
+    const netAmountUsd = totalAmountUsd.minus(feeAmountUsd);
 
     const settlement = this.settlementsRepo.create({
       merchantId: payments[0].merchantId,
-      totalAmountUsd,
-      feeAmountUsd,
-      netAmountUsd,
+      totalAmountUsd: totalAmountUsd.toNumber(),
+      feeAmountUsd: feeAmountUsd.toNumber(),
+      netAmountUsd: netAmountUsd.toNumber(),
       fiatCurrency: 'NGN',
-      status: netAmountUsd >= 10000 ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
-      requiresApproval: netAmountUsd >= 10000,
+      status: netAmountUsd.gte(10000) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      requiresApproval: netAmountUsd.gte(10000),
     });
 
     const saved = await this.settlementsRepo.save(settlement);
 
     for (const payment of payments) {
       payment.status = PaymentStatus.SETTLING;
-      payment.feeUsd = Number((Number(payment.amountUsd) * BATCH_FEE_RATE).toFixed(6));
+      payment.feeUsd = this.toBig(payment.amountUsd).times(BATCH_FEE_RATE).toNumber();
       payment.settlementId = saved.id;
       await this.paymentsRepo.save(payment);
     }
@@ -225,10 +231,41 @@ export class SettlementsService {
         metadata: {
           merchantId: saved.merchantId,
           paymentCount: payments.length,
-          amount: netAmountUsd,
+          amount: netAmountUsd.toNumber(),
         },
         thresholdValue: 1,
       });
+    }
+  }
+
+  private async settleSettlementPayments(settlement: Settlement): Promise<void> {
+    const payments = settlement.payments ?? [];
+
+    for (const payment of payments) {
+      await this.stellar.invokeContract('settle', [payment.id, settlement.id]);
+      payment.status = PaymentStatus.SETTLED;
+      await this.paymentsRepo.save(payment);
+    }
+
+    this.invalidateAnalyticsForMerchant(settlement.merchantId);
+
+    for (const payment of payments) {
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        amount: payment.amountUsd,
+      });
+
+      await this.sendSettlementEmail(
+        settlement.merchantId,
+        NotificationEventType.PAYMENT_SETTLED,
+        'settlement-completed',
+        {
+          settlementId: settlement.id,
+          netAmountUsd: Number(settlement.netAmountUsd).toFixed(2),
+          paymentId: payment.id,
+        },
+      );
     }
   }
 
@@ -258,33 +295,7 @@ export class SettlementsService {
       settlement.completedAt = new Date();
       await this.settlementsRepo.save(settlement);
 
-      for (const payment of payments) {
-        await this.stellar.invokeContract('settle', [payment.id, settlement.id]);
-        payment.status = PaymentStatus.SETTLED;
-        await this.paymentsRepo.save(payment);
-      }
-
-      // Invalidate analytics caches impacted by payment.settled.
-      this.invalidateAnalyticsForMerchant(settlement.merchantId);
-
-      for (const payment of payments) {
-        await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
-          paymentId: payment.id,
-          settlementId: settlement.id,
-          amount: payment.amountUsd,
-        });
-
-        await this.sendSettlementEmail(
-          settlement.merchantId,
-          NotificationEventType.PAYMENT_SETTLED,
-          'settlement-completed',
-          {
-            settlementId: settlement.id,
-            netAmountUsd: Number(settlement.netAmountUsd).toFixed(2),
-            paymentId: payment.id,
-          },
-        );
-      }
+      await this.settleSettlementPayments(settlement);
     } catch (err) {
       this.logger.error(`Settlement failed for ${settlement.id}`, err.message);
       await this.adminAlerts.raise({
@@ -349,6 +360,11 @@ export class SettlementsService {
       return;
     }
 
+    if (settlement.status === SettlementStatus.COMPLETED) {
+      this.logger.warn(`Duplicate partner callback for already-completed settlement ${settlement.id}; ignoring.`);
+      return;
+    }
+
     const payments = settlement.payments ?? [];
 
     if (payload.status === 'success') {
@@ -356,33 +372,7 @@ export class SettlementsService {
       settlement.completedAt = new Date();
       await this.settlementsRepo.save(settlement);
 
-      for (const payment of payments) {
-        await this.stellar.invokeContract('settle', [payment.id, settlement.id]);
-        payment.status = PaymentStatus.SETTLED;
-        await this.paymentsRepo.save(payment);
-      }
-
-      // Invalidate analytics caches impacted by payment.settled.
-      this.invalidateAnalyticsForMerchant(settlement.merchantId);
-
-      for (const payment of payments) {
-        await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
-          paymentId: payment.id,
-          settlementId: settlement.id,
-          amount: payment.amountUsd,
-        });
-
-        await this.sendSettlementEmail(
-          settlement.merchantId,
-          NotificationEventType.PAYMENT_SETTLED,
-          'settlement-completed',
-          {
-            settlementId: settlement.id,
-            netAmountUsd: Number(settlement.netAmountUsd).toFixed(2),
-            paymentId: payment.id,
-          },
-        );
-      }
+      await this.settleSettlementPayments(settlement);
     } else {
       settlement.status = SettlementStatus.FAILED;
       settlement.failureReason = payload.failureReason ?? 'Partner reported failure';
@@ -517,7 +507,7 @@ export class SettlementsService {
     return { success: true, message: 'Settlement retry initiated' };
   }
 
-  async approveSettlement(id: string): Promise<{ success: boolean; message: string }> {
+  async approveSettlement(id: string, approvedBy: string): Promise<{ success: boolean; message: string }> {
     const settlement = await this.settlementsRepo.findOne({
       where: { id },
       relations: ['payments'],
@@ -538,7 +528,7 @@ export class SettlementsService {
     // Approve and process the settlement
     settlement.status = SettlementStatus.PROCESSING;
     settlement.approvedAt = new Date();
-    settlement.approvedBy = 'admin'; // In a real app, this would be the admin user ID
+    settlement.approvedBy = approvedBy;
     await this.settlementsRepo.save(settlement);
 
     // Update associated payments
@@ -554,5 +544,55 @@ export class SettlementsService {
 
     this.logger.log(`Large settlement ${id} approved and processed by admin`);
     return { success: true, message: 'Settlement approved and processing initiated' };
+  }
+
+  async applySorobanSettlementCompleted(event: { settlementId: string; partnerReference?: string }): Promise<void> {
+    const settlement = await this.settlementsRepo.findOne({
+      where: { id: event.settlementId },
+      relations: ['payments'],
+    });
+
+    if (!settlement) {
+      this.logger.warn(`Soroban settlement completed for unknown settlement ${event.settlementId}`);
+      return;
+    }
+
+    if (settlement.status === SettlementStatus.COMPLETED) {
+      return;
+    }
+
+    settlement.status = SettlementStatus.COMPLETED;
+    settlement.completedAt = new Date();
+    if (event.partnerReference) {
+      settlement.partnerReference = event.partnerReference;
+    }
+    await this.settlementsRepo.save(settlement);
+
+    const payments = settlement.payments ?? [];
+    for (const payment of payments) {
+      payment.status = PaymentStatus.SETTLED;
+      await this.paymentsRepo.save(payment);
+    }
+
+    this.invalidateAnalyticsForMerchant(settlement.merchantId);
+
+    for (const payment of payments) {
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        amount: payment.amountUsd,
+      });
+
+      await this.sendSettlementEmail(
+        settlement.merchantId,
+        NotificationEventType.PAYMENT_SETTLED,
+        'settlement-completed',
+        {
+          settlementId: settlement.id,
+          netAmountUsd: Number(settlement.netAmountUsd).toFixed(2),
+          paymentId: payment.id,
+        },
+      );
+    }
   }
 }
