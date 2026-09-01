@@ -545,4 +545,54 @@ export class SettlementsService {
     this.logger.log(`Large settlement ${id} approved and processed by admin`);
     return { success: true, message: 'Settlement approved and processing initiated' };
   }
+
+  async applySorobanSettlementCompleted(event: { settlementId: string; partnerReference?: string }): Promise<void> {
+    const settlement = await this.settlementsRepo.findOne({
+      where: { id: event.settlementId },
+      relations: ['payments'],
+    });
+
+    if (!settlement) {
+      this.logger.warn(`Soroban settlement completed for unknown settlement ${event.settlementId}`);
+      return;
+    }
+
+    if (settlement.status === SettlementStatus.COMPLETED) {
+      return;
+    }
+
+    settlement.status = SettlementStatus.COMPLETED;
+    settlement.completedAt = new Date();
+    if (event.partnerReference) {
+      settlement.partnerReference = event.partnerReference;
+    }
+    await this.settlementsRepo.save(settlement);
+
+    const payments = settlement.payments ?? [];
+    for (const payment of payments) {
+      payment.status = PaymentStatus.SETTLED;
+      await this.paymentsRepo.save(payment);
+    }
+
+    this.invalidateAnalyticsForMerchant(settlement.merchantId);
+
+    for (const payment of payments) {
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        amount: payment.amountUsd,
+      });
+
+      await this.sendSettlementEmail(
+        settlement.merchantId,
+        NotificationEventType.PAYMENT_SETTLED,
+        'settlement-completed',
+        {
+          settlementId: settlement.id,
+          netAmountUsd: Number(settlement.netAmountUsd).toFixed(2),
+          paymentId: payment.id,
+        },
+      );
+    }
+  }
 }

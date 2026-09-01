@@ -33,13 +33,13 @@ export class GroupsController {
   @Post()
   @ApiOperation({ summary: 'Create a new group' })
   create(@Body() dto: CreateGroupDto, @Req() req: any): Promise<GroupResponseDto> {
-    return this.groupsService.createGroup(dto, req.user.id);
+    return this.groupsService.createGroup(dto, req.user.merchantId);
   }
 
   @Get('search')
   @ApiOperation({ summary: 'Search groups by name with pagination' })
   search(@Query() dto: SearchGroupsDto, @Req() req: any) {
-    return this.groupsService.searchGroups(dto, req.user.id);
+    return this.groupsService.searchGroups(dto, req.user.merchantId);
   }
 
   @Get(':id')
@@ -48,7 +48,7 @@ export class GroupsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: any,
   ): Promise<GroupResponseDto> {
-    return this.groupsService.getGroup(id, req.user.id);
+    return this.groupsService.getGroup(id, req.user.merchantId);
   }
 
   @Patch(':id')
@@ -58,13 +58,13 @@ export class GroupsController {
     @Body() dto: UpdateGroupDto,
     @Req() req: any,
   ): Promise<GroupResponseDto> {
-    return this.groupsService.updateGroup(id, dto, req.user.id);
+    return this.groupsService.updateGroup(id, dto, req.user.merchantId);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Soft-delete a group' })
   remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
-    return this.groupsService.deleteGroup(id, req.user.id);
+    return this.groupsService.deleteGroup(id, req.user.merchantId);
   }
 
   @Post(':id/invite-code')
@@ -73,7 +73,7 @@ export class GroupsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: any,
   ): Promise<{ inviteCode: string }> {
-    return this.groupsService.generateInviteCode(id, req.user.id);
+    return this.groupsService.generateInviteCode(id, req.user.merchantId);
   }
 
   @Post('join/:inviteCode')
@@ -82,7 +82,7 @@ export class GroupsController {
     @Param('inviteCode') inviteCode: string,
     @Req() req: any,
   ): Promise<GroupResponseDto> {
-    return this.groupsService.joinByInviteCode(inviteCode, req.user.id);
+    return this.groupsService.joinByInviteCode(inviteCode, req.user.merchantId);
   }
 
   @Post(':id/gate')
@@ -92,7 +92,7 @@ export class GroupsController {
     @Body() dto: SetTokenGateDto,
     @Req() req: any,
   ): Promise<GroupResponseDto> {
-    return this.groupsService.setTokenGate(id, dto, req.user.id);
+    return this.groupsService.setTokenGate(id, dto, req.user.merchantId);
   }
 
   @Delete(':id/gate')
@@ -101,6 +101,6 @@ export class GroupsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: any,
   ): Promise<GroupResponseDto> {
-    return this.groupsService.removeTokenGate(id, req.user.id);
+    return this.groupsService.removeTokenGate(id, req.user.merchantId);
   }
 }

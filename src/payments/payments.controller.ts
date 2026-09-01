@@ -15,6 +15,7 @@ import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { BatchCreatePaymentDto, BatchPaymentResultDto } from './dto/batch-create-payment.dto';
+import { PublicPaymentViewDto } from './dto/public-payment-view.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
@@ -41,6 +42,7 @@ export class PaymentsController {
 
   @Post('batch')
   @Scopes('payments:write')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Create up to 20 payment requests in a single contract invocation',
     description:
@@ -118,10 +120,11 @@ export class PublicPaymentController {
   @Get(':reference')
   @ApiOperation({ summary: 'Get payment details by reference (public)' })
   @ApiParam({ name: 'reference', example: 'PAY-abc123' })
-  @ApiOkResponse({ description: 'Public payment view' })
+  @ApiOkResponse({ type: PublicPaymentViewDto, description: 'Public payment view' })
   @ApiNotFoundResponse({ description: 'Unknown reference' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  getByReference(@Param('reference') reference: string) {
-    return this.paymentsService.findByReference(reference);
+  async getByReference(@Param('reference') reference: string): Promise<PublicPaymentViewDto> {
+    const payment = await this.paymentsService.findByReference(reference);
+    return PublicPaymentViewDto.from(payment);
   }
 }
