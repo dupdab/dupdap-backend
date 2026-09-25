@@ -1,22 +1,41 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import {
-  SorobanService,
+  PaymentEscrowService,
   PaymentExpiredError,
-} from './soroban.service';
+} from './payment-escrow.service';
 
-describe('SorobanService — ledger-based payment expiry', () => {
-  let service: SorobanService;
+// Minimal stub — PaymentEscrowService only calls sorobanService methods that
+// are not exercised by the ledger-expiry logic under test here.
+const mockSorobanService = {
+  registerUser: jest.fn(),
+  getBalance: jest.fn().mockResolvedValue('0'),
+  getStakeBalance: jest.fn().mockResolvedValue('0'),
+  deposit: jest.fn(),
+  release: jest.fn(),
+  refund: jest.fn(),
+};
+
+describe('PaymentEscrowService — ledger-based payment expiry', () => {
+  let service: PaymentEscrowService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        SorobanService,
-        { provide: ConfigService, useValue: { get: jest.fn() } },
+        PaymentEscrowService,
+        { provide: 'SorobanService', useValue: mockSorobanService },
       ],
-    }).compile();
+    })
+      .overrideProvider(PaymentEscrowService)
+      .useValue(
+        // Construct directly so we can inject the mock without the DI token
+        // ceremony that SorobanService (RPC) requires.
+        Object.assign(
+          new (PaymentEscrowService as any)(mockSorobanService),
+        ),
+      )
+      .compile();
 
-    service = module.get(SorobanService);
+    service = module.get(PaymentEscrowService);
     // Start every test at a known ledger
     service.setCurrentLedger(1000);
   });
@@ -30,7 +49,7 @@ describe('SorobanService — ledger-based payment expiry', () => {
 
   it('uses DEFAULT_EXPIRY_LEDGERS (360) when not specified', () => {
     const p = service.createPayment('pay-2', 'GMERCHANT', '50');
-    expect(p.expiryLedger).toBe(1000 + SorobanService.DEFAULT_EXPIRY_LEDGERS);
+    expect(p.expiryLedger).toBe(1000 + PaymentEscrowService.DEFAULT_EXPIRY_LEDGERS);
   });
 
   it('payment starts as pending', () => {
@@ -176,10 +195,10 @@ describe('SorobanService — ledger-based payment expiry', () => {
   // ── LEDGERS_PER_MINUTE constant ───────────────────────────────────────────
 
   it('LEDGERS_PER_MINUTE is 12 (1 ledger per 5 seconds)', () => {
-    expect(SorobanService.LEDGERS_PER_MINUTE).toBe(12);
+    expect(PaymentEscrowService.LEDGERS_PER_MINUTE).toBe(12);
   });
 
   it('30 minutes = 360 ledgers at LEDGERS_PER_MINUTE rate', () => {
-    expect(30 * SorobanService.LEDGERS_PER_MINUTE).toBe(SorobanService.DEFAULT_EXPIRY_LEDGERS);
+    expect(30 * PaymentEscrowService.LEDGERS_PER_MINUTE).toBe(PaymentEscrowService.DEFAULT_EXPIRY_LEDGERS);
   });
 });

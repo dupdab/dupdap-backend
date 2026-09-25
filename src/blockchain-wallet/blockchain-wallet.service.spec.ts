@@ -4,7 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { BlockchainWalletService, WALLET_PROVISIONED_EVENT } from './blockchain-wallet.service';
-import { SorobanService } from './soroban.service';
+import { PaymentEscrowService } from './payment-escrow.service';
 import { BlockchainWallet } from './entities/blockchain-wallet.entity';
 import { EncryptionService } from '../security/encryption.service';
 
@@ -25,7 +25,7 @@ const mockWallet = (): BlockchainWallet => ({
 describe('BlockchainWalletService', () => {
   let service: BlockchainWalletService;
   let walletRepo: any;
-  let sorobanService: jest.Mocked<SorobanService>;
+  let sorobanService: jest.Mocked<PaymentEscrowService>;
   let eventEmitter: jest.Mocked<EventEmitter2>;
   let configService: jest.Mocked<ConfigService>;
   let encryptionService: EncryptionService;
@@ -43,7 +43,7 @@ describe('BlockchainWalletService', () => {
           },
         },
         {
-          provide: SorobanService,
+          provide: PaymentEscrowService,
           useValue: {
             registerUser: jest.fn(),
             getBalance: jest.fn(),
@@ -72,7 +72,7 @@ describe('BlockchainWalletService', () => {
 
     service = module.get(BlockchainWalletService);
     walletRepo = module.get(getRepositoryToken(BlockchainWallet));
-    sorobanService = module.get(SorobanService);
+    sorobanService = module.get(PaymentEscrowService);
     eventEmitter = module.get(EventEmitter2);
     configService = module.get(ConfigService);
     encryptionService = module.get(EncryptionService);

@@ -1,5 +1,5 @@
 import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { SorobanService } from '../soroban/soroban.service';
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
@@ -78,34 +78,36 @@ export class ReentrantCallError extends Error {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 /**
- * SorobanService wraps the DupDub Soroban smart contract.
+ * PaymentEscrowService mirrors the DupDub Soroban escrow contract in NestJS.
+ *
+ * It tracks in-memory payment lifecycle (create → confirm → expire) and
+ * enforces ledger-based expiry, the pause/unpause admin switch, and a
+ * reentrancy guard — all mirroring the on-chain `payment_escrow` contract.
+ *
+ * Read-only balance queries (getBalance, getStakeBalance) are delegated to
+ * the real Soroban RPC client via SorobanService so they always reflect the
+ * actual on-chain state.
  *
  * ## Global pause switch
  * An admin can call pause() to instantly halt all deposits, releases, and
  * refunds during a security incident. View functions (getBalance,
  * getStakeBalance) remain callable while paused so monitoring is unaffected.
  *
- * The `paused` flag mirrors a persistent storage key in the real Soroban
- * contract. pause() / unpause() emit ContractPaused / ContractUnpaused events
- * that can be forwarded to an audit log or alert system.
- *
  * ## Reentrancy guard
  * A mutex-style `locked` flag prevents cross-contract reentrant calls from
- * exploiting the escrow release flow (separate concern, both guards coexist).
+ * exploiting the escrow release flow.
  */
 @Injectable()
-export class SorobanService {
+export class PaymentEscrowService {
   static readonly LEDGERS_PER_MINUTE = 12;
   static readonly DEFAULT_EXPIRY_LEDGERS = 360;
 
-  private readonly logger = new Logger(SorobanService.name);
+  private readonly logger = new Logger(PaymentEscrowService.name);
 
   // Persistent storage flag — true while contract is paused by admin.
-  // In the real Soroban contract this is a DataKey::Paused storage entry.
   private paused = false;
 
   // Reentrancy mutex — true while any escrow-mutating operation is running.
-  // In a real Soroban contract this would be a temporary storage key.
   private locked = false;
 
   // In-memory event log (replace with persistent audit log / event bus in prod).
@@ -115,7 +117,7 @@ export class SorobanService {
   private readonly expiredEventLog: PaymentExpiredEvent[] = [];
   private currentLedger = 1000;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly sorobanService: SorobanService) {}
 
   setCurrentLedger(ledger: number): void {
     this.currentLedger = ledger;
@@ -129,7 +131,7 @@ export class SorobanService {
     paymentId: string,
     merchantAddress: string,
     amountUsdc: string,
-    expiryLedgers = SorobanService.DEFAULT_EXPIRY_LEDGERS,
+    expiryLedgers = PaymentEscrowService.DEFAULT_EXPIRY_LEDGERS,
   ): ContractPayment {
     const payment: ContractPayment = {
       id: paymentId,
@@ -279,7 +281,7 @@ export class SorobanService {
     this.acquireLock();
     try {
       this.logger.log(`Depositing ${amountUsdc} USDC from ${stellarAddress} into escrow`);
-      // TODO: invoke DupDub contract deposit(stellarAddress, amountUsdc)
+      await this.sorobanService.deposit(stellarAddress, amountUsdc);
     } finally {
       this.releaseLock();
     }
@@ -294,7 +296,7 @@ export class SorobanService {
     this.acquireLock();
     try {
       this.logger.log(`Releasing escrow for payment ${paymentId} → ${merchantAddress}`);
-      // TODO: invoke DupDub contract release(paymentId, merchantAddress)
+      await this.sorobanService.release(paymentId, merchantAddress);
     } finally {
       this.releaseLock();
     }
@@ -309,29 +311,38 @@ export class SorobanService {
     this.acquireLock();
     try {
       this.logger.log(`Refunding escrow for payment ${paymentId} → ${customerAddress}`);
-      // TODO: invoke DupDub contract refund(paymentId, customerAddress)
+      await this.sorobanService.refund(paymentId, customerAddress);
     } finally {
       this.releaseLock();
     }
   }
 
-  // ── Read-only contract calls (no pause guard — always accessible) ─────────
+  // ── Read-only contract calls ──────────────────────────────────────────────
+  // These delegate to the real Soroban RPC client so on-chain balances are
+  // always accurate. No pause guard — monitoring must stay online during
+  // a security incident.
 
   async registerUser(username: string, publicKey: string): Promise<void> {
     this.logger.log(`Registering user ${username} (${publicKey}) on Soroban contract`);
-    // TODO: invoke DupDub contract registerUser(username, publicKey)
+    await this.sorobanService.registerUser(username, publicKey);
   }
 
+  /**
+   * Returns the on-chain USDC balance for the given Stellar address by
+   * invoking the contract's getBalance view function via Soroban RPC.
+   */
   async getBalance(stellarAddress: string): Promise<string> {
     this.logger.log(`Fetching USDC balance for ${stellarAddress}`);
-    // TODO: invoke DupDub contract getBalance(stellarAddress)
-    return '0';
+    return this.sorobanService.getBalance(stellarAddress);
   }
 
+  /**
+   * Returns the on-chain staked balance for the given Stellar address by
+   * invoking the contract's getStakeBalance view function via Soroban RPC.
+   */
   async getStakeBalance(stellarAddress: string): Promise<string> {
     this.logger.log(`Fetching stake balance for ${stellarAddress}`);
-    // TODO: invoke DupDub contract getStakeBalance(stellarAddress)
-    return '0';
+    return this.sorobanService.getStakeBalance(stellarAddress);
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────

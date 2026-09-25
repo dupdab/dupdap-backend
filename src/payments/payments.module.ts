@@ -10,7 +10,8 @@ import { IdempotencyInterceptor } from '../payment/idempotency.interceptor';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
-import { SorobanService } from '../blockchain-wallet/soroban.service';
+import { SorobanModule } from '../soroban/soroban.module';
+import { PaymentEscrowService } from '../blockchain-wallet/payment-escrow.service';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
 
 @Module({
@@ -22,9 +23,10 @@ import { PaymentsSorobanListener } from './payments-soroban.listener';
     NotificationsModule,
     MerchantsModule,
     ConfigModule,
+    SorobanModule,
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, SorobanService, PaymentsSorobanListener],
+  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

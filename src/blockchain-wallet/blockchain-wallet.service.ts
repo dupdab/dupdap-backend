@@ -11,7 +11,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { BlockchainWallet } from './entities/blockchain-wallet.entity';
-import { SorobanService } from './soroban.service';
+import { PaymentEscrowService } from './payment-escrow.service';
 import { EncryptionService } from '../security/encryption.service';
 
 export const WALLET_PROVISIONED_EVENT = 'wallet.provisioned';
@@ -24,7 +24,7 @@ export class BlockchainWalletService {
   constructor(
     @InjectRepository(BlockchainWallet)
     private readonly walletRepo: Repository<BlockchainWallet>,
-    private readonly sorobanService: SorobanService,
+    private readonly sorobanService: PaymentEscrowService,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2,
     private readonly encryptionService: EncryptionService,

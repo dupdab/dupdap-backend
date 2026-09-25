@@ -14,7 +14,7 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
-import { SorobanService, PaymentExpiredError } from '../blockchain-wallet/soroban.service';
+import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
@@ -38,7 +38,7 @@ export class PaymentsService {
     private webhooks: WebhooksService,
     private notifications: NotificationsService,
     private merchants: MerchantsService,
-    private soroban: SorobanService,
+    private soroban: PaymentEscrowService,
     private analytics: AnalyticsService,
     private dataSource: DataSource,
   ) {}
@@ -76,7 +76,7 @@ export class PaymentsService {
 
     // Register in Soroban contract with ledger-based expiry.
     // expiryLedgers defaults to 360 (≈ 30 min at 1 ledger/5 s).
-    const expiryLedgers = (dto.expiryMinutes ?? 30) * SorobanService.LEDGERS_PER_MINUTE;
+    const expiryLedgers = (dto.expiryMinutes ?? 30) * PaymentEscrowService.LEDGERS_PER_MINUTE;
     const contractPayment = this.soroban.createPayment(
       saved.id,
       depositAddress,

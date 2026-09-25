@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { BlockchainWallet } from './entities/blockchain-wallet.entity';
 import { SlippageConfig } from './entities/slippage-config.entity';
 import { BlockchainWalletService } from './blockchain-wallet.service';
+import { PaymentEscrowService } from './payment-escrow.service';
 import { SlippageService } from './slippage.service';
 import { WalletController } from './wallet.controller';
 import { InternalWalletController } from './internal-wallet.controller';
@@ -24,6 +25,7 @@ import { InternalServiceGuard } from '../auth/guards/internal-service.guard';
   providers: [
     EncryptionService,
     BlockchainWalletService,
+    PaymentEscrowService,
     SlippageService,
     WalletProvisionedListener,
     InternalServiceGuard,

@@ -4,7 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { BlockchainWalletModule } from '../src/blockchain-wallet/blockchain-wallet.module';
 import { BlockchainWalletService } from '../src/blockchain-wallet/blockchain-wallet.service';
-import { SorobanService } from '../src/blockchain-wallet/soroban.service';
+import { PaymentEscrowService } from '../src/blockchain-wallet/payment-escrow.service';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { InternalServiceGuard } from '../src/auth/guards/internal-service.guard';
 import { ExecutionContext } from '@nestjs/common';
@@ -39,7 +39,7 @@ describe('Wallet (e2e)', () => {
         syncBalance: jest.fn(),
         provision: jest.fn(),
       })
-      .overrideProvider(SorobanService)
+      .overrideProvider(PaymentEscrowService)
       .useValue({
         registerUser: jest.fn(),
         getBalance: jest.fn(),
