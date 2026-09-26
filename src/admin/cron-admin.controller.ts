@@ -2,9 +2,9 @@ import { Controller, Get, Post, Param, Query, UseGuards, BadRequestException, In
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AdminGuard } from '../../auth/guards/admin.guard';
-import { CronJobLog, CronJobStatus } from '../../cron/entities/cron-job-log.entity';
-import { CronJobRegistry } from '../../cron/cron-job.registry';
+import { AdminGuard } from '../auth/guards/admin.guard';
+import { CronJobLog, CronJobStatus } from '../cron/entities/cron-job-log.entity';
+import { CronJobRegistry } from '../cron/cron-job.registry';
 
 interface JobStatusDto {
   jobName: string;
