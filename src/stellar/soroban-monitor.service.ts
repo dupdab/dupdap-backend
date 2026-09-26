@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -7,6 +7,11 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { StellarService } from './stellar.service';
+import { CacheService } from '../cache/cache.service';
+
+const CURSOR_KEY = 'soroban:monitor:last-ledger';
+const PROCESSED_IDS_KEY = 'soroban:monitor:processed-event-ids';
+const STATE_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 interface SorobanEvent {
   type: string;
@@ -50,6 +55,7 @@ export class SorobanMonitorService {
     private readonly config: ConfigService,
     private readonly adminAlerts: AdminAlertService,
     private readonly stellar: StellarService,
+    @Optional() private readonly cache?: CacheService,
   ) {
     this.rpcUrl = this.config.get<string>(
       'SOROBAN_RPC_URL',
@@ -70,6 +76,8 @@ export class SorobanMonitorService {
       this.logger.debug('SOROBAN_ESCROW_CONTRACT_ID not set — skipping Soroban event poll');
       return;
     }
+
+    await this.loadState();
 
     let events: SorobanEvent[];
     let latestLedger: number;
@@ -92,6 +100,7 @@ export class SorobanMonitorService {
 
     // Update cursor to latest ledger for next poll
     this.startLedger = latestLedger;
+    await this.cacheSet(CURSOR_KEY, latestLedger);
 
     const payments = await this.paymentsRepo.find();
 
@@ -109,6 +118,32 @@ export class SorobanMonitorService {
       }
 
       await this.processEscrowEvent(event, payments);
+    }
+
+    await this.cacheSet(PROCESSED_IDS_KEY, Array.from(this.processedEventIds));
+  }
+
+  /** Restore cursor and de-dup window from Redis once per process (survives restarts). */
+  private stateLoaded = false;
+  private async loadState(): Promise<void> {
+    if (this.stateLoaded || !this.cache) return;
+    try {
+      const ledger = await this.cache.get<number>(CURSOR_KEY);
+      if (ledger && ledger > this.startLedger) this.startLedger = ledger;
+      const ids = await this.cache.get<string[]>(PROCESSED_IDS_KEY);
+      for (const id of ids ?? []) this.processedEventIds.add(id);
+      this.stateLoaded = true;
+    } catch (err) {
+      this.logger.warn(`Failed to load Soroban monitor state: ${(err as Error).message}`);
+    }
+  }
+
+  private async cacheSet(key: string, value: unknown): Promise<void> {
+    if (!this.cache) return;
+    try {
+      await this.cache.set(key, value, { ttlSeconds: STATE_TTL_SECONDS });
+    } catch (err) {
+      this.logger.warn(`Failed to persist Soroban monitor state: ${(err as Error).message}`);
     }
   }
 
