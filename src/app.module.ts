@@ -31,6 +31,7 @@ import { CronModule } from './cron/cron.module';
 import { BackupModule } from './backup/backup.module';
 import { PrometheusModule } from './prometheus/prometheus.module';
 import { AuditModule } from './audit/audit.module';
+import { RetryModule } from './retry/retry.module';
 import { HttpMetricsInterceptor } from './prometheus/http-metrics.interceptor';
 
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
@@ -142,6 +143,7 @@ import Redis from 'ioredis';
     PaymentsModule,
     StellarModule,
     SettlementsModule,
+    RetryModule,
     WebhooksModule,
     WaitlistModule,
     QueueModule,
