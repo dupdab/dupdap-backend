@@ -232,6 +232,8 @@ EMAIL_FROM_NAME=DupDub
 SENDGRID_API_KEY=
 ```
 
+> Two email paths read different SMTP variables. `src/email/nodemailer.service.ts` uses the `EMAIL_SMTP_*` set above. The notifications queue (`src/notifications/email.processor.ts`, used by `NotificationsService.enqueueEmail` for AML alerts etc.) reads `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER` and `SMTP_PASS`; set these too or queued emails will not be delivered. Both read `EMAIL_FROM`.
+
 #### Monitoring, alerting & observability
 ```bash
 SENTRY_DSN=https://xxx@sentry.io/xxx
