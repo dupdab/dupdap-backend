@@ -6,7 +6,7 @@ import { PaymentsController, PublicPaymentController } from './payments.controll
 import { Payment } from './entities/payment.entity';
 import { StellarModule } from '../stellar/stellar.module';
 import { CacheModule } from '../cache/cache.module';
-import { IdempotencyInterceptor } from '../payment/idempotency.interceptor';
+import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
