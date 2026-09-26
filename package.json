@@ -18,7 +18,7 @@
     "test:cov": "jest --coverage",
     "test:cov:ci": "jest --runInBand --config jest.ci.config.js",
     "test:integration": "jest --testRegex=\"\\.integration-spec\\.ts$\"",
-    "test:e2e": "jest --testPathPattern=e2e-spec",
+    "test:e2e": "jest --testRegex=\"\\.e2e-spec\\.ts$\"",
     "test:e2e:ci": "jest --runInBand --config jest.ci.config.js",
     "explain:queries": "ts-node --transpile-only scripts/explain-list-queries.ts",
     "migration:generate": "ts-node --transpile-only node_modules/.bin/typeorm migration:generate -f ormconfig",
@@ -114,7 +114,7 @@
       "ts"
     ],
     "rootDir": "src",
-    "testRegex": ".*\\.(spec|integration-spec|e2e-spec)\\.ts$",
+    "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
