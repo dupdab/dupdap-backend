@@ -1,17 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
-  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
   MaxLength,
   Min,
 } from 'class-validator';
-import {
-  MerchantBusinessType,
-  MerchantSettlementCurrency,
-} from '../entities/merchant.entity';
 
 export class RegisterMerchantDto {
   @ApiProperty({ example: 'Yaba Electronics', maxLength: 80 })
@@ -19,12 +14,9 @@ export class RegisterMerchantDto {
   @MaxLength(80)
   businessName!: string;
 
-  @ApiProperty({
-    enum: MerchantBusinessType,
-    example: MerchantBusinessType.RETAIL,
-  })
-  @IsEnum(MerchantBusinessType)
-  businessType!: MerchantBusinessType;
+  @ApiProperty({ example: 'retail' })
+  @IsString()
+  businessType!: string;
 
   @ApiPropertyOptional({
     example: 'merchant-logos/yaba-electronics.webp',
@@ -41,13 +33,10 @@ export class RegisterMerchantDto {
   @MaxLength(300)
   description?: string;
 
-  @ApiPropertyOptional({
-    enum: MerchantSettlementCurrency,
-    default: MerchantSettlementCurrency.NGN,
-  })
+  @ApiPropertyOptional({ example: 'NGN', default: 'NGN' })
   @IsOptional()
-  @IsEnum(MerchantSettlementCurrency)
-  settlementCurrency?: MerchantSettlementCurrency;
+  @IsString()
+  settlementCurrency?: string;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
