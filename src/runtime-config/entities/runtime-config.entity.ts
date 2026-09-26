@@ -1,6 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
-@Entity('runtime_config')
+@Entity('app_configs')
 export class RuntimeConfig {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
