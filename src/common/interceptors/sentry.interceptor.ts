@@ -6,11 +6,9 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import * as Sentry from '@sentry/nestjs';
-import type { User } from '../../users/entities/user.entity';
-import type { Admin } from '../../admin/entities/admin.entity';
 
 interface RequestWithUser {
-  user?: User | Admin;
+  user?: { merchantId?: string; email?: string; role?: string };
 }
 
 @Injectable()
@@ -21,16 +19,10 @@ export class SentryInterceptor implements NestInterceptor {
 
     Sentry.withScope((scope) => {
       if (user) {
-        scope.setUser({
-          id: user.id,
-          email: 'email' in user ? user.email : undefined,
-        });
-        if ('isMerchant' in user && user.isMerchant) {
-          scope.setTag('user_type', 'merchant');
-        } else if ('isAdmin' in user && user.isAdmin) {
-          scope.setTag('user_type', 'admin');
-        } else {
-          scope.setTag('user_type', 'user');
+        scope.setUser({ id: user.merchantId, email: user.email });
+        scope.setTag('user_type', 'merchant');
+        if (user.role) {
+          scope.setTag('merchant_role', user.role);
         }
       }
       scope.setTag('handler', `${context.getClass().name}.${context.getHandler().name}`);
