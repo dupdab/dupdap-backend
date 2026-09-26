@@ -22,10 +22,9 @@ async function main(): Promise<void> {
     console.log('Applied migration:', m.name);
   }
 
+  // Only revert the migrations applied during this check, never pre-existing ones.
   let reverted = 0;
-  for (;;) {
-    const [{ c }] = await connection.query(`SELECT COUNT(*)::int AS c FROM "typeorm_migrations"`);
-    if (Number(c) === 0) break;
+  for (let i = 0; i < applied.length; i += 1) {
     await connection.undoLastMigration();
     reverted += 1;
   }
