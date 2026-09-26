@@ -1,11 +1,11 @@
 import { DataSource } from 'typeorm';
-import { Merchant } from '../merchants/entities/merchant.entity';
-import { Payment } from '../payments/entities/payment.entity';
-import { Settlement } from '../settlements/entities/settlement.entity';
-import { Webhook } from '../webhooks/entities/webhook.entity';
-import { WaitlistEntry } from '../waitlist/entities/waitlist.entity';
+import * as path from 'path';
 
-export const TEST_ENTITIES = [Merchant, Payment, Settlement, Webhook, WaitlistEntry];
+// Load every entity in the application (same glob ormconfig.ts uses) so that
+// synchronize creates all tables needed by integration specs.
+export const TEST_ENTITIES = [
+  path.join(__dirname, '..', '**', '*.entity{.ts,.js}'),
+];
 
 export async function createTestDataSource(): Promise<DataSource> {
   const ds = new DataSource({
@@ -24,9 +24,9 @@ export async function createTestDataSource(): Promise<DataSource> {
 }
 
 export async function truncateAll(dataSource: DataSource): Promise<void> {
-  const tableNames = TEST_ENTITIES.map(
-    (e) => dataSource.getMetadata(e).tableName,
-  ).join('", "');
+  const tableNames = dataSource.entityMetadatas
+    .map((m) => m.tableName)
+    .join('", "');
   await dataSource.query(`TRUNCATE TABLE "${tableNames}" RESTART IDENTITY CASCADE`);
 }
 
