@@ -1,9 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { QUEUE_NAMES } from '../queues/queue.constants';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
@@ -28,6 +28,8 @@ export class StellarMonitorService implements OnModuleInit {
   constructor(
     @InjectRepository(Payment)
     private paymentsRepo: Repository<Payment>,
+    @InjectDataSource()
+    private dataSource: DataSource,
     private adminAlerts: AdminAlertService,
     private stellar: StellarService,
     private settlements: SettlementsService,
@@ -108,8 +110,8 @@ export class StellarMonitorService implements OnModuleInit {
 
       await this.expireOldPayments();
 
-      // Soroban fallback: poll USDC token contract transfer events
-      await this.sorobanMonitor.pollTransferEvents();
+      // Soroban escrow monitor: poll contract state-transition events
+      await this.sorobanMonitor.pollEscrowEvents();
       this.markRunSuccess();
     } catch (error) {
       this.markRunFailure(error);
@@ -127,8 +129,6 @@ export class StellarMonitorService implements OnModuleInit {
       status: this.lastRunStatus,
       lastError: this.lastRunError,
     };
-    // Soroban escrow monitor: poll contract state-transition events
-    await this.sorobanMonitor.pollEscrowEvents();
   }
 
   private async confirmPayment(
@@ -138,37 +138,56 @@ export class StellarMonitorService implements OnModuleInit {
     asset: string,
     from?: string,
   ) {
-    await this.stellar.invokeContract('confirm', [
-      payment.id,
-      txHash,
-      amount,
-      asset,
-      from ?? null,
-    ]);
+    await this.dataSource.transaction(async (manager) => {
+      // Re-fetch with a row-level lock to prevent concurrent double-settlement.
+      // If another worker already confirmed this payment, its status will no
+      // longer be PENDING and we bail out safely.
+      const locked = await manager.findOne(Payment, {
+        where: { id: payment.id, status: PaymentStatus.PENDING },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    this.logger.log(`Payment confirmed: ${payment.reference} | tx: ${txHash}`);
+      if (!locked) {
+        this.logger.warn(
+          `confirmPayment: payment ${payment.reference} is no longer PENDING — skipping (possible concurrent confirm)`,
+        );
+        return;
+      }
 
-    payment.status = PaymentStatus.CONFIRMED;
-    payment.txHash = txHash;
-    payment.confirmedAt = new Date();
-    payment.customerWalletAddress = from;
+      await this.stellar.invokeContract('confirm', [
+        locked.id,
+        txHash,
+        amount,
+        asset,
+        from ?? null,
+      ]);
 
-    if (asset === 'USDC') payment.amountUsdc = amount;
-    else payment.amountXlm = amount;
+      this.logger.log(`Payment confirmed: ${locked.reference} | tx: ${txHash}`);
 
-    await this.paymentsRepo.save(payment);
+      locked.status = PaymentStatus.CONFIRMED;
+      locked.txHash = txHash;
+      locked.confirmedAt = new Date();
+      locked.customerWalletAddress = from;
 
-    await this.queuePaymentConfirmedEmail(payment, asset);
+      if (asset === 'USDC') locked.amountUsdc = amount;
+      else locked.amountXlm = amount;
 
-    await this.webhooks.dispatch(payment.merchantId, 'payment.confirmed', {
-      paymentId: payment.id,
-      reference: payment.reference,
-      txHash,
-      amount,
-      asset,
+      await manager.save(locked);
+
+      // Run side-effects outside the lock to keep the critical section tight.
+      // We capture `locked` in closure — payment is already persisted above.
+      await this.queuePaymentConfirmedEmail(locked, asset);
+
+      await this.webhooks.dispatch(locked.merchantId, 'payment.confirmed', {
+        paymentId: locked.id,
+        reference: locked.reference,
+        txHash,
+        amount,
+        asset,
+      });
+
+      await this.settlements.initiateSettlement(locked);
     });
-
-    await this.settlements.initiateSettlement(payment);
   }
 
   private async queuePaymentConfirmedEmail(
