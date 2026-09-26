@@ -21,7 +21,7 @@ export class AdminAlertController {
   ): Promise<AdminAlert> {
     const adminId =
       (req as Request & { user?: { merchantId?: string } }).user?.merchantId ??
-      'system';
+      null;
     return this.adminAlertService.acknowledge(id, adminId);
   }
 }

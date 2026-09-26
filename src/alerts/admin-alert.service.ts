@@ -86,7 +86,7 @@ export class AdminAlertService {
     });
   }
 
-  async acknowledge(id: string, adminId: string): Promise<AdminAlert> {
+  async acknowledge(id: string, adminId: string | null): Promise<AdminAlert> {
     const alert = await this.adminAlertRepo.findOne({ where: { id } });
     if (!alert) {
       throw new NotFoundException(`AdminAlert ${id} not found`);
