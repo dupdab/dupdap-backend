@@ -1,4 +1,3 @@
-export { AppConfigModule } from './config.module';
 export { appConfig, type AppConfig } from './app.config';
 export { databaseConfig, type DatabaseConfig } from './database.config';
 export { redisConfig, type RedisConfig } from './redis.config';
