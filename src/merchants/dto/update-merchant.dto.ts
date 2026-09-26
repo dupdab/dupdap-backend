@@ -7,7 +7,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-export class UpdateMerchantDto {
+export class UpdateMerchantSettingsDto {
   @ApiPropertyOptional({ example: 'Yaba Electronics', maxLength: 80 })
   @IsOptional()
   @IsString()
