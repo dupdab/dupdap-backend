@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsInt, Max, Min } from 'class-validator';
+import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { SlippageService } from './slippage.service';
 
@@ -12,7 +13,7 @@ export class SetMaxSlippageDto {
 }
 
 @ApiTags('Admin - Slippage')
-@UseGuards(AdminGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin/slippage')
 export class SlippageAdminController {
   constructor(private readonly slippageService: SlippageService) {}
