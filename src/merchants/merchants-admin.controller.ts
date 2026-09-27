@@ -19,16 +19,6 @@ import { Roles } from '../auth/decorators/roles.decorator';
 export class MerchantsAdminController {
   constructor(private readonly merchantsService: MerchantsService) {}
 
-  @Patch(':id/verify')
-  @ApiOperation({ summary: 'Verify a merchant profile' })
-  @ApiResponse({ status: 200, type: Merchant })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Admin only' })
-  @ApiResponse({ status: 404, description: 'Merchant not found' })
-  verify(@Param('id') id: string): Promise<Merchant> {
-    return this.merchantsService.verifyMerchant(id);
-  }
-
   @Patch(':id/fee')
   @ApiOperation({ summary: 'Set custom fee rate for a merchant' })
   @ApiResponse({ status: 200, type: Merchant })
