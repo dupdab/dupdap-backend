@@ -19,6 +19,19 @@ interface EmailJobPayload {
   html?: string;
 }
 
+/**
+ * @deprecated This processor is part of the legacy notifications email path.
+ *
+ * The canonical email-sending path is `src/email/email.processor.ts`
+ * (`@Processor(EMAIL_QUEUE)`), driven by `EmailService.queue()` and logging to
+ * `EmailLog`. New features MUST enqueue through `EmailService` instead of
+ * `NotificationsService.enqueueEmail()`.
+ *
+ * This class is retained only to drain any in-flight jobs still sitting on the
+ * `EMAIL_DELIVERY_QUEUE` during the migration window. Once the queue is empty
+ * and all callers have been migrated, this file (and its queue wiring) can be
+ * deleted.
+ */
 @Injectable()
 @Processor(EMAIL_DELIVERY_QUEUE)
 export class EmailProcessor {
