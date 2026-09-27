@@ -50,7 +50,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         await this.cacheService.set(
           cacheKey,
           { status: response.statusCode ?? HttpStatus.CREATED, body },
-          { ttl: IDEMPOTENCY_TTL },
+          { ttlSeconds: IDEMPOTENCY_TTL },
         );
       }),
     );

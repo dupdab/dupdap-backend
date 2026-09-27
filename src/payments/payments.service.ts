@@ -233,7 +233,7 @@ export class PaymentsService {
       return manager.save(records);
     });
 
-    // ── Emit PaymentCreated event for each entry (mirrors contract event log) ─
+    // ── Emit PaymentCreated event for each entry (mirrors contract event log) ──
     for (const event of events) {
       this.logger.log(
         `PaymentCreated: id=${event.paymentId} merchant=${merchantId} amount=${event.amountUsd} memo="${event.memo}"`,

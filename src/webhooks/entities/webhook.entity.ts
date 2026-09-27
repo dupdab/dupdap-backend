@@ -6,12 +6,15 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { encryptedColumnTransformer } from '../../security/encrypted-column.transformer';
 
 @Entity('webhooks')
+@Index('IDX_WEBHOOK_MERCHANT_ID', ['merchantId'])
+@Index('IDX_WEBHOOK_MERCHANT_ACTIVE', ['merchantId', 'isActive'])
 export class Webhook {
   @PrimaryGeneratedColumn('uuid')
   id: string;

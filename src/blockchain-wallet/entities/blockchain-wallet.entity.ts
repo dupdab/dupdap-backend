@@ -3,11 +3,13 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { encryptedColumnTransformer } from '../../security/encrypted-column.transformer';
 
 @Entity('blockchain_wallets')
+@Index('IDX_BLOCKCHAIN_WALLET_LAST_SYNCED_AT', ['lastSyncedAt'])
 export class BlockchainWallet {
   @PrimaryGeneratedColumn('uuid')
   id: string;
