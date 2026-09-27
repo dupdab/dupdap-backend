@@ -40,19 +40,19 @@ export class Settlement {
   payments: Payment[];
 
   @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
-  totalAmountUsd: number;
+  totalAmountUsd: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
-  feeAmountUsd: number;
+  feeAmountUsd: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
-  netAmountUsd: number;
+  netAmountUsd: string;
 
   @Column({ nullable: true })
   fiatCurrency: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
-  fiatAmount: number;
+  fiatAmount: string | null;
 
   @Column({ type: 'enum', enum: SettlementStatus, default: SettlementStatus.PENDING })
   status: SettlementStatus;

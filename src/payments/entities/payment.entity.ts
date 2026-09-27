@@ -54,13 +54,13 @@ export class Payment {
   merchantId: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
-  amountUsd: number;
+  amountUsd: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 7, nullable: true, transformer: numericColumnTransformer })
-  amountXlm: number;
+  amountXlm: string | null;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
-  amountUsdc: number;
+  amountUsdc: string | null;
 
   @Column({ nullable: true })
   currency: string;
@@ -96,10 +96,10 @@ export class Payment {
   qrCode: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
-  feeUsd: number;
+  feeUsd: string | null;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
-  settlementAmountFiat: number;
+  settlementAmountFiat: string | null;
 
   @Column({ nullable: true })
   settlementCurrency: string;
@@ -116,7 +116,7 @@ export class Payment {
   confirmedAt: Date;
 
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
-  refundAmountUsd: number;
+  refundAmountUsd: string | null;
 
   @Column({ nullable: true })
   refundReason: string;

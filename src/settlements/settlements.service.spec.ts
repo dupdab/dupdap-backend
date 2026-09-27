@@ -75,7 +75,7 @@ describe('SettlementsService batching', () => {
     const payment = {
       id: 'payment-small',
       merchantId: 'merchant-1',
-      amountUsd: 5,
+      amountUsd: '5.000000',
       status: PaymentStatus.CONFIRMED,
     } as Payment;
 
@@ -94,7 +94,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p1',
         merchantId: 'merchant-1',
-        amountUsd: 4,
+        amountUsd: '4.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:56:00Z'),
         createdAt: new Date('2026-04-27T09:56:00Z'),
@@ -102,7 +102,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p2',
         merchantId: 'merchant-1',
-        amountUsd: 3,
+        amountUsd: '3.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:57:00Z'),
         createdAt: new Date('2026-04-27T09:57:00Z'),
@@ -110,7 +110,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p3',
         merchantId: 'merchant-1',
-        amountUsd: 3.5,
+        amountUsd: '3.500000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:58:00Z'),
         createdAt: new Date('2026-04-27T09:58:00Z'),
@@ -118,7 +118,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p4',
         merchantId: 'merchant-2',
-        amountUsd: 2,
+        amountUsd: '2.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:59:00Z'),
         createdAt: new Date('2026-04-27T09:59:00Z'),
@@ -133,9 +133,9 @@ describe('SettlementsService batching', () => {
     expect(settlementsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
         merchantId: 'merchant-1',
-        totalAmountUsd: 10.5,
-        feeAmountUsd: 10.5 * 0.015,
-        netAmountUsd: 10.5 - 10.5 * 0.015,
+        totalAmountUsd: '10.500000',
+        feeAmountUsd: '0.157500',
+        netAmountUsd: '10.342500',
         fiatCurrency: 'NGN',
         status: SettlementStatus.PROCESSING,
         requiresApproval: false,
@@ -155,7 +155,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p1',
         merchantId: 'merchant-1',
-        amountUsd: 4,
+        amountUsd: '4.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:55:00Z'),
         createdAt: new Date('2026-04-27T09:55:00Z'),
@@ -163,7 +163,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p2',
         merchantId: 'merchant-1',
-        amountUsd: 5,
+        amountUsd: '5.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:56:00Z'),
         createdAt: new Date('2026-04-27T09:56:00Z'),
@@ -374,13 +374,13 @@ describe('SettlementsService executeFiatTransfer', () => {
   });
 
   it('marks settlement completed and updates all payments on successful transfer', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-abc',
       payments: [payment],
       status: SettlementStatus.PROCESSING,
-      netAmountUsd: 100,
+      netAmountUsd: '100.000000',
     } as Settlement;
 
     settlementsRepo.findOne.mockResolvedValue(settlement);
@@ -402,13 +402,13 @@ describe('SettlementsService executeFiatTransfer', () => {
   });
 
   it('marks settlement and payments failed on transfer error', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-abc',
       payments: [payment],
       status: SettlementStatus.PROCESSING,
-      netAmountUsd: 100,
+      netAmountUsd: '100.000000',
     } as Settlement;
 
     settlementsRepo.findOne.mockResolvedValue(settlement);
@@ -496,7 +496,7 @@ describe('SettlementsService handlePartnerCallback', () => {
   });
 
   it('settles payments and invalidates analytics on successful callback', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',
@@ -520,7 +520,7 @@ describe('SettlementsService handlePartnerCallback', () => {
   });
 
   it('ignores duplicate callback for already-completed settlement', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLED } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLED } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',
@@ -546,7 +546,7 @@ describe('SettlementsService handlePartnerCallback', () => {
   });
 
   it('marks settlement and payments failed on partner-reported failure', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',

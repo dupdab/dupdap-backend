@@ -22,7 +22,7 @@ export interface PaymentCreatedEvent {
   type: 'PaymentCreated';
   paymentId: string;
   merchantId: string;
-  amountUsd: number;
+  amountUsd: string;
   memo: string;
   timestamp: Date;
 }
@@ -80,8 +80,8 @@ export class PaymentsService {
       id: uuidv4(),
       reference: `PAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       merchantId,
-      amountUsd: dto.amountUsd,
-      amountXlm: parseFloat(amountXlm.toFixed(7)),
+      amountUsd: String(dto.amountUsd),
+      amountXlm: amountXlm.toFixed(7),
       description: dto.description,
       customerEmail: dto.customerEmail,
       metadata: dto.metadata,
@@ -221,8 +221,8 @@ export class PaymentsService {
         // Unique reference per item — suffix with batch index to avoid collisions
         reference: `PAY-${now}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-B${i}`,
         merchantId,
-        amountUsd: item.amountUsd,
-        amountXlm: parseFloat(amountXlm.toFixed(7)),
+        amountUsd: String(item.amountUsd),
+        amountXlm: amountXlm.toFixed(7),
         description: item.memo,
         customerEmail: item.customerEmail,
         metadata: item.metadata,
@@ -238,7 +238,7 @@ export class PaymentsService {
         type: 'PaymentCreated',
         paymentId: payment.id,
         merchantId,
-        amountUsd: item.amountUsd,
+        amountUsd: String(item.amountUsd),
         memo,
         timestamp: new Date(),
       });
@@ -282,21 +282,6 @@ export class PaymentsService {
     dto: RefundPaymentDto,
   ): Promise<Payment> {
     const payment = await this.findOne(merchantId, paymentId);
-
-    if (payment.status !== PaymentStatus.CONFIRMED) {
-      throw new BadRequestException('Only confirmed payments can be refunded');
-    }
-
-    payment.status = PaymentStatus.REFUNDED;
-    paymen
-    if (!payment) throw new NotFoundException('Payment not found');
-
-  async refund(
-    merchantId: string,
-    paymentId: string,
-    dto: RefundPaymentDto,
-  ): Promise<Payment> {
-    const payment = await this.findOne(merchantId, paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
 
     if (payment.status !== PaymentStatus.CONFIRMED) {
@@ -314,27 +299,29 @@ export class PaymentsService {
       throw new BadRequestException('Only confirmed payments can be refunded');
     }
 
-    const alreadyRefundedUsd = payment.refundedUsd ?? 0;
-    const remainingUsd = payment.amountUsd - alreadyRefundedUsd;
+    const alreadyRefundedUsd = new Big(payment.refundAmountUsd ?? '0');
+    const remainingUsd = new Big(payment.amountUsd).minus(alreadyRefundedUsd);
+    const refundAmount = new Big(dto.amountUsd);
 
-    if (dto.amountUsd > remainingUsd) {
+    if (refundAmount.gt(remainingUsd)) {
       throw new BadRequestException(
-        `Refund amount exceeds remaining refundable balance of ${remainingUsd}`,
+        `Refund amount exceeds remaining refundable balance of ${remainingUsd.toFixed(6)}`,
       );
     }
 
-    payment.refundedUsd = alreadyRefundedUsd + dto.amountUsd;
+    const newRefundedUsd = alreadyRefundedUsd.plus(refundAmount);
+    payment.refundAmountUsd = newRefundedUsd.toFixed(6);
     payment.status =
-      payment.refundedUsd >= payment.amountUsd
+      newRefundedUsd.gte(new Big(payment.amountUsd))
         ? PaymentStatus.REFUNDED
         : PaymentStatus.PARTIALLY_REFUNDED;
     payment.refundReason = dto.reason;
     payment.refundedAt = new Date();
 
-    const saved = await this.paymentsRepo.save(payment);
+    const saved2 = await this.paymentsRepo.save(payment);
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
-    return saved;
+    return saved2;
   }
 }
