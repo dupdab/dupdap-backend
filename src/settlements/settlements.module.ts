@@ -12,6 +12,8 @@ import { CacheModule } from '../cache/cache.module';
 import { EmailModule } from '../email/email.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { StellarModule } from '../stellar/stellar.module';
+import { SettlementsSorobanListener } from './settlements-soroban.listener';
+import { AdminSettlementsController } from './admin-settlements.controller';
 
 @Module({
   imports: [
@@ -24,8 +26,8 @@ import { StellarModule } from '../stellar/stellar.module';
     forwardRef(() => StellarModule),
     QueueModule,
   ],
-  controllers: [SettlementsController, PartnerCallbackController],
-  providers: [SettlementsService, PartnerSignatureGuard],
+  controllers: [SettlementsController, PartnerCallbackController, AdminSettlementsController],
+  providers: [SettlementsService, PartnerSignatureGuard, SettlementsSorobanListener],
   exports: [SettlementsService],
 })
 export class SettlementsModule {}

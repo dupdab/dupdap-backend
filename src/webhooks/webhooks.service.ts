@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -48,6 +48,10 @@ export class WebhooksService {
 
   async remove(id: string, merchantId: string) {
     const webhook = await this.webhooksRepo.findOne({ where: { id, merchantId } });
-    if (webhook) await this.webhooksRepo.remove(webhook);
+    if (!webhook) {
+      throw new NotFoundException(`Webhook ${id} not found for merchant ${merchantId}`);
+    }
+    await this.webhooksRepo.remove(webhook);
+    return webhook;
   }
 }

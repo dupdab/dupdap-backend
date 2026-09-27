@@ -84,11 +84,14 @@ export class WebhookDeliveryProcessor {
       await this.markWebhookFailure(data.webhookId, errorMessage);
 
       if (retryIndex + 1 < retrySchedule.length) {
+        const retryPayload = { ...data, attemptNumber: attemptNumber + 1 };
+        const retryHash = crypto.createHash('sha256').update(`${data.webhookId}:${data.event}:${retryPayload.attemptNumber}:${data.body}`).digest('hex').slice(0, 32);
+
         await this.webhookQueue.add(
           WEBHOOK_DELIVERY_JOB,
-          { ...data, attemptNumber: attemptNumber + 1 },
+          retryPayload,
           {
-            jobId: `${data.webhookId}:${data.event}:${Date.now()}:${attemptNumber + 1}`,
+            jobId: `${data.webhookId}:${data.event}:${retryPayload.attemptNumber}:${retryHash}`,
             delay: nextDelay,
             removeOnComplete: true,
             removeOnFail: false,

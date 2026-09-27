@@ -4,8 +4,9 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Merchant } from '../../merchants/entities/merchant.entity';
+import { Merchant, MerchantStatus } from '../../merchants/entities/merchant.entity';
 import { CacheService } from '../../cache/cache.service';
+import { AuthService } from '../auth.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -14,6 +15,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     @InjectRepository(Merchant)
     private readonly merchantsRepo: Repository<Merchant>,
     private readonly cacheService: CacheService,
+    private readonly authService: AuthService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -27,7 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     // Blacklist check (logout invalidation)
     if (jti) {
-      const blacklisted = await this.cacheService.get<boolean>(`session:blacklist:${jti}`);
+      const blacklisted = await this.authService.isBlacklisted(jti);
       if (blacklisted) throw new UnauthorizedException('Session revoked');
     }
 
@@ -36,12 +38,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       const cached = await this.cacheService.get<{ merchantId: string; email: string; role: string }>(
         `session:${jti}`,
       );
-      if (cached) return cached;
+      if (cached) return { ...cached, jti, exp: payload.exp };
     }
 
     // DB fallback
     const merchant = await this.merchantsRepo.findOne({ where: { id: payload.sub } });
     if (!merchant) throw new UnauthorizedException('Merchant not found');
+    if (merchant.status === MerchantStatus.SUSPENDED) {
+      throw new UnauthorizedException('Account suspended');
+    }
 
     const result = { merchantId: merchant.id, email: merchant.email, role: merchant.role };
 
@@ -53,6 +58,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
-    return result;
+    return { ...result, jti, exp: payload.exp };
   }
 }

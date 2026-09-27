@@ -40,7 +40,14 @@ export class MerchantsService {
 
   async update(id: string, dto: UpdateMerchantDto): Promise<Merchant> {
     const merchant = await this.findOne(id);
-    Object.assign(merchant, dto);
+
+    if (dto.businessName !== undefined) merchant.businessName = dto.businessName;
+    if (dto.businessType !== undefined) merchant.businessType = dto.businessType;
+    if (dto.country !== undefined) merchant.country = dto.country;
+    if (dto.bankAccountNumber !== undefined) merchant.bankAccountNumber = dto.bankAccountNumber;
+    if (dto.bankCode !== undefined) merchant.bankCode = dto.bankCode;
+    if (dto.bankName !== undefined) merchant.bankName = dto.bankName;
+
     const updated = await this.merchantsRepo.save(merchant);
     await this.cache.del(this.activeMerchantCountCacheKey);
     return updated;
@@ -100,6 +107,7 @@ export class MerchantsService {
 
     merchant.apiKey = rawKey.substring(0, 12) + '...';
     merchant.apiKeyHash = hash;
+    merchant.apiKeyLookupHash = crypto.createHash('sha256').update(rawKey).digest('hex');
     merchant.apiKeyScopes = scopes?.length ? scopes : API_KEY_SCOPES;
     await this.merchantsRepo.save(merchant);
 

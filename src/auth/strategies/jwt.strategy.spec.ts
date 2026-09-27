@@ -5,6 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtStrategy } from './jwt.strategy';
 import { CacheService } from '../../cache/cache.service';
 import { Merchant } from '../../merchants/entities/merchant.entity';
+import { AuthService } from '../auth.service';
 
 const mockMerchantsRepo = {
   findOne: jest.fn(),
@@ -13,6 +14,11 @@ const mockMerchantsRepo = {
 const mockCacheService = {
   get: jest.fn(),
   set: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockAuthService = {
+  isBlacklisted: jest.fn(),
+  logout: jest.fn(),
 };
 
 const mockConfigService = {
@@ -34,6 +40,7 @@ describe('JwtStrategy', () => {
     jest.clearAllMocks();
     mockCacheService.set.mockResolvedValue(undefined);
     mockConfigService.get.mockReturnValue('test-jwt-secret');
+    mockAuthService.isBlacklisted.mockResolvedValue(false);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,38 +48,36 @@ describe('JwtStrategy', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: getRepositoryToken(Merchant), useValue: mockMerchantsRepo },
         { provide: CacheService, useValue: mockCacheService },
+        { provide: AuthService, useValue: mockAuthService },
       ],
     }).compile();
 
     strategy = module.get<JwtStrategy>(JwtStrategy);
   });
 
-  it('rejects a blacklisted (revoked) session before any lookup', async () => {
-    mockCacheService.get.mockResolvedValueOnce(true); // blacklist hit
+  it('rejects a blacklisted (revoked) session before any lookup, delegating to AuthService', async () => {
+    mockAuthService.isBlacklisted.mockResolvedValueOnce(true);
 
     await expect(strategy.validate(basePayload())).rejects.toThrow(UnauthorizedException);
-    expect(mockCacheService.get).toHaveBeenCalledWith('session:blacklist:session-1');
+    expect(mockAuthService.isBlacklisted).toHaveBeenCalledWith('session-1');
     expect(mockMerchantsRepo.findOne).not.toHaveBeenCalled();
   });
 
-  it('returns the cached session on a cache hit without touching the DB', async () => {
+  it('returns the cached session (plus jti/exp) on a cache hit without touching the DB', async () => {
     const cached = { merchantId: 'merchant-1', email: 'merchant@example.com', role: 'merchant' };
-    mockCacheService.get
-      .mockResolvedValueOnce(false) // blacklist miss
-      .mockResolvedValueOnce(cached); // session cache hit
+    mockCacheService.get.mockResolvedValueOnce(cached); // session cache hit
 
-    const result = await strategy.validate(basePayload());
+    const payload = basePayload();
+    const result = await strategy.validate(payload);
 
-    expect(result).toBe(cached);
-    expect(mockCacheService.get).toHaveBeenNthCalledWith(2, 'session:session-1');
+    expect(result).toEqual({ ...cached, jti: payload.jti, exp: payload.exp });
+    expect(mockCacheService.get).toHaveBeenCalledWith('session:session-1');
     expect(mockMerchantsRepo.findOne).not.toHaveBeenCalled();
     expect(mockCacheService.set).not.toHaveBeenCalled();
   });
 
   it('falls back to the merchant DB on a cache miss and caches the result', async () => {
-    mockCacheService.get
-      .mockResolvedValueOnce(false) // blacklist miss
-      .mockResolvedValueOnce(null); // session cache miss
+    mockCacheService.get.mockResolvedValueOnce(null); // session cache miss
     mockMerchantsRepo.findOne.mockResolvedValueOnce({
       id: 'merchant-1',
       email: 'merchant@example.com',
@@ -87,18 +92,18 @@ describe('JwtStrategy', () => {
       merchantId: 'merchant-1',
       email: 'merchant@example.com',
       role: 'merchant',
+      jti: payload.jti,
+      exp: payload.exp,
     });
     expect(mockCacheService.set).toHaveBeenCalledWith(
       'session:session-1',
-      result,
+      { merchantId: 'merchant-1', email: 'merchant@example.com', role: 'merchant' },
       { ttlSeconds: expect.any(Number) },
     );
   });
 
   it('throws when the merchant cannot be found in the DB', async () => {
-    mockCacheService.get
-      .mockResolvedValueOnce(false) // blacklist miss
-      .mockResolvedValueOnce(null); // session cache miss
+    mockCacheService.get.mockResolvedValueOnce(null); // session cache miss
     mockMerchantsRepo.findOne.mockResolvedValueOnce(null);
 
     await expect(strategy.validate(basePayload())).rejects.toThrow('Merchant not found');
@@ -106,9 +111,7 @@ describe('JwtStrategy', () => {
   });
 
   it('does not write a cache entry for an already-expired token', async () => {
-    mockCacheService.get
-      .mockResolvedValueOnce(false) // blacklist miss
-      .mockResolvedValueOnce(null); // session cache miss
+    mockCacheService.get.mockResolvedValueOnce(null); // session cache miss
     mockMerchantsRepo.findOne.mockResolvedValueOnce({
       id: 'merchant-1',
       email: 'merchant@example.com',
@@ -121,9 +124,7 @@ describe('JwtStrategy', () => {
   });
 
   it('uses payload.sub as the session id when jti is absent', async () => {
-    mockCacheService.get
-      .mockResolvedValueOnce(false) // blacklist miss
-      .mockResolvedValueOnce(null); // session cache miss
+    mockCacheService.get.mockResolvedValueOnce(null); // session cache miss
     mockMerchantsRepo.findOne.mockResolvedValueOnce({
       id: 'merchant-1',
       email: 'merchant@example.com',
@@ -133,7 +134,7 @@ describe('JwtStrategy', () => {
     const { jti: _jti, ...payload } = basePayload();
     await strategy.validate(payload);
 
-    expect(mockCacheService.get).toHaveBeenNthCalledWith(1, 'session:blacklist:merchant-1');
-    expect(mockCacheService.get).toHaveBeenNthCalledWith(2, 'session:merchant-1');
+    expect(mockAuthService.isBlacklisted).toHaveBeenCalledWith('merchant-1');
+    expect(mockCacheService.get).toHaveBeenCalledWith('session:merchant-1');
   });
 });

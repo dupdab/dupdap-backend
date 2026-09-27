@@ -12,6 +12,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { SorobanService } from '../blockchain-wallet/soroban.service';
 import { AmlModule } from '../aml/aml.module';
+import { PaymentsSorobanListener } from './payments-soroban.listener';
 
 @Module({
   imports: [
@@ -25,7 +26,7 @@ import { AmlModule } from '../aml/aml.module';
     forwardRef(() => AmlModule),
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, SorobanService],
+  providers: [PaymentsService, IdempotencyInterceptor, SorobanService, PaymentsSorobanListener],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

@@ -6,6 +6,7 @@ import { BlockchainWalletModule } from '../src/blockchain-wallet/blockchain-wall
 import { BlockchainWalletService } from '../src/blockchain-wallet/blockchain-wallet.service';
 import { SorobanService } from '../src/blockchain-wallet/soroban.service';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
+import { InternalServiceGuard } from '../src/auth/guards/internal-service.guard';
 import { ExecutionContext } from '@nestjs/common';
 import { BlockchainWallet } from '../src/blockchain-wallet/entities/blockchain-wallet.entity';
 
@@ -52,6 +53,10 @@ describe('Wallet (e2e)', () => {
           return true;
         },
       })
+      // #201: InternalWalletController is now protected by a shared-secret guard.
+      // Stub it here so the provisioning happy-path tests still exercise the handler.
+      .overrideGuard(InternalServiceGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     app = moduleFixture.createNestApplication();

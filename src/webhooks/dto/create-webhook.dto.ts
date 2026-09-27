@@ -1,10 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString, IsUrl } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class CreateWebhookDto {
   @ApiProperty({ example: 'https://example.com/webhooks/dupdub' })
   @IsString()
+  @IsUrl({ require_protocol: true, require_tld: false })
   @Transform(({ value }) => value?.trim())
   url!: string;
 

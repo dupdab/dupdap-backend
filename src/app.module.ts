@@ -114,6 +114,12 @@ import Redis from 'ioredis';
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: false,
         logging: config.get('NODE_ENV') === 'development',
+        extra: {
+          max: config.get<number>('DB_POOL_MAX', 10),
+          min: config.get<number>('DB_POOL_MIN', 2),
+          connectionTimeoutMillis: config.get<number>('DB_ACQUIRE_TIMEOUT_MS', 10000),
+          idleTimeoutMillis: config.get<number>('DB_IDLE_TIMEOUT_MS', 60000),
+        },
       }),
       inject: [ConfigService],
     }),

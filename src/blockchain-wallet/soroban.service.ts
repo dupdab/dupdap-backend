@@ -1,4 +1,3 @@
-export { SOROBAN_RPC_CLIENT, SorobanService } from '../soroban/soroban.service';
 import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -17,6 +16,41 @@ export interface ContractUnpausedEvent {
 }
 
 export type ContractEvent = ContractPausedEvent | ContractUnpausedEvent;
+
+export interface ContractPayment {
+  id: string;
+  merchantAddress: string;
+  customerAddress?: string | null;
+  amountUsdc: string;
+  expiryLedger: number;
+  status: 'pending' | 'confirmed' | 'expired';
+  createdAt: Date;
+}
+
+export interface PaymentExpiredEvent {
+  type: 'PaymentExpired';
+  paymentId: string;
+  expiryLedger: number;
+  ledgerAtExpiry: number;
+  refundInstruction: {
+    amountUsdc: string;
+    returnToAddress: string | null;
+  };
+}
+
+export class PaymentExpiredError extends Error {
+  paymentId: string;
+  expiryLedger: number;
+  currentLedger: number;
+
+  constructor(paymentId: string, expiryLedger: number, currentLedger: number) {
+    super(`Payment ${paymentId} expired at ledger ${expiryLedger}; current ledger is ${currentLedger}`);
+    this.name = 'PaymentExpiredError';
+    this.paymentId = paymentId;
+    this.expiryLedger = expiryLedger;
+    this.currentLedger = currentLedger;
+  }
+}
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +95,9 @@ export class ReentrantCallError extends Error {
  */
 @Injectable()
 export class SorobanService {
+  static readonly LEDGERS_PER_MINUTE = 12;
+  static readonly DEFAULT_EXPIRY_LEDGERS = 360;
+
   private readonly logger = new Logger(SorobanService.name);
 
   // Persistent storage flag — true while contract is paused by admin.
@@ -74,7 +111,87 @@ export class SorobanService {
   // In-memory event log (replace with persistent audit log / event bus in prod).
   private readonly eventLog: ContractEvent[] = [];
 
+  private readonly payments = new Map<string, ContractPayment>();
+  private readonly expiredEventLog: PaymentExpiredEvent[] = [];
+  private currentLedger = 1000;
+
   constructor(private readonly configService: ConfigService) {}
+
+  setCurrentLedger(ledger: number): void {
+    this.currentLedger = ledger;
+  }
+
+  advanceLedger(delta: number): void {
+    this.currentLedger += delta;
+  }
+
+  createPayment(
+    paymentId: string,
+    merchantAddress: string,
+    amountUsdc: string,
+    expiryLedgers = SorobanService.DEFAULT_EXPIRY_LEDGERS,
+  ): ContractPayment {
+    const payment: ContractPayment = {
+      id: paymentId,
+      merchantAddress,
+      customerAddress: null,
+      amountUsdc,
+      expiryLedger: this.currentLedger + expiryLedgers,
+      status: 'pending',
+      createdAt: new Date(),
+    };
+
+    this.payments.set(paymentId, payment);
+    return payment;
+  }
+
+  getPayment(paymentId: string): ContractPayment | undefined {
+    return this.payments.get(paymentId);
+  }
+
+  getExpiredEventLog(): PaymentExpiredEvent[] {
+    return [...this.expiredEventLog];
+  }
+
+  async confirm(paymentId: string, customerAddress: string): Promise<void> {
+    const payment = this.requirePayment(paymentId);
+
+    if (this.currentLedger > payment.expiryLedger) {
+      throw new PaymentExpiredError(paymentId, payment.expiryLedger, this.currentLedger);
+    }
+
+    payment.customerAddress = customerAddress;
+    payment.status = 'confirmed';
+  }
+
+  async expirePayment(paymentId: string): Promise<PaymentExpiredEvent | null> {
+    const payment = this.requirePayment(paymentId);
+    if (payment.status === 'confirmed' || this.currentLedger <= payment.expiryLedger) {
+      return null;
+    }
+    if (payment.status === 'expired') {
+      return null;
+    }
+
+    payment.status = 'expired';
+    const event: PaymentExpiredEvent = {
+      type: 'PaymentExpired',
+      paymentId,
+      expiryLedger: payment.expiryLedger,
+      ledgerAtExpiry: this.currentLedger,
+      refundInstruction: {
+        amountUsdc: payment.amountUsdc,
+        returnToAddress: payment.customerAddress ?? null,
+      },
+    };
+    this.expiredEventLog.push(event);
+    return event;
+  }
+
+  isExpired(paymentId: string): boolean {
+    const payment = this.payments.get(paymentId);
+    return !!payment && this.currentLedger > payment.expiryLedger;
+  }
 
   // ── Admin: pause / unpause ────────────────────────────────────────────────
 

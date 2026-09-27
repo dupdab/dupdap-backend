@@ -73,6 +73,12 @@ const validationSchema = Joi.object({
     .required()
     .messages({ 'any.required': 'JWT_REFRESH_EXPIRY is required (e.g. "7d")' }),
 
+  // Shared secret for internal-service-only endpoints (InternalServiceGuard).
+  INTERNAL_SERVICE_SECRET: Joi.string().min(16).required().messages({
+    'any.required': 'INTERNAL_SERVICE_SECRET is required (shared secret for internal-only endpoints)',
+    'string.min': 'INTERNAL_SERVICE_SECRET must be at least 16 characters',
+  }),
+
   // ── Stellar ──────────────────────────────────────────────────────────────
   STELLAR_RPC_URL: Joi.string()
     .uri({ scheme: ['https'] })
