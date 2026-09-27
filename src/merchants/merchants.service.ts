@@ -5,9 +5,7 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { Merchant, MerchantStatus } from './entities/merchant.entity';
 import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
-import { AdminAuditLog } from './entities/admin-audit-log.entity';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
-import { BulkMerchantActionDto, BulkActionResponseDto, BulkActionResultDto } from './dto/bulk-merchant-action.dto';
 import { CacheService } from '../cache/cache.service';
 
 @Injectable()
@@ -18,8 +16,6 @@ export class MerchantsService {
   constructor(
     @InjectRepository(Merchant)
     private merchantsRepo: Repository<Merchant>,
-    @InjectRepository(AdminAuditLog)
-    private auditRepo: Repository<AdminAuditLog>,
     private readonly cache: CacheService,
   ) {}
 
@@ -51,53 +47,6 @@ export class MerchantsService {
     const updated = await this.merchantsRepo.save(merchant);
     await this.cache.del(this.activeMerchantCountCacheKey);
     return updated;
-  }
-
-  async bulkUpdateStatus(
-    adminId: string,
-    dto: BulkMerchantActionDto,
-    status: MerchantStatus,
-  ): Promise<BulkActionResponseDto> {
-    const results: BulkActionResultDto[] = [];
-    let successful = 0;
-    let failed = 0;
-
-    for (const id of dto.ids) {
-      try {
-        const merchant = await this.merchantsRepo.findOne({ where: { id } });
-        if (!merchant) {
-          throw new Error('Merchant not found');
-        }
-
-        const oldStatus = merchant.status;
-        merchant.status = status;
-        await this.merchantsRepo.save(merchant);
-        await this.cache.del(this.activeMerchantCountCacheKey);
-
-        await this.auditRepo.save({
-          adminId,
-          action: `merchant_${status}`,
-          targetId: id,
-          details: {
-            oldStatus,
-            newStatus: status,
-          },
-        });
-
-        results.push({ id, success: true });
-        successful++;
-      } catch (error) {
-        results.push({ id, success: false, error: error.message });
-        failed++;
-      }
-    }
-
-    return {
-      results,
-      total: dto.ids.length,
-      successful,
-      failed,
-    };
   }
 
   async generateApiKey(id: string, scopes?: ApiScope[]): Promise<{ apiKey: string }> {
