@@ -1,5 +1,5 @@
-import { Controller, Get, HttpStatus, HttpException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, HttpStatus, HttpException, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import {
   HealthCheck,
   HealthCheckService,
@@ -7,7 +7,11 @@ import {
   HttpHealthIndicator,
 } from '@nestjs/terminus';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import { CacheService } from '../cache/cache.service';
+import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { MerchantRole } from '../merchants/entities/merchant.entity';
 
 @ApiTags('health')
 @Controller('health')
@@ -17,6 +21,7 @@ export class HealthController {
     private db: TypeOrmHealthIndicator,
     private http: HttpHealthIndicator,
     private config: ConfigService,
+    private cache: CacheService,
   ) {}
 
   @Get()
@@ -26,6 +31,9 @@ export class HealthController {
   }
 
   @Get('admin')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(MerchantRole.ADMIN)
   @ApiOperation({ 
     summary: 'Admin health check - comprehensive system status',
     description: 'Returns detailed health status of all system components for admin visibility'
@@ -208,29 +216,12 @@ export class HealthController {
   private async checkRedis(): Promise<{ status: string; latency: number }> {
     const startTime = Date.now();
     try {
-      const host = this.config.get<string>('REDIS_HOST', 'localhost');
-      const port = this.config.get<number>('REDIS_PORT', 6379);
-      const password = this.config.get<string>('REDIS_PASSWORD');
-      const redis = new Redis({
-        host,
-        port,
-        password: password || undefined,
-        lazyConnect: true,
-        connectTimeout: 1000,
-        maxRetriesPerRequest: 0,
-      });
-
-      try {
-        await redis.connect();
-        await redis.ping();
-        const latency = Date.now() - startTime;
-        return {
-          status: latency > 1000 ? 'degraded' : 'ok',
-          latency,
-        };
-      } finally {
-        await redis.quit().catch(() => undefined);
-      }
+      await this.cache.ping();
+      const latency = Date.now() - startTime;
+      return {
+        status: latency > 1000 ? 'degraded' : 'ok',
+        latency,
+      };
     } catch (error) {
       return {
         status: 'degraded',

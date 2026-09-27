@@ -19,6 +19,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt.guard';
+import { RolesGuard } from './guards/roles.guard';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { CacheModule } from '../cache/cache.module';
 
@@ -38,7 +39,7 @@ import { CacheModule } from '../cache/cache.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtAuthGuard],
+  providers: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
+  exports: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}
