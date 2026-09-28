@@ -15,16 +15,10 @@ interface JobConfig {
   intervalMs: number; // e.g. 30000 for 30s
 }
 
+// Only jobs that actually run and record CronJobLog entries belong here.
+// Cross-reference CronJobRegistry.KNOWN_JOBS and every cronJobService.run(...) call site.
 const JOB_REGISTRY: JobConfig[] = [
   { name: 'fetch-exchange-rate', intervalMs: 30_000 },
-  { name: 'deposit-monitor', intervalMs: 30_000 },
-  { name: 'settlement-processor', intervalMs: 15 * 60_000 },
-  { name: 'yield-distributor', intervalMs: 24 * 60 * 60_000 },
-  { name: 'waitlist-leaderboard-broadcast', intervalMs: 60_000 },
-  { name: 'report-cleanup', intervalMs: 24 * 60 * 60_000 },
-  { name: 'token-cleanup', intervalMs: 7 * 24 * 60 * 60_000 },
-  { name: 'paylink-expiry', intervalMs: 5 * 60_000 },
-  { name: 'contract-event-listener', intervalMs: 60_000 },
 ];
 
 @Injectable()
@@ -84,4 +78,3 @@ export class CronHealthProcessor {
     return missedCount;
   }
 }
-
