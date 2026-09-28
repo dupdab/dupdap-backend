@@ -206,20 +206,14 @@ export class PaymentsService {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const amountXlm = new Big(item.amountUsd).div(xlmRate);
+
       const memo = this.stellar.generateMemo();
-
-      const stellarUri =
-        `web+stellar:pay?destination=${depositAddress}` +
-        `&amount=${amountXlm.toFixed(7)}&memo=${memo}&memo_type=text`;
-      const qrCode = await QRCode.toDataURL(stellarUri);
-
       const expiresAt = new Date();
       expiresAt.setMinutes(expiresAt.getMinutes() + (item.expiryMinutes ?? 30));
 
-      const payment = this.paymentsRepo.create({
+      const record = this.paymentsRepo.create({
         id: uuidv4(),
-        // Unique reference per item — suffix with batch index to avoid collisions
-        reference: `PAY-${now}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-B${i}`,
+        reference: `PAY-${now}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
         merchantId,
         amountUsd: item.amountUsd,
         amountXlm: parseFloat(amountXlm.toFixed(7)),
@@ -228,33 +222,29 @@ export class PaymentsService {
         metadata: item.metadata,
         stellarDepositAddress: depositAddress,
         stellarMemo: memo,
-        qrCode,
         expiresAt,
         status: PaymentStatus.PENDING,
       });
 
-      records.push(payment);
+      records.push(record);
       events.push({
         type: 'PaymentCreated',
-        paymentId: payment.id,
+        paymentId: record.id,
         merchantId,
         amountUsd: item.amountUsd,
-        memo,
+        memo: item.memo,
         timestamp: new Date(),
       });
     }
 
-    // ── Persist atomically — all records or none ──────────────────────────────
+    // ── Persist the whole batch in a single transaction ───────────────────────
     const saved = await this.dataSource.transaction(async (manager) => {
       return manager.save(Payment, records);
     });
 
-    // ── Emit PaymentCreated event for each entry (mirrors contract event log) ──
-    for (const event of events) {
-      this.logger.log(
-        `PaymentCreated ${event.paymentId} merchant=${event.merchantId} amountUsd=${event.amountUsd}`,
-      );
-    }
+    this.logger.log(
+      `Batch created ${saved.length} payments for merchant ${merchantId}`,
+    );
 
     return {
       payments: saved.map((p) => ({
@@ -262,79 +252,103 @@ export class PaymentsService {
         reference: p.reference,
         amountUsd: p.amountUsd,
         amountXlm: p.amountXlm,
-        qrCode: p.qrCode,
+        stellarDepositAddress: p.stellarDepositAddress,
+        stellarMemo: p.stellarMemo,
         expiresAt: p.expiresAt,
       })),
-      count: saved.length,
-      payments: saved.map((p) => ({
-        id: p.id,
-        reference: p.reference,
-        amountUsd: p.amountUsd,
-        amountXlm: p.amountXlm,
-        status: p.status,
-      })),
+      events,
     };
   }
 
-  async refund(
-    merchantId: string,
-    paymentId: string,
-    dto: RefundPaymentDto,
-  ): Promise<Payment> {
-    const payment = await this.findOne(merchantId, paymentId);
+  async refund(id: string, merchantId: string, dto: RefundPaymentDto): Promise<Payment> {
+    const merchant = await this.merchants.findOne(merchantId);
 
-    if (payment.status !== PaymentStatus.CONFIRMED) {
-      throw new BadRequestException('Only confirmed payments can be refunded');
+    const payment = await this.paymentsRepo.findOne({ where: { id, merchantId } });
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
     }
 
-    payment.status = PaymentStatus.REFUNDED;
-    paymen
-    if (!payment) throw new NotFoundException('Payment not found');
-
-  async refund(
-    merchantId: string,
-    paymentId: string,
-    dto: RefundPaymentDto,
-  ): Promise<Payment> {
-    const payment = await this.findOne(merchantId, paymentId);
-    if (!payment) throw new NotFoundException('Payment not found');
-
-    if (payment.status !== PaymentStatus.CONFIRMED) {
-      throw new BadRequestException('Only confirmed payments can be refunded');
+    if (payment.status !== PaymentStatus.SETTLED) {
+      throw new BadRequestException('Only settled payments can be refunded');
     }
 
-    payment.status = PaymentStatus.REFUNDED;
-    payment.refundReason = dto.reason;
-    payment.refundedAt = new Date();
-    const saved = await this.paymentsRepo.save(payment);
-
-    this.analytics.clearCacheForMerchant(merchantId);
-
-    if (payment.status !== PaymentStatus.CONFIRMED) {
-      throw new BadRequestException('Only confirmed payments can be refunded');
+    if (!payment.customerWalletAddress) {
+      throw new BadRequestException('Payment has no customer wallet address');
     }
 
-    const alreadyRefundedUsd = payment.refundedUsd ?? 0;
-    const remainingUsd = payment.amountUsd - alreadyRefundedUsd;
+    const alreadyRefundedUsd = payment.refundAmountUsd ?? 0;
+    const refundAmountUsd = dto.amountUsd ?? payment.amountUsd;
+    const totalRefundedUsd = alreadyRefundedUsd + refundAmountUsd;
 
-    if (dto.amountUsd > remainingUsd) {
-      throw new BadRequestException(
-        `Refund amount exceeds remaining refundable balance of ${remainingUsd}`,
-      );
+    if (totalRefundedUsd > payment.amountUsd) {
+      throw new BadRequestException('Refund amount exceeds payment amount');
     }
 
-    payment.refundedUsd = alreadyRefundedUsd + dto.amountUsd;
-    payment.status =
-      payment.refundedUsd >= payment.amountUsd
-        ? PaymentStatus.REFUNDED
-        : PaymentStatus.PARTIALLY_REFUNDED;
-    payment.refundReason = dto.reason;
-    payment.refundedAt = new Date();
+    let asset: StellarSdk.Asset;
+    let amountStr: string;
 
-    const saved = await this.paymentsRepo.save(payment);
+    if (payment.amountUsdc) {
+      asset = new StellarSdk.Asset(merchant.usdcAssetCode, merchant.usdcIssuer);
+      amountStr = refundAmountUsd.toFixed(7);
+    } else {
+      asset = StellarSdk.Asset.native();
+      amountStr = new Big(refundAmountUsd).div(payment.amountUsd).times(payment.amountXlm).toFixed(7);
+    }
+
+    const txHash = await this.stellar.sendPayment(
+      payment.customerWalletAddress,
+      amountStr,
+      asset,
+      `refund:${payment.reference}`,
+    );
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      payment.refundAmountUsd = totalRefundedUsd;
+      payment.refundTxHash = txHash;
+      payment.refundedAt = new Date();
+      payment.status = PaymentStatus.REFUNDED;
+      return manager.save(payment);
+    });
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
-    return saved;
+    await this.webhooks.dispatch(payment.merchantId, 'payment.refunded', {
+      paymentId: payment.id,
+      reference: payment.reference,
+      refundAmountUsd,
+      totalRefundedUsd,
+      txHash,
+    });
+
+    await this.notifications.sendPaymentRefunded(payment);
+
+    return result;
+  }
+
+  async findAll(
+    merchantId: string,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginatedResponseDto<Payment>> {
+    const [items, total] = await this.paymentsRepo.findAndCount({
+      where: { merchantId },
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async findOne(id: string, merchantId: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({ where: { id, merchantId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+    return payment;
   }
 }
