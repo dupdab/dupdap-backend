@@ -1,11 +1,16 @@
 import { Connection, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { Merchant, MerchantRole, MerchantStatus } from '../../merchants/entities/merchant.entity';
 import { Payment, PaymentNetwork, PaymentStatus } from '../../payments/entities/payment.entity';
 import { Settlement, SettlementStatus } from '../../settlements/entities/settlement.entity';
 import { seedAppConfigs } from './app-config.seed';
 
 const DEFAULT_PASSWORD = 'Password123!';
+
+function generateRandomPassword(): string {
+  return crypto.randomBytes(18).toString('base64url');
+}
 
 const FIXED_IDS = {
   admin: '00000000-0000-0000-0000-000000000001',
@@ -33,6 +38,8 @@ export async function seedDatabase(connection: Connection, predictableIds = fals
 
 async function seedMerchants(connection: Connection, predictableIds: boolean) {
   const repo = connection.getRepository(Merchant);
+  const adminPassword = generateRandomPassword();
+  const adminPasswordHash = await bcrypt.hash(adminPassword, 10);
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
   const seeds = [
     {
@@ -43,7 +50,7 @@ async function seedMerchants(connection: Connection, predictableIds: boolean) {
       country: 'US',
       status: MerchantStatus.ACTIVE,
       role: MerchantRole.ADMIN,
-      passwordHash,
+      passwordHash: adminPasswordHash,
     },
     {
       id: predictableIds ? FIXED_IDS.merchant1 : undefined,
@@ -94,6 +101,8 @@ async function seedMerchants(connection: Connection, predictableIds: boolean) {
   }
 
   console.log('Merchants seeded.');
+  console.log(`Seeded admin account: admin@localhost`);
+  console.log(`Generated admin password (shown once): ${adminPassword}`);
   return saved;
 }
 
@@ -220,49 +229,6 @@ async function seedPayments(
       metadata: { source: 'seed' },
       confirmedAt: new Date(),
       settlementId: settlementMap.get('SETTLEMENT-COMPLETE-1')?.id,
-      settlementAmountFiat: 500,
-      settlementCurrency: 'USD',
-    },
-    {
-      id: predictableIds ? FIXED_IDS.paymentFailed : undefined,
-      reference: 'PAYMENT-FAILED-1',
-      merchantId: merchantMap.get('merchant3@localhost')?.id,
-      amountUsd: 99.99,
-      network: PaymentNetwork.ARBITRUM,
-      status: PaymentStatus.FAILED,
-      description: 'Failed payment demo',
-      customerEmail: 'customer5@example.com',
-      metadata: { source: 'seed' },
-    },
-    {
-      id: predictableIds ? FIXED_IDS.paymentRefunded : undefined,
-      reference: 'PAYMENT-REFUNDED-1',
-      merchantId: merchantMap.get('merchant3@localhost')?.id,
-      amountUsd: 25.0,
-      network: PaymentNetwork.OPTIMISM,
-      status: PaymentStatus.REFUNDED,
-      description: 'Refunded payment demo',
-      customerEmail: 'customer6@example.com',
-      metadata: { source: 'seed' },
-      refundAmountUsd: 25.0,
-      refundedAt: new Date(),
-    },
-  ];
+      settl
 
-  const references = seeds.map((seed) => seed.reference);
-  const existing = await repo.find({ where: { reference: In(references) } });
-  const existingByReference = new Map(existing.map((payment) => [payment.reference, payment]));
-
-  for (const seed of seeds) {
-    const current = existingByReference.get(seed.reference);
-    if (current) {
-      const merged = repo.merge(current, seed);
-      merged.id = current.id;
-      await repo.save(merged);
-    } else {
-      await repo.save(repo.create(seed));
-    }
-  }
-
-  console.log('Payments seeded.');
-}
+/* … truncated 1489 chars — edit only what you need near the top … */
