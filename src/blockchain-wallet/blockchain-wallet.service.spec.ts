@@ -10,6 +10,8 @@ import { EncryptionService } from '../security/encryption.service';
 
 const MOCK_ENC_KEY = '0123456789abcdef0123456789abcdef';
 
+process.env.ENCRYPTION_KEY = MOCK_ENC_KEY;
+
 const mockWallet = (): BlockchainWallet => ({
   id: 'wallet-uuid',
   userId: 'user-uuid',
@@ -18,7 +20,7 @@ const mockWallet = (): BlockchainWallet => ({
   iv: null,
   balanceUsdc: '0',
   stakedBalance: '0',
-  lastSyncedAt: null,
+  lastSyncedAt: null as unknown as Date,
   createdAt: new Date(),
 });
 
@@ -89,7 +91,7 @@ describe('BlockchainWalletService', () => {
       sorobanService.registerUser.mockResolvedValue(undefined);
 
       // Mock friendbot — patch the Horizon.Server constructor
-      jest.spyOn(service as any, 'provision').mockImplementationOnce(undefined);
+      jest.spyOn(service as any, 'provision').mockImplementationOnce(undefined as any);
 
       // Re-test with actual implementation but mock Horizon server
       const StellarSdk = require('@stellar/stellar-sdk');
@@ -163,7 +165,7 @@ describe('BlockchainWalletService', () => {
       walletRepo.findOne.mockResolvedValue(wallet);
       sorobanService.getBalance.mockResolvedValue('100.5');
       sorobanService.getStakeBalance.mockResolvedValue('25.0');
-      walletRepo.save.mockImplementation((w) => Promise.resolve(w));
+      walletRepo.save.mockImplementation((w: any) => Promise.resolve(w));
 
       const result = await service.syncBalance('user-uuid');
 

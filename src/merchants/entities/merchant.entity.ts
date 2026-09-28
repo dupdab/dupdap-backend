@@ -105,6 +105,10 @@ export class Merchant {
   @Column({ nullable: true })
   apiKeyHash: string;
 
+  @Exclude()
+  @Column({ name: 'api_key_lookup_hash', nullable: true, unique: true })
+  apiKeyLookupHash?: string | null;
+
   @Column({ type: 'decimal', precision: 18, scale: 6, default: 0, transformer: numericColumnTransformer })
   totalVolumeUsd: number;
 
