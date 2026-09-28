@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import type { Queue } from 'bull';
 import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
+import { DateRange, addUtcDays, resolveDateRange } from '../common/date-range.util';
 import { EmailService } from '../email/email.service';
 import { Merchant, MerchantRole } from '../merchants/entities/merchant.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
@@ -53,11 +54,6 @@ interface ExportMetrics {
     feesUsd: number;
   };
   topMetrics: Array<{ label: string; value: string }>;
-}
-
-interface TimeRange {
-  start: Date;
-  endExclusive: Date;
 }
 
 @Injectable()
@@ -213,7 +209,7 @@ export class AnalyticsExportService {
     const averageBucketVolumeUsd =
       volumeSeries.length > 0 ? totalVolumeUsd / volumeSeries.length : 0;
 
-    const range = this.resolveRange(
+    const range = resolveDateRange(
       period,
       exportRecord.dateFrom ?? undefined,
       exportRecord.dateTo ?? undefined,
@@ -264,7 +260,7 @@ export class AnalyticsExportService {
 
   private async getSettlementSummary(
     exportRecord: AnalyticsExport,
-    range: TimeRange,
+    range: DateRange,
   ): Promise<ExportMetrics['settlementSummary']> {
     const timestampExpression =
       'COALESCE("settlement"."completedAt", "settlement"."createdAt")';
@@ -297,36 +293,6 @@ export class AnalyticsExportService {
       netUsd: Number(result?.netUsd ?? 0),
       feesUsd: Number(result?.feesUsd ?? 0),
     };
-  }
-
-  private resolveRange(
-    period: AnalyticsPeriod,
-    dateFrom?: string,
-    dateTo?: string,
-  ): TimeRange {
-    if (period === 'daily') {
-      const endInclusive = dateTo ? this.parseIsoDate(dateTo) : this.startOfUtcDay(new Date());
-      const start = dateFrom ? this.parseIsoDate(dateFrom) : this.addUtcDays(endInclusive, -29);
-
-      if (start > endInclusive) {
-        throw new BadRequestException('"dateFrom" must be before or equal to "dateTo"');
-      }
-
-      return { start, endExclusive: this.addUtcDays(endInclusive, 1) };
-    }
-
-    const endMonth = dateTo
-      ? this.startOfUtcMonth(this.parseIsoDate(dateTo))
-      : this.startOfUtcMonth(new Date());
-    const startMonth = dateFrom
-      ? this.startOfUtcMonth(this.parseIsoDate(dateFrom))
-      : this.addUtcMonths(endMonth, -11);
-
-    if (startMonth > endMonth) {
-      throw new BadRequestException('"dateFrom" must be before or equal to "dateTo"');
-    }
-
-    return { start: startMonth, endExclusive: this.addUtcMonths(endMonth, 1) };
   }
 
   private buildFileName(exportRecord: AnalyticsExport, metrics: ExportMetrics): string {
@@ -460,39 +426,8 @@ export class AnalyticsExportService {
     return `$${value.toFixed(2)}`;
   }
 
-  private parseIsoDate(value: string): Date {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      throw new BadRequestException('Dates must use YYYY-MM-DD format');
-    }
-
-    const parsed = new Date(`${value}T00:00:00.000Z`);
-    if (Number.isNaN(parsed.getTime())) {
-      throw new BadRequestException(`Invalid date: ${value}`);
-    }
-
-    return parsed;
-  }
-
-  private startOfUtcDay(value: Date): Date {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-  }
-
-  private startOfUtcMonth(value: Date): Date {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1));
-  }
-
-  private addUtcDays(value: Date, days: number): Date {
-    return new Date(
-      Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate() + days),
-    );
-  }
-
-  private addUtcMonths(value: Date, months: number): Date {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + months, 1));
-  }
-
   private previousMoment(value: Date, period: AnalyticsPeriod): Date {
-    return period === 'daily' ? this.addUtcDays(value, -1) : this.addUtcDays(value, -1);
+    return period === 'daily' ? addUtcDays(value, -1) : addUtcDays(value, -1);
   }
 
   private formatRangeLabel(value: Date, period: AnalyticsPeriod): string {
