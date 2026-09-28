@@ -4,7 +4,7 @@ import { Queue } from "bull";
 import {
   EMAIL_DELIVERY_JOB,
   EMAIL_DELIVERY_QUEUE,
-} from "../queue/queue.constants";
+} from "../queues/queue.constants";
 import { QueueConfigService } from "../config/queue-config.service";
 
 export interface EmailJobPayload {

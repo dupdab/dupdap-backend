@@ -11,7 +11,7 @@ import { WebhookDeliveryProcessor } from './webhook-delivery.processor';
 import { WebhookDeliveryService } from './webhook-delivery.service';
 import { WebhookFailureAlertService } from './webhook-failure-alert.service';
 import { QueueConfigService } from '../config/queue-config.service';
-import { WEBHOOK_DELIVERY_QUEUE } from '../queue/queue.constants';
+import { WEBHOOK_DELIVERY_QUEUE } from '../queues/queue.constants';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 

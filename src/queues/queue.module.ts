@@ -2,11 +2,9 @@ import { Module, forwardRef } from '@nestjs/common';
 import { BullModule } from '@nestjs/bull';
 import { QUEUE_LIST } from './queue.constants';
 import {
-  NotificationQueueProcessor,
   SettlementQueueProcessor,
   SorobanEventDlqProcessor,
   StellarMonitorQueueProcessor,
-  WebhookQueueProcessor,
 } from './queue.processors';
 import { QueueAdminController } from './queue-admin.controller';
 import { QueueMetricsService } from './queue-metrics.service';
@@ -35,8 +33,6 @@ import { Payment } from '../payments/entities/payment.entity';
   controllers: [QueueAdminController],
   providers: [
     SettlementQueueProcessor,
-    WebhookQueueProcessor,
-    NotificationQueueProcessor,
     StellarMonitorQueueProcessor,
     SorobanEventDlqProcessor,
     QueueMetricsService,

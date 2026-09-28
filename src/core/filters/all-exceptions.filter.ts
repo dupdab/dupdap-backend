@@ -11,6 +11,20 @@ import { ConfigService } from "@nestjs/config";
 import * as Sentry from "@sentry/node";
 import { SorobanRpcException } from "../../stellar/stellar.service";
 
+interface RequestUser {
+  merchantId?: string;
+  email?: string;
+  role?: string;
+  id?: string;
+  sub?: string;
+}
+
+interface RequestWithUser {
+  user?: RequestUser;
+  url?: string;
+  method?: string;
+}
+
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
@@ -21,7 +35,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
-    const request = ctx.getRequest();
+    const request = ctx.getRequest<RequestWithUser>();
     const response = ctx.getResponse();
 
     const status = this.getStatus(exception);
@@ -33,11 +47,38 @@ export class AllExceptionsFilter implements ExceptionFilter {
         exception instanceof Error ? exception.stack : String(exception),
       );
       if (this.configService.get<string>("SENTRY_DSN")) {
-        Sentry.captureException(exception);
+        this.captureWithUserContext(exception, request);
       }
     }
 
     response.status(status).json(responseBody);
+  }
+
+  private captureWithUserContext(
+    exception: unknown,
+    request: RequestWithUser,
+  ): void {
+    Sentry.withScope((scope) => {
+      const user = request.user;
+      if (user) {
+        const id = user.merchantId ?? user.id ?? user.sub;
+        if (id) {
+          scope.setUser({
+            id,
+            email: user.email,
+            ...(user.merchantId ? { merchantId: user.merchantId } : {}),
+            ...(user.role ? { role: user.role } : {}),
+          });
+        }
+      }
+
+      scope.setContext("http_request", {
+        url: request.url,
+        method: request.method,
+      });
+
+      Sentry.captureException(exception);
+    });
   }
 
   private getStatus(exception: unknown): number {
@@ -50,7 +91,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return HttpStatus.INTERNAL_SERVER_ERROR;
   }
 
-  private buildResponse(exception: unknown, request: any, status: number) {
+  private buildResponse(exception: unknown, request: RequestWithUser, status: number) {
     const defaultMessage = "Unexpected error occurred";
     let error = HttpStatus[status] ?? "Error";
     let message: string | string[] = defaultMessage;

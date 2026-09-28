@@ -5,7 +5,7 @@ import * as crypto from 'crypto';
 import {
   WEBHOOK_DELIVERY_JOB,
   WEBHOOK_DELIVERY_QUEUE,
-} from "../queue/queue.constants";
+} from "../queues/queue.constants";
 import { QueueConfigService } from "../config/queue-config.service";
 import { Webhook } from "./entities/webhook.entity";
 

@@ -9,7 +9,7 @@ import * as sgMail from "@sendgrid/mail";
 import {
   EMAIL_DELIVERY_JOB,
   EMAIL_DELIVERY_QUEUE,
-} from "../queue/queue.constants";
+} from "../queues/queue.constants";
 import { EmailDeliveryLog } from "./entities/email-delivery-log.entity";
 
 interface EmailJobPayload {

@@ -10,7 +10,7 @@ import { EmailDeliveryLog } from './entities/email-delivery-log.entity';
 import { NotificationPreference } from './entities/notification-preference.entity';
 import { InAppNotification } from './entities/in-app-notification.entity';
 import { QueueConfigService } from '../config/queue-config.service';
-import { EMAIL_DELIVERY_QUEUE } from '../queue/queue.constants';
+import { EMAIL_DELIVERY_QUEUE } from '../queues/queue.constants';
 
 @Module({
   imports: [

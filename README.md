@@ -66,8 +66,8 @@ merchant sees the settlement in the dashboard
 | `aml/` | Anti-money-laundering checks |
 | `groups/` | Merchant grouping/org structures |
 | `notifications/`, `email/` | Notification preferences and email delivery (SMTP/SendGrid) |
-| `queues/`, `queue/`, `retry/` | Bull/Redis queue definitions and per-queue retry policies |
-| `cache/` | Redis-backed caching (with in-memory fallback) |
+| `queues/`, `retry/` | Bull/Redis queue definitions and per-queue retry policies |
+| `cache/` | Redis-backed caching (requires a reachable Redis instance) |
 | `cron/` | Scheduled jobs |
 | `backup/` | Database backup to S3 |
 | `audit/` | Audit logging for compliance |

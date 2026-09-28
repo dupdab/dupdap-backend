@@ -2,14 +2,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { QueueAdminController } from './queue-admin.controller';
 import { QueueMetricsService } from './queue-metrics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
-import { NotFoundException } from '@nestjs/common';
 import type { Queue, Job } from 'bull';
 
 describe('QueueAdminController', () => {
   let controller: QueueAdminController;
   let settlementQ: Queue;
-  let webhookQ: Queue;
-  let notificationQ: Queue;
+  let webhookDeliveryQ: Queue;
+  let emailDeliveryQ: Queue;
   let stellarMonitorQ: Queue;
   let sorobanEventDlqQ: Queue;
 
@@ -29,8 +28,8 @@ describe('QueueAdminController', () => {
 
   beforeEach(async () => {
     settlementQ = mockQueue('settlement') as unknown as Queue;
-    webhookQ = mockQueue('webhook') as unknown as Queue;
-    notificationQ = mockQueue('notification') as unknown as Queue;
+    webhookDeliveryQ = mockQueue('webhook-delivery') as unknown as Queue;
+    emailDeliveryQ = mockQueue('email-delivery') as unknown as Queue;
     stellarMonitorQ = mockQueue('stellar-monitor') as unknown as Queue;
     sorobanEventDlqQ = mockQueue('soroban-event-dlq') as unknown as Queue;
 
@@ -53,11 +52,11 @@ describe('QueueAdminController', () => {
 
     // Manually inject queues since we're using mocks
     controller = module.get<QueueAdminController>(QueueAdminController);
-    (controller as any).settlementQ = settlementQ;
-    (controller as any).webhookQ = webhookQ;
-    (controller as any).notificationQ = notificationQ;
-    (controller as any).stellarMonitorQ = stellarMonitorQ;
-    (controller as any).sorobanEventDlqQ = sorobanEventDlqQ;
+    (controller as any).settlementQueue = settlementQ;
+    (controller as any).webhookDeliveryQueue = webhookDeliveryQ;
+    (controller as any).emailDeliveryQueue = emailDeliveryQ;
+    (controller as any).stellarMonitorQueue = stellarMonitorQ;
+    (controller as any).sorobanEventDlqQueue = sorobanEventDlqQ;
   });
 
   it('should be defined', () => {
@@ -71,16 +70,16 @@ describe('QueueAdminController', () => {
       expect(settlementQ.getFailed).toHaveBeenCalled();
     });
 
-    it('should return failed jobs for webhook queue', async () => {
-      const result = await controller.getFailedJobs('webhook');
+    it('should return failed jobs for webhook-delivery queue', async () => {
+      const result = await controller.getFailedJobs('webhook-delivery');
       expect(result).toEqual({ jobs: [], total: 0 });
-      expect(webhookQ.getFailed).toHaveBeenCalled();
+      expect(webhookDeliveryQ.getFailed).toHaveBeenCalled();
     });
 
-    it('should return failed jobs for notification queue', async () => {
-      const result = await controller.getFailedJobs('notification');
+    it('should return failed jobs for email-delivery queue', async () => {
+      const result = await controller.getFailedJobs('email-delivery');
       expect(result).toEqual({ jobs: [], total: 0 });
-      expect(notificationQ.getFailed).toHaveBeenCalled();
+      expect(emailDeliveryQ.getFailed).toHaveBeenCalled();
     });
 
     it('should return failed jobs for stellar-monitor queue', async () => {
@@ -95,64 +94,55 @@ describe('QueueAdminController', () => {
       expect(sorobanEventDlqQ.getFailed).toHaveBeenCalled();
     });
 
-    it('should throw NotFoundException for unknown queue', async () => {
-      await expect(controller.getFailedJobs('unknown-queue')).rejects.toThrow(NotFoundException);
-    });
-
-    it('should log alert when DLQ exceeds threshold', async () => {
-      const jobs = Array(15).fill(mockJob);
-      (sorobanEventDlqQ.getFailed as jest.Mock).mockResolvedValue(jobs);
-      const loggerSpy = jest.spyOn((controller as any).logger, 'warn');
-
-      await controller.getFailedJobs('soroban-event-dlq');
-
-      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('DLQ alert'));
+    it('should throw for unknown queue', async () => {
+      await expect(controller.getFailedJobs('unknown-queue')).rejects.toThrow(/Unknown queue/);
     });
   });
 
   describe('retryFailedJob', () => {
     it('should retry failed job in settlement queue', async () => {
       const result = await controller.retryFailedJob('settlement', '123');
-      expect(result.message).toContain('re-queued successfully');
+      expect(result).toEqual({ success: true });
       expect(settlementQ.getJob).toHaveBeenCalledWith('123');
       expect(mockJob.retry).toHaveBeenCalled();
     });
 
-    it('should retry failed job in webhook queue', async () => {
-      const result = await controller.retryFailedJob('webhook', '123');
-      expect(result.message).toContain('re-queued successfully');
-      expect(webhookQ.getJob).toHaveBeenCalledWith('123');
+    it('should retry failed job in webhook-delivery queue', async () => {
+      const result = await controller.retryFailedJob('webhook-delivery', '123');
+      expect(result).toEqual({ success: true });
+      expect(webhookDeliveryQ.getJob).toHaveBeenCalledWith('123');
       expect(mockJob.retry).toHaveBeenCalled();
     });
 
-    it('should retry failed job in notification queue', async () => {
-      const result = await controller.retryFailedJob('notification', '123');
-      expect(result.message).toContain('re-queued successfully');
-      expect(notificationQ.getJob).toHaveBeenCalledWith('123');
+    it('should retry failed job in email-delivery queue', async () => {
+      const result = await controller.retryFailedJob('email-delivery', '123');
+      expect(result).toEqual({ success: true });
+      expect(emailDeliveryQ.getJob).toHaveBeenCalledWith('123');
       expect(mockJob.retry).toHaveBeenCalled();
     });
 
     it('should retry failed job in stellar-monitor queue', async () => {
       const result = await controller.retryFailedJob('stellar-monitor', '123');
-      expect(result.message).toContain('re-queued successfully');
+      expect(result).toEqual({ success: true });
       expect(stellarMonitorQ.getJob).toHaveBeenCalledWith('123');
       expect(mockJob.retry).toHaveBeenCalled();
     });
 
     it('should retry failed job in soroban-event-dlq queue', async () => {
       const result = await controller.retryFailedJob('soroban-event-dlq', '123');
-      expect(result.message).toContain('re-queued successfully');
+      expect(result).toEqual({ success: true });
       expect(sorobanEventDlqQ.getJob).toHaveBeenCalledWith('123');
       expect(mockJob.retry).toHaveBeenCalled();
     });
 
-    it('should throw NotFoundException for unknown queue', async () => {
-      await expect(controller.retryFailedJob('unknown-queue', '123')).rejects.toThrow(NotFoundException);
+    it('should throw for unknown queue', async () => {
+      await expect(controller.retryFailedJob('unknown-queue', '123')).rejects.toThrow(/Unknown queue/);
     });
 
-    it('should throw NotFoundException for unknown job', async () => {
+    it('should return failure for unknown job', async () => {
       (sorobanEventDlqQ.getJob as jest.Mock).mockResolvedValue(null);
-      await expect(controller.retryFailedJob('soroban-event-dlq', '999')).rejects.toThrow(NotFoundException);
+      const result = await controller.retryFailedJob('soroban-event-dlq', '999');
+      expect(result).toEqual({ success: false, message: 'Job not found' });
     });
   });
 });

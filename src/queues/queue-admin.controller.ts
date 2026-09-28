@@ -7,6 +7,7 @@ import { MerchantRole } from '../merchants/enums/merchant-role.enum';
 import { QueueMetricsService } from './queue-metrics.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { QUEUE_NAMES } from './queue.constants';
 
 @ApiTags('admin/queues')
 @ApiBearerAuth()
@@ -16,11 +17,11 @@ import { Queue } from 'bullmq';
 export class QueueAdminController {
   constructor(
     private readonly queueMetricsService: QueueMetricsService,
-    @InjectQueue('settlement') private readonly settlementQueue: Queue,
-    @InjectQueue('webhook') private readonly webhookQueue: Queue,
-    @InjectQueue('notification') private readonly notificationQueue: Queue,
-    @InjectQueue('stellar-monitor') private readonly stellarMonitorQueue: Queue,
-    @InjectQueue('soroban-event-dlq') private readonly sorobanEventDlqQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.settlement) private readonly settlementQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.webhookDelivery) private readonly webhookDeliveryQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.emailDelivery) private readonly emailDeliveryQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.stellarMonitor) private readonly stellarMonitorQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.sorobanEventDlq) private readonly sorobanEventDlqQueue: Queue,
   ) {}
 
   @Get('metrics')
@@ -57,15 +58,15 @@ export class QueueAdminController {
 
   private getQueue(name: string): Queue {
     switch (name) {
-      case 'settlement':
+      case QUEUE_NAMES.settlement:
         return this.settlementQueue;
-      case 'webhook':
-        return this.webhookQueue;
-      case 'notification':
-        return this.notificationQueue;
-      case 'stellar-monitor':
+      case QUEUE_NAMES.webhookDelivery:
+        return this.webhookDeliveryQueue;
+      case QUEUE_NAMES.emailDelivery:
+        return this.emailDeliveryQueue;
+      case QUEUE_NAMES.stellarMonitor:
         return this.stellarMonitorQueue;
-      case 'soroban-event-dlq':
+      case QUEUE_NAMES.sorobanEventDlq:
         return this.sorobanEventDlqQueue;
       default:
         throw new Error(`Unknown queue: ${name}`);

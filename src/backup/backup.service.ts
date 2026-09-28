@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createReadStream, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -11,7 +11,7 @@ import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { CronJobService } from '../cron/cron-job.service';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class BackupService {
@@ -63,8 +63,9 @@ export class BackupService {
     const password = this.config.getOrThrow<string>('DB_PASSWORD');
 
     try {
-      await execAsync(
-        `pg_dump -Fc -h ${host} -p ${port} -U ${user} -d ${dbName} -f ${localPath}`,
+      await execFileAsync(
+        'pg_dump',
+        ['-Fc', '-h', host, '-p', String(port), '-U', user, '-d', dbName, '-f', localPath],
         { env: { ...process.env, PGPASSWORD: password } },
       );
 
