@@ -2,12 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { HealthCheckService, TypeOrmHealthIndicator, HttpHealthIndicator } from '@nestjs/terminus';
 import { HealthController } from './health.controller';
-import Redis from 'ioredis';
-
-jest.mock('ioredis', () => ({
-  __esModule: true,
-  default: jest.fn(),
-}));
+import { CacheService } from '../cache/cache.service';
 
 describe('HealthController', () => {
   let controller: HealthController;
@@ -15,7 +10,7 @@ describe('HealthController', () => {
   let mockTypeOrmHealthIndicator: jest.Mocked<TypeOrmHealthIndicator>;
   let mockHttpHealthIndicator: jest.Mocked<HttpHealthIndicator>;
   let mockConfigService: jest.Mocked<ConfigService>;
-  let mockRedis: { connect: jest.Mock; ping: jest.Mock; quit: jest.Mock };
+  let mockCacheService: jest.Mocked<Pick<CacheService, 'ping'>>;
 
   beforeEach(async () => {
     mockHealthCheckService = {
@@ -34,13 +29,9 @@ describe('HealthController', () => {
       get: jest.fn(),
     } as any;
 
-    mockRedis = {
-      connect: jest.fn().mockResolvedValue(undefined),
+    mockCacheService = {
       ping: jest.fn().mockResolvedValue('PONG'),
-      quit: jest.fn().mockResolvedValue('OK'),
     };
-    (Redis as unknown as jest.Mock).mockImplementation(() => mockRedis);
-    (Redis as unknown as jest.Mock).mockClear();
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HealthController],
@@ -49,6 +40,7 @@ describe('HealthController', () => {
         { provide: TypeOrmHealthIndicator, useValue: mockTypeOrmHealthIndicator },
         { provide: HttpHealthIndicator, useValue: mockHttpHealthIndicator },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: CacheService, useValue: mockCacheService },
       ],
     }).compile();
 
@@ -107,34 +99,23 @@ describe('HealthController', () => {
       expect(result.components.partnerApi.status).toBe('degraded');
     });
 
-    it('should ping Redis using the configured host and port', async () => {
+    it('should ping Redis via CacheService and report ok', async () => {
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
       mockConfigService.get.mockImplementation((key: string, defaultValue?: string | number) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
-        if (key === 'REDIS_HOST') return 'redis.internal';
-        if (key === 'REDIS_PORT') return 6380;
-        if (key === 'REDIS_PASSWORD') return 'secret';
         return defaultValue;
       });
 
       await controller.adminHealth();
 
-      expect(Redis).toHaveBeenCalledWith(expect.objectContaining({
-        host: 'redis.internal',
-        port: 6380,
-        password: 'secret',
-        lazyConnect: true,
-      }));
-      expect(mockRedis.connect).toHaveBeenCalled();
-      expect(mockRedis.ping).toHaveBeenCalled();
-      expect(mockRedis.quit).toHaveBeenCalled();
+      expect(mockCacheService.ping).toHaveBeenCalled();
     });
 
     it('should report Redis as degraded when the ping fails', async () => {
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
-      mockRedis.ping.mockRejectedValue(new Error('Redis unavailable'));
+      mockCacheService.ping.mockRejectedValue(new Error('Redis unavailable'));
       mockConfigService.get.mockImplementation((key: string, defaultValue?: string | number) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
         return defaultValue;
@@ -144,7 +125,6 @@ describe('HealthController', () => {
 
       expect(result.components.redis.status).toBe('degraded');
       expect(result.components.redis.latency).toBeGreaterThanOrEqual(0);
-      expect(mockRedis.quit).toHaveBeenCalled();
     });
 
     it('should throw 503 when critical components are down', async () => {

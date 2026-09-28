@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { CacheService } from '../cache/cache.service';
 import { AdminAlertService } from '../admin/admin-alert.service';
+import { AdminAlertType } from '../alerts/admin-alert.entity';
+import { StellarTxQueueService } from './stellar-tx-queue.service';
 
 export interface XlmUsdRate {
   rate: number;
@@ -37,6 +39,7 @@ export class StellarService implements OnModuleInit {
     private config: ConfigService,
     private readonly cacheService: CacheService,
     private readonly adminAlertService: AdminAlertService,
+    private readonly stellarTxQueue: StellarTxQueueService,
   ) {}
 
   onModuleInit() {
@@ -94,7 +97,7 @@ export class StellarService implements OnModuleInit {
             await this.cacheService.set(
               this.lastKnownGoodRateKey,
               rate,
-              24 * 60 * 60,
+              { ttlSeconds: 24 * 60 * 60 },
             );
             return { rate, isFallback: false };
           }
@@ -120,18 +123,22 @@ export class StellarService implements OnModuleInit {
     );
 
     if (typeof lastKnownGood === 'number' && lastKnownGood > 0) {
-      await this.adminAlertService.sendAlert({
-        severity: 'warning',
-        title: 'XLM/USD rate fallback triggered',
+      await this.adminAlertService.raise({
+        type: AdminAlertType.STELLAR_MONITOR,
+        dedupeKey: 'stellar.rate-fallback',
         message: `Horizon XLM/USD rate unavailable (${reason}); serving last-known-good rate ${lastKnownGood}.`,
+        metadata: { reason, lastKnownGood },
+        thresholdValue: 1,
       });
       return { rate: lastKnownGood, isFallback: true };
     }
 
-    await this.adminAlertService.sendAlert({
-      severity: 'critical',
-      title: 'XLM/USD rate unavailable',
+    await this.adminAlertService.raise({
+      type: AdminAlertType.STELLAR_MONITOR,
+      dedupeKey: 'stellar.rate-unavailable',
       message: `Horizon XLM/USD rate unavailable (${reason}) and no last-known-good rate is cached.`,
+      metadata: { reason },
+      thresholdValue: 1,
     });
 
     return { rate: 0.1, isFallback: true };
@@ -200,28 +207,7 @@ export class StellarService implements OnModuleInit {
     asset: StellarSdk.Asset,
     memo?: string,
   ): Promise<string> {
-    const account = await this.server.loadAccount(this.keypair.publicKey());
-
-    const txBuilder = new StellarSdk.TransactionBuilder(account, {
-      fee: StellarSdk.BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        StellarSdk.Operation.payment({
-          destination: destinationId,
-          asset,
-          amount,
-        }),
-      )
-      .setTimeout(30);
-
-    if (memo) txBuilder.addMemo(StellarSdk.Memo.text(memo));
-
-    const tx = txBuilder.build();
-    tx.sign(this.keypair);
-
-    const result = await this.server.submitTransaction(tx);
-    return result.hash;
+    return this.stellarTxQueue.submitPayment(destinationId, amount, asset, memo);
   }
 
   getUsdcAsset(): StellarSdk.Asset {
@@ -240,6 +226,14 @@ export class StellarService implements OnModuleInit {
 
   getServer(): StellarSdk.Horizon.Server {
     return this.server;
+  }
+
+  async getBalance(stellarAccountId: string): Promise<any[]> {
+    const account = await this.server
+      .accounts()
+      .accountId(stellarAccountId)
+      .call();
+    return account.balances as any[];
   }
 
   async invokeContract(fn: string, args: unknown[] = []): Promise<string> {

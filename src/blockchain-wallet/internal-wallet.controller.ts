@@ -1,11 +1,25 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
-import { ApiHeader, ApiOperation, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
+import {
+  ApiHeader,
+  ApiOperation,
+  ApiProperty,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { BlockchainWalletService } from './blockchain-wallet.service';
 import { WalletResponseDto } from './dto/wallet-response.dto';
 import { InternalServiceGuard } from '../auth/guards/internal-service.guard';
 
 export class ProvisionWalletDto {
+  @ApiProperty({ description: 'ID of the user to provision a wallet for' })
+  @IsString()
+  @IsNotEmpty()
   userId: string;
+
+  @ApiProperty({ description: 'Username of the user to provision a wallet for' })
+  @IsString()
+  @IsNotEmpty()
   username: string;
 }
 

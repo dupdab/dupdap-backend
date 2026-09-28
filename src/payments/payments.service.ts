@@ -22,7 +22,7 @@ export interface PaymentCreatedEvent {
   type: 'PaymentCreated';
   paymentId: string;
   merchantId: string;
-  amountUsd: number;
+  amountUsd: string;
   memo: string;
   timestamp: Date;
 }
@@ -80,8 +80,8 @@ export class PaymentsService {
       id: uuidv4(),
       reference: `PAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       merchantId,
-      amountUsd: dto.amountUsd,
-      amountXlm: parseFloat(amountXlm.toFixed(7)),
+      amountUsd: String(dto.amountUsd),
+      amountXlm: amountXlm.toFixed(7),
       description: dto.description,
       customerEmail: dto.customerEmail,
       metadata: dto.metadata,
@@ -215,8 +215,8 @@ export class PaymentsService {
         id: uuidv4(),
         reference: `PAY-${now}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
         merchantId,
-        amountUsd: item.amountUsd,
-        amountXlm: parseFloat(amountXlm.toFixed(7)),
+        amountUsd: String(item.amountUsd),
+        amountXlm: amountXlm.toFixed(7),
         description: item.memo,
         customerEmail: item.customerEmail,
         metadata: item.metadata,
@@ -231,8 +231,8 @@ export class PaymentsService {
         type: 'PaymentCreated',
         paymentId: record.id,
         merchantId,
-        amountUsd: item.amountUsd,
-        memo: item.memo,
+        amountUsd: String(item.amountUsd),
+        memo,
         timestamp: new Date(),
       });
     }
@@ -260,69 +260,46 @@ export class PaymentsService {
     };
   }
 
-  async refund(id: string, merchantId: string, dto: RefundPaymentDto): Promise<Payment> {
-    const merchant = await this.merchants.findOne(merchantId);
+  async refund(
+    merchantId: string,
+    paymentId: string,
+    dto: RefundPaymentDto,
+  ): Promise<Payment> {
+    const payment = await this.findOne(merchantId, paymentId);
+    if (!payment) throw new NotFoundException('Payment not found');
 
-    const payment = await this.paymentsRepo.findOne({ where: { id, merchantId } });
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
-
-    if (payment.status !== PaymentStatus.SETTLED) {
-      throw new BadRequestException('Only settled payments can be refunded');
+    if (payment.status !== PaymentStatus.CONFIRMED) {
+      throw new BadRequestException('Only confirmed payments can be refunded');
     }
 
     if (!payment.customerWalletAddress) {
       throw new BadRequestException('Payment has no customer wallet address');
     }
 
-    const alreadyRefundedUsd = payment.refundAmountUsd ?? 0;
-    const refundAmountUsd = dto.amountUsd ?? payment.amountUsd;
-    const totalRefundedUsd = alreadyRefundedUsd + refundAmountUsd;
+    const alreadyRefundedUsd = new Big(payment.refundAmountUsd ?? '0');
+    const remainingUsd = new Big(payment.amountUsd).minus(alreadyRefundedUsd);
+    const refundAmount = new Big(dto.amountUsd);
 
-    if (totalRefundedUsd > payment.amountUsd) {
-      throw new BadRequestException('Refund amount exceeds payment amount');
+    if (refundAmount.gt(remainingUsd)) {
+      throw new BadRequestException(
+        `Refund amount exceeds remaining refundable balance of ${remainingUsd.toFixed(6)}`,
+      );
     }
 
-    let asset: StellarSdk.Asset;
-    let amountStr: string;
+    const newRefundedUsd = alreadyRefundedUsd.plus(refundAmount);
+    payment.refundAmountUsd = newRefundedUsd.toFixed(6);
+    payment.status =
+      newRefundedUsd.gte(new Big(payment.amountUsd))
+        ? PaymentStatus.REFUNDED
+        : PaymentStatus.PARTIALLY_REFUNDED;
+    payment.refundReason = dto.reason;
+    payment.refundedAt = new Date();
 
-    if (payment.amountUsdc) {
-      asset = new StellarSdk.Asset(merchant.usdcAssetCode, merchant.usdcIssuer);
-      amountStr = refundAmountUsd.toFixed(7);
-    } else {
-      asset = StellarSdk.Asset.native();
-      amountStr = new Big(refundAmountUsd).div(payment.amountUsd).times(payment.amountXlm).toFixed(7);
-    }
-
-    const txHash = await this.stellar.sendPayment(
-      payment.customerWalletAddress,
-      amountStr,
-      asset,
-      `refund:${payment.reference}`,
-    );
-
-    const result = await this.dataSource.transaction(async (manager) => {
-      payment.refundAmountUsd = totalRefundedUsd;
-      payment.refundTxHash = txHash;
-      payment.refundedAt = new Date();
-      payment.status = PaymentStatus.REFUNDED;
-      return manager.save(payment);
-    });
+    const saved2 = await this.paymentsRepo.save(payment);
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
-    await this.webhooks.dispatch(payment.merchantId, 'payment.refunded', {
-      paymentId: payment.id,
-      reference: payment.reference,
-      refundAmountUsd,
-      totalRefundedUsd,
-      txHash,
-    });
-
-    await this.notifications.sendPaymentRefunded(payment);
-
-    return result;
+    return saved2;
   }
 
   async findAll(

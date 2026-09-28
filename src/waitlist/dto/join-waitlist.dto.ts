@@ -5,7 +5,7 @@ import { Transform } from 'class-transformer';
 export class JoinWaitlistDto {
   @ApiProperty({ example: 'founder@example.com' })
   @IsEmail()
-  @Transform(({ value }) => value?.trim())
+  @Transform(({ value }) => value?.trim().toLowerCase())
   email!: string;
 
   @ApiPropertyOptional({ example: 'acme_corp' })

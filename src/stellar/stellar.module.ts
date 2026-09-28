@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bull';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
 import { StellarService } from './stellar.service';
+import { StellarTxQueueService } from './stellar-tx-queue.service';
 import { StellarMonitorService } from './stellar-monitor.service';
 import { SorobanMonitorService } from './soroban-monitor.service';
 import { SorobanEventIndexer } from './soroban-event-indexer.service';
@@ -13,6 +14,7 @@ import { QUEUE_NAMES } from '../queues/queue.constants';
 import { EmailModule } from '../email/email.module';
 import { MerchantsModule } from '../merchants/merchants.module';
 import { CacheModule } from '../cache/cache.module';
+import { RetryModule } from '../retry/retry.module';
 
 @Module({
   imports: [
@@ -24,15 +26,18 @@ import { CacheModule } from '../cache/cache.module';
     MerchantsModule,
     CacheModule,
     BullModule.registerQueue({ name: QUEUE_NAMES.stellarMonitor }),
+    RetryModule,
   ],
   providers: [
     StellarService,
+    StellarTxQueueService,
     StellarMonitorService,
     SorobanMonitorService,
     SorobanEventIndexer,
   ],
   exports: [
     StellarService,
+    StellarTxQueueService,
     StellarMonitorService,
     SorobanMonitorService,
     SorobanEventIndexer,

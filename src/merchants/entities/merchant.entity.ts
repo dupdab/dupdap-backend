@@ -105,11 +105,15 @@ export class Merchant {
   @Column({ nullable: true })
   apiKeyHash: string;
 
+  @Exclude()
+  @Column({ name: 'api_key_lookup_hash', nullable: true, unique: true })
+  apiKeyLookupHash?: string | null;
+
   @Column({ type: 'decimal', precision: 18, scale: 6, default: 0, transformer: numericColumnTransformer })
-  totalVolumeUsd: number;
+  totalVolumeUsd: string;
 
   @Column({ type: 'decimal', precision: 5, scale: 4, default: 0.015, transformer: numericColumnTransformer })
-  feeRate: number;
+  feeRate: string;
 
   /** Per-merchant custom fee rate override. Null means use global default. */
   @Column({
