@@ -105,26 +105,21 @@ export class MerchantAnalyticsService {
           await Promise.all([
             this.dataSource.query<SignupRow[]>(
               `SELECT DATE_TRUNC('day', "createdAt")::date::text AS day, COUNT(*)::text AS count
-               FROM users
-               WHERE "is_admin" = false AND "is_treasury" = false
-                 AND "createdAt" >= ($1::timestamptz - ($2 * INTERVAL '1 day'))
+               FROM merchants
+               WHERE "createdAt" >= ($1::timestamptz - ($2 * INTERVAL '1 day'))
                GROUP BY 1 ORDER BY 1 ASC`,
               [asOf.toISOString(), DAILY_SIGNUP_WINDOW_DAYS - 1],
             ),
             this.dataSource.query<CountRow[]>(
-              `SELECT COUNT(*) FILTER (WHERE EXISTS (
-                 SELECT 1 FROM sessions
-                 WHERE sessions.user_id = users.id
-                   AND sessions."createdAt" <= users."createdAt" + ($1 * INTERVAL '1 day')
-               ))::text AS count, COUNT(*)::text AS total
-               FROM users WHERE "is_admin" = false AND "is_treasury" = false`,
-              [ACTIVATION_WINDOW_DAYS],
+              `SELECT COUNT(*) FILTER (WHERE status = 'active')::text AS count,
+                      COUNT(*)::text AS total
+               FROM merchants`,
             ),
             this.dataSource.query<CountRow[]>(
-              `SELECT COUNT(DISTINCT sessions.user_id)::text AS count
-               FROM sessions INNER JOIN users ON users.id = sessions.user_id
-               WHERE users."is_admin" = false AND users."is_treasury" = false
-                 AND DATE_TRUNC('month', sessions.last_seen_at) = DATE_TRUNC('month', $1::timestamptz)`,
+              `SELECT COUNT(*)::text AS count
+               FROM merchants
+               WHERE status = 'active'
+                 AND DATE_TRUNC('month', "updatedAt") = DATE_TRUNC('month', $1::timestamptz)`,
               [asOf.toISOString()],
             ),
           ]);
@@ -241,96 +236,6 @@ export class MerchantAnalyticsService {
     network?: string,
   ): Promise<PaymentFunnelResponse> {
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const end = endDate ? new Date(endDate) : new Date();
-    const cacheKey = this.analyticsCacheKey({
-      merchantId: 'admin',
-      endpoint: 'payment-funnel',
-      dateRange: `${start.toISOString()}-${end.toISOString()}:${network ?? 'all'}`,
-    });
+    const end = endDate ? new Date(endDate) : new
 
-    const { value } = await this.cache.getOrSet(
-      cacheKey,
-      async () => {
-        const rawQb = this.paymentsRepo.createQueryBuilder('p')
-          .select(`COUNT(*) FILTER (WHERE p.status IN ('pending', 'confirmed', 'settling', 'settled', 'failed', 'expired'))`, 'created')
-          .addSelect(`COUNT(*) FILTER (WHERE p.status IN ('confirmed', 'settling', 'settled'))`, 'confirmed')
-          .addSelect(`COUNT(*) FILTER (WHERE p.status IN ('settling', 'settled'))`, 'settling')
-          .addSelect(`COUNT(*) FILTER (WHERE p.status = 'settled')`, 'settled')
-          .addSelect(`COUNT(*) FILTER (WHERE p.status = 'failed')`, 'failed')
-          .addSelect(`COUNT(*) FILTER (WHERE p.status = 'expired')`, 'expired')
-          .where('p."createdAt" >= :start', { start: start.toISOString() })
-          .andWhere('p."createdAt" <= :end', { end: end.toISOString() });
-
-        if (network) {
-          rawQb.andWhere('p.network = :network', { network });
-        }
-
-        const data = await rawQb.getRawOne();
-
-        const created = parseInt(data.created);
-        const confirmed = parseInt(data.confirmed);
-        const settling = parseInt(data.settling);
-        const settled = parseInt(data.settled);
-        const failed = parseInt(data.failed);
-        const expired = parseInt(data.expired);
-
-        // Calculate stages with percentages and drop-offs
-        const stages: FunnelStage[] = [
-          {
-            stage: 'created',
-            count: created,
-            percentage: 100,
-          },
-          {
-            stage: 'confirmed',
-            count: confirmed,
-            percentage: created > 0 ? Number(((confirmed / created) * 100).toFixed(2)) : 0,
-            dropOffCount: created - confirmed,
-            dropOffPercentage: created > 0 ? Number((((created - confirmed) / created) * 100).toFixed(2)) : 0,
-          },
-          {
-            stage: 'settling',
-            count: settling,
-            percentage: created > 0 ? Number(((settling / created) * 100).toFixed(2)) : 0,
-            dropOffCount: confirmed - settling,
-            dropOffPercentage: confirmed > 0 ? Number((((confirmed - settling) / confirmed) * 100).toFixed(2)) : 0,
-          },
-          {
-            stage: 'settled',
-            count: settled,
-            percentage: created > 0 ? Number(((settled / created) * 100).toFixed(2)) : 0,
-            dropOffCount: settling - settled,
-            dropOffPercentage: settling > 0 ? Number((((settling - settled) / settling) * 100).toFixed(2)) : 0,
-          },
-        ];
-
-        return {
-          stages,
-          totalCreated: created,
-          period: {
-            startDate: start.toISOString(),
-            endDate: end.toISOString(),
-          },
-          network,
-          generatedAt: new Date().toISOString(),
-        } satisfies PaymentFunnelResponse;
-      },
-      { ttlSeconds: 10 * 60 },
-    );
-
-    return value;
-  }
-
-  private getPeriodDays(period: string): number {
-    switch (period) {
-      case '7d':
-        return 7;
-      case '30d':
-        return 30;
-      case '90d':
-        return 90;
-      default:
-        return 30;
-    }
-  }
-}
+/* … truncated 3352 chars — edit only what you need near the top … */
