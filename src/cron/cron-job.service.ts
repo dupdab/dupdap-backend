@@ -7,12 +7,29 @@ import { CronJobLog, CronJobStatus } from './entities/cron-job-log.entity';
 export class CronJobService {
   private readonly logger = new Logger(CronJobService.name);
 
+  private static readonly LOCK_TTL_MS = 5 * 60 * 1000;
+  private readonly runningJobs = new Set<string>();
+
   constructor(
     @InjectRepository(CronJobLog)
     private logRepo: Repository<CronJobLog>,
   ) {}
 
   async run<T>(jobName: string, fn: () => Promise<T>, expectedItems?: number): Promise<T> {
+    if (this.runningJobs.has(jobName)) {
+      const skipped = this.logRepo.create({
+        jobName,
+        status: CronJobStatus.SKIPPED,
+        completedAt: new Date(),
+        durationMs: 0,
+      });
+      await this.logRepo.save(skipped);
+      this.logger.warn(`Cron ${jobName} skipped: already running`);
+      return undefined as unknown as T;
+    }
+
+    this.runningJobs.add(jobName);
+
     const log = this.logRepo.create({
       jobName,
       status: CronJobStatus.STARTED,
@@ -26,7 +43,7 @@ export class CronJobService {
       const result = await Promise.race([
         fn(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new RequestTimeoutException(`Cron job ${jobName} exceeded 5min`)), 5 * 60 * 1000),
+          setTimeout(() => reject(new RequestTimeoutException(`Cron job ${jobName} exceeded 5min`)), CronJobService.LOCK_TTL_MS),
         ),
       ]);
 
@@ -47,7 +64,8 @@ export class CronJobService {
 
       this.logger.error(`Cron ${jobName} failed: ${log.errorMessage} (${log.durationMs}ms)`);
       throw error;
+    } finally {
+      this.runningJobs.delete(jobName);
     }
   }
 }
-

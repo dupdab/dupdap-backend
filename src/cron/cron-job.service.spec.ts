@@ -3,12 +3,19 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { CronJobService } from './cron-job.service';
 import { CronJobLog, CronJobStatus } from './entities/cron-job-log.entity';
 import { RequestTimeoutException } from '@nestjs/common';
+import { CacheService } from '../cache/cache.service';
 
 describe('CronJobService', () => {
   let service: CronJobService;
   let mockRepo: jest.Mocked<any>;
+  let mockCache: jest.Mocked<any>;
 
   beforeEach(async () => {
+    mockCache = {
+      acquireLock: jest.fn().mockResolvedValue(true),
+      releaseLock: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CronJobService,
@@ -18,6 +25,10 @@ describe('CronJobService', () => {
             create: jest.fn(),
             save: jest.fn(),
           },
+        },
+        {
+          provide: CacheService,
+          useValue: mockCache,
         },
       ],
     }).compile();
@@ -74,5 +85,43 @@ describe('CronJobService', () => {
       errorMessage: 'test error',
     }));
   });
-});
 
+  it('should skip execution when the job lock cannot be acquired', async () => {
+    mockCache.acquireLock.mockResolvedValue(false);
+    const mockFn = jest.fn().mockResolvedValue('result');
+    mockRepo.create.mockReturnValue({ id: 'log1' });
+    mockRepo.save.mockResolvedValue({ id: 'log1' } as any);
+
+    const result = await service.run('overlap-job', mockFn);
+
+    expect(mockFn).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+    expect(mockRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+      jobName: 'overlap-job',
+      status: CronJobStatus.SKIPPED,
+    }));
+    expect(mockCache.releaseLock).not.toHaveBeenCalled();
+  });
+
+  it('should release the lock after a successful run', async () => {
+    const mockFn = jest.fn().mockResolvedValue('result');
+    mockRepo.create.mockReturnValue({ id: 'log1' });
+    mockRepo.save.mockResolvedValue({ id: 'log1' } as any);
+
+    await service.run('release-job', mockFn);
+
+    expect(mockCache.acquireLock).toHaveBeenCalledWith('release-job', expect.any(Number));
+    expect(mockCache.releaseLock).toHaveBeenCalledWith('release-job');
+  });
+
+  it('should release the lock after a failed run', async () => {
+    const error = new Error('test error');
+    const mockFn = jest.fn().mockRejectedValue(error);
+    mockRepo.create.mockReturnValue({ id: 'log1' });
+    mockRepo.save.mockResolvedValue({} as any);
+
+    await expect(service.run('release-fail-job', mockFn)).rejects.toThrow('test error');
+
+    expect(mockCache.releaseLock).toHaveBeenCalledWith('release-fail-job');
+  });
+});
