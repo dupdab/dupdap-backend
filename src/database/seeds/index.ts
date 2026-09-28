@@ -190,7 +190,7 @@ async function seedPayments(
       reference: 'PAYMENT-CONFIRMED-1',
       merchantId: merchantMap.get('merchant1@localhost')?.id,
       amountUsd: 120.0,
-      network: PaymentNetwork.POLYGON,
+      network: PaymentNetwork.STELLAR,
       status: PaymentStatus.CONFIRMED,
       description: 'Confirmed payment demo',
       customerEmail: 'customer2@example.com',
@@ -202,7 +202,7 @@ async function seedPayments(
       reference: 'PAYMENT-SETTLING-1',
       merchantId: merchantMap.get('merchant2@localhost')?.id,
       amountUsd: 225.0,
-      network: PaymentNetwork.BASE,
+      network: PaymentNetwork.STELLAR,
       status: PaymentStatus.SETTLING,
       description: 'Settling payment demo',
       customerEmail: 'customer3@example.com',
@@ -213,56 +213,11 @@ async function seedPayments(
       reference: 'PAYMENT-SETTLED-1',
       merchantId: merchantMap.get('merchant2@localhost')?.id,
       amountUsd: 500.0,
-      network: PaymentNetwork.CELO,
+      network: PaymentNetwork.STELLAR,
       status: PaymentStatus.SETTLED,
       description: 'Settled payment demo',
       customerEmail: 'customer4@example.com',
       metadata: { source: 'seed' },
       confirmedAt: new Date(),
       settlementId: settlementMap.get('SETTLEMENT-COMPLETE-1')?.id,
-      settlementAmountFiat: 500,
-      settlementCurrency: 'USD',
-    },
-    {
-      id: predictableIds ? FIXED_IDS.paymentFailed : undefined,
-      reference: 'PAYMENT-FAILED-1',
-      merchantId: merchantMap.get('merchant3@localhost')?.id,
-      amountUsd: 99.99,
-      network: PaymentNetwork.ARBITRUM,
-      status: PaymentStatus.FAILED,
-      description: 'Failed payment demo',
-      customerEmail: 'customer5@example.com',
-      metadata: { source: 'seed' },
-    },
-    {
-      id: predictableIds ? FIXED_IDS.paymentRefunded : undefined,
-      reference: 'PAYMENT-REFUNDED-1',
-      merchantId: merchantMap.get('merchant3@localhost')?.id,
-      amountUsd: 25.0,
-      network: PaymentNetwork.OPTIMISM,
-      status: PaymentStatus.REFUNDED,
-      description: 'Refunded payment demo',
-      customerEmail: 'customer6@example.com',
-      metadata: { source: 'seed' },
-      refundAmountUsd: 25.0,
-      refundedAt: new Date(),
-    },
-  ];
-
-  const references = seeds.map((seed) => seed.reference);
-  const existing = await repo.find({ where: { reference: In(references) } });
-  const existingByReference = new Map(existing.map((payment) => [payment.reference, payment]));
-
-  for (const seed of seeds) {
-    const current = existingByReference.get(seed.reference);
-    if (current) {
-      const merged = repo.merge(current, seed);
-      merged.id = current.id;
-      await repo.save(merged);
-    } else {
-      await repo.save(repo.create(seed));
-    }
-  }
-
-  console.log('Payments seeded.');
-}
+      settl
