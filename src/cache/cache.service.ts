@@ -145,6 +145,11 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     await this.redis.flushdb();
   }
 
+  /** Lightweight ping using the existing connection. */
+  async ping(): Promise<string> {
+    return this.redis.ping();
+  }
+
   async getOrSet<T>(
     key: string,
     fetchFn: () => Promise<T>,

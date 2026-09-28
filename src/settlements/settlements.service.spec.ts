@@ -12,12 +12,20 @@ import { NotificationPrefsService } from '../notifications/notification-prefs.se
 import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
+import { RetryConfigService } from '../retry/retry-config.service';
 
 describe('SettlementsService batching', () => {
   let service: SettlementsService;
   let settlementsRepo: any;
   let paymentsRepo: any;
   let settlementQueue: any;
+
+  const mockRetryConfig = {
+    settlement: {
+      maxAttempts: 3,
+      delaysMs: [60_000, 300_000, 1_800_000],
+    },
+  };
 
   const deps = () => ({
     config: { get: jest.fn() } as unknown as ConfigService,
@@ -66,6 +74,7 @@ describe('SettlementsService batching', () => {
       deps().stellar,
       settlementQueue as any,
       { run: jest.fn() } as unknown as CronJobService,
+      mockRetryConfig as unknown as RetryConfigService,
     );
 
     jest.restoreAllMocks();
@@ -75,7 +84,7 @@ describe('SettlementsService batching', () => {
     const payment = {
       id: 'payment-small',
       merchantId: 'merchant-1',
-      amountUsd: 5,
+      amountUsd: '5.000000',
       status: PaymentStatus.CONFIRMED,
     } as Payment;
 
@@ -94,7 +103,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p1',
         merchantId: 'merchant-1',
-        amountUsd: 4,
+        amountUsd: '4.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:56:00Z'),
         createdAt: new Date('2026-04-27T09:56:00Z'),
@@ -102,7 +111,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p2',
         merchantId: 'merchant-1',
-        amountUsd: 3,
+        amountUsd: '3.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:57:00Z'),
         createdAt: new Date('2026-04-27T09:57:00Z'),
@@ -110,7 +119,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p3',
         merchantId: 'merchant-1',
-        amountUsd: 3.5,
+        amountUsd: '3.500000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:58:00Z'),
         createdAt: new Date('2026-04-27T09:58:00Z'),
@@ -118,7 +127,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p4',
         merchantId: 'merchant-2',
-        amountUsd: 2,
+        amountUsd: '2.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:59:00Z'),
         createdAt: new Date('2026-04-27T09:59:00Z'),
@@ -133,9 +142,9 @@ describe('SettlementsService batching', () => {
     expect(settlementsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
         merchantId: 'merchant-1',
-        totalAmountUsd: 10.5,
-        feeAmountUsd: 10.5 * 0.015,
-        netAmountUsd: 10.5 - 10.5 * 0.015,
+        totalAmountUsd: '10.500000',
+        feeAmountUsd: '0.157500',
+        netAmountUsd: '10.342500',
         fiatCurrency: 'NGN',
         status: SettlementStatus.PROCESSING,
         requiresApproval: false,
@@ -143,7 +152,11 @@ describe('SettlementsService batching', () => {
     );
     expect(paymentsRepo.save).toHaveBeenCalledTimes(3);
     expect(settlementQueue.add).toHaveBeenCalledTimes(1);
-    expect(settlementQueue.add).toHaveBeenCalledWith('dispatch', { settlementId: 'settlement-1' });
+    expect(settlementQueue.add).toHaveBeenCalledWith(
+      'dispatch',
+      { settlementId: 'settlement-1' },
+      expect.objectContaining({ attempts: 4 }), // maxAttempts(3) + 1
+    );
     expect((payments[0] as Payment).status).toBe(PaymentStatus.SETTLING);
     expect((payments[1] as Payment).status).toBe(PaymentStatus.SETTLING);
     expect((payments[2] as Payment).status).toBe(PaymentStatus.SETTLING);
@@ -155,7 +168,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p1',
         merchantId: 'merchant-1',
-        amountUsd: 4,
+        amountUsd: '4.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:55:00Z'),
         createdAt: new Date('2026-04-27T09:55:00Z'),
@@ -163,7 +176,7 @@ describe('SettlementsService batching', () => {
       {
         id: 'p2',
         merchantId: 'merchant-1',
-        amountUsd: 5,
+        amountUsd: '5.000000',
         status: PaymentStatus.CONFIRMED,
         confirmedAt: new Date('2026-04-27T09:56:00Z'),
         createdAt: new Date('2026-04-27T09:56:00Z'),
@@ -233,6 +246,7 @@ describe('SettlementsService cache invalidation', () => {
       deps().stellar,
       settlementQueue as any,
       { run: jest.fn() } as unknown as CronJobService,
+      mockRetryConfig as unknown as RetryConfigService,
     );
 
     analytics = deps().analytics;
@@ -368,19 +382,20 @@ describe('SettlementsService executeFiatTransfer', () => {
       stellar,
       settlementQueue as any,
       { run: jest.fn() } as unknown as CronJobService,
+      mockRetryConfig as unknown as RetryConfigService,
     );
 
     jest.restoreAllMocks();
   });
 
   it('marks settlement completed and updates all payments on successful transfer', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-abc',
       payments: [payment],
       status: SettlementStatus.PROCESSING,
-      netAmountUsd: 100,
+      netAmountUsd: '100.000000',
     } as Settlement;
 
     settlementsRepo.findOne.mockResolvedValue(settlement);
@@ -402,13 +417,13 @@ describe('SettlementsService executeFiatTransfer', () => {
   });
 
   it('marks settlement and payments failed on transfer error', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-abc',
       payments: [payment],
       status: SettlementStatus.PROCESSING,
-      netAmountUsd: 100,
+      netAmountUsd: '100.000000',
     } as Settlement;
 
     settlementsRepo.findOne.mockResolvedValue(settlement);
@@ -490,13 +505,14 @@ describe('SettlementsService handlePartnerCallback', () => {
       stellar,
       settlementQueue as any,
       { run: jest.fn() } as unknown as CronJobService,
+      mockRetryConfig as unknown as RetryConfigService,
     );
 
     jest.restoreAllMocks();
   });
 
   it('settles payments and invalidates analytics on successful callback', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',
@@ -520,7 +536,7 @@ describe('SettlementsService handlePartnerCallback', () => {
   });
 
   it('ignores duplicate callback for already-completed settlement', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLED } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLED } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',
@@ -546,7 +562,7 @@ describe('SettlementsService handlePartnerCallback', () => {
   });
 
   it('marks settlement and payments failed on partner-reported failure', async () => {
-    const payment = { id: 'p1', amountUsd: 100, status: PaymentStatus.SETTLING } as Payment;
+    const payment = { id: 'p1', amountUsd: '100.000000', status: PaymentStatus.SETTLING } as Payment;
     const settlement = {
       id: 'settlement-1',
       merchantId: 'merchant-xyz',
@@ -629,6 +645,7 @@ describe('SettlementsService admin methods', () => {
       d.stellar,
       settlementQueue as any,
       { run: jest.fn() } as unknown as CronJobService,
+      mockRetryConfig as unknown as RetryConfigService,
     );
 
     jest.restoreAllMocks();
@@ -674,7 +691,11 @@ describe('SettlementsService admin methods', () => {
       expect(settlement.status).toBe(SettlementStatus.PROCESSING);
       expect(settlement.failureReason).toBeNull();
       expect(payment.status).toBe(PaymentStatus.SETTLING);
-      expect(settlementQueue.add).toHaveBeenCalledWith('dispatch', { settlementId: 's1' });
+      expect(settlementQueue.add).toHaveBeenCalledWith(
+        'dispatch',
+        { settlementId: 's1' },
+        expect.objectContaining({ attempts: 4 }),
+      );
     });
 
     it('rejects retry for non-failed settlement', async () => {
@@ -721,7 +742,11 @@ describe('SettlementsService admin methods', () => {
       expect(settlement.approvedBy).toBe('admin-user-42');
       expect(settlement.approvedAt).toBeInstanceOf(Date);
       expect(payment.status).toBe(PaymentStatus.SETTLING);
-      expect(settlementQueue.add).toHaveBeenCalledWith('dispatch', { settlementId: 's1' });
+      expect(settlementQueue.add).toHaveBeenCalledWith(
+        'dispatch',
+        { settlementId: 's1' },
+        expect.objectContaining({ attempts: 4 }),
+      );
     });
 
     it('rejects approval for non-pending-approval settlement', async () => {

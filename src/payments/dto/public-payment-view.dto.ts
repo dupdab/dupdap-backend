@@ -11,13 +11,13 @@ export class PublicPaymentViewDto {
   reference: string;
 
   @ApiProperty()
-  amountUsd: number;
+  amountUsd: string;
 
   @ApiProperty({ nullable: true })
-  amountXlm: number | null;
+  amountXlm: string | null;
 
   @ApiProperty({ nullable: true })
-  amountUsdc: number | null;
+  amountUsdc: string | null;
 
   @ApiProperty({ nullable: true })
   currency: string | null;

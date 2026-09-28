@@ -33,8 +33,8 @@ describe('PaymentsService', () => {
     merchantId: 'merchant-123',
     reference: 'PAY-123',
     status: PaymentStatus.SETTLED,
-    amountUsd: 100,
-    amountUsdc: 100,
+    amountUsd: '100.000000',
+    amountUsdc: '100.000000',
     customerWalletAddress: 'GDABC...',
     customerEmail: 'customer@example.com',
   };
@@ -130,7 +130,7 @@ describe('PaymentsService', () => {
       const result = await service.refund('payment-123', 'merchant-123', { reason: 'Customer return' });
 
       expect(result.status).toBe(PaymentStatus.REFUNDED);
-      expect(result.refundAmountUsd).toBe(100);
+      expect(result.refundAmountUsd).toBe('100.000000');
       expect(stellar.sendPayment).toHaveBeenCalledWith(
         'GDABC...',
         '100.0000000',
@@ -151,7 +151,7 @@ describe('PaymentsService', () => {
       const result = await service.refund('payment-123', 'merchant-123', { amountUsd: 50, reason: 'Partial return' });
 
       expect(result.status).toBe(PaymentStatus.REFUNDED);
-      expect(result.refundAmountUsd).toBe(50);
+      expect(result.refundAmountUsd).toBe('50.000000');
       expect(stellar.sendPayment).toHaveBeenCalledWith(
         'GDABC...',
         '50.0000000',

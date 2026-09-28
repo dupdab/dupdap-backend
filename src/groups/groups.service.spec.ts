@@ -3,6 +3,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { GroupsService } from './groups.service';
 import { GroupsRepository } from './groups.repository';
 import { StellarService } from '../stellar/stellar.service';
+import { StellarTxQueueService } from '../stellar/stellar-tx-queue.service';
+import { BlockchainWalletService } from '../blockchain-wallet/blockchain-wallet.service';
 import { Group } from './entities/group.entity';
 import { GroupMember, GroupMemberRole } from './entities/group-member.entity';
 
@@ -31,6 +33,8 @@ describe('GroupsService', () => {
   let service: GroupsService;
   let repo: jest.Mocked<GroupsRepository>;
   let stellar: jest.Mocked<StellarService>;
+  let stellarTxQueue: jest.Mocked<StellarTxQueueService>;
+  let blockchainWallet: jest.Mocked<BlockchainWalletService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -57,12 +61,28 @@ describe('GroupsService', () => {
             getBalance: jest.fn(),
           },
         },
+        {
+          provide: StellarTxQueueService,
+          useValue: {
+            submitManageData: jest.fn(),
+          },
+        },
+        {
+          provide: BlockchainWalletService,
+          useValue: {
+            getWallet: jest.fn(),
+          },
+        },
+          },
+        },
       ],
     }).compile();
 
     service = module.get(GroupsService);
     repo = module.get(GroupsRepository);
     stellar = module.get(StellarService);
+    stellarTxQueue = module.get(StellarTxQueueService);
+    blockchainWallet = module.get(BlockchainWalletService);
   });
 
   // ── createGroup ─────────────────────────────────────────────────────────────
@@ -70,7 +90,7 @@ describe('GroupsService', () => {
   describe('createGroup', () => {
     it('creates group and adds creator as owner', async () => {
       const group = mockGroup();
-      jest.spyOn(service as any, 'syncOnChain').mockResolvedValue('tx-hash');
+      stellarTxQueue.submitManageData.mockResolvedValue('tx-hash');
       repo.create.mockReturnValue(group);
       repo.save.mockResolvedValue(group);
       repo.addMember.mockResolvedValue({} as GroupMember);
@@ -78,13 +98,17 @@ describe('GroupsService', () => {
 
       const result = await service.createGroup({ name: 'Test Group' }, 'user-1');
 
+      expect(stellarTxQueue.submitManageData).toHaveBeenCalledWith(
+        'group:user-1',
+        'Test Group',
+      );
       expect(repo.save).toHaveBeenCalled();
       expect(repo.addMember).toHaveBeenCalledWith(group.id, 'user-1', GroupMemberRole.OWNER);
       expect(result.name).toBe('Test Group');
     });
 
     it('throws if on-chain sync fails', async () => {
-      jest.spyOn(service as any, 'syncOnChain').mockRejectedValue(new Error('network error'));
+      stellarTxQueue.submitManageData.mockRejectedValue(new Error('network error'));
       await expect(service.createGroup({ name: 'X' }, 'user-1')).rejects.toThrow(BadRequestException);
     });
   });
@@ -256,6 +280,15 @@ describe('GroupsService', () => {
   });
 
   describe('joinByInviteCode with token gate', () => {
+    const merchantId = 'merchant-uuid-123';
+    const stellarPublicKey = 'GSTELLARKEY1234567890';
+
+    beforeEach(() => {
+      blockchainWallet.getWallet.mockResolvedValue({
+        stellarAddress: stellarPublicKey,
+      } as any);
+    });
+
     it('blocks join if token balance insufficient', async () => {
       const group = mockGroup({
         isTokenGated: true,
@@ -269,7 +302,8 @@ describe('GroupsService', () => {
         { asset_code: 'USDC', asset_issuer: 'GABC', balance: '5.0000000' },
       ]);
 
-      await expect(service.joinByInviteCode('ABCDEF123456', 'GSTELLARKEY')).rejects.toThrow(ForbiddenException);
+      await expect(service.joinByInviteCode('ABCDEF123456', merchantId)).rejects.toThrow(ForbiddenException);
+      expect(blockchainWallet.getWallet).toHaveBeenCalledWith(merchantId);
     });
 
     it('allows join if token balance sufficient', async () => {
@@ -287,7 +321,8 @@ describe('GroupsService', () => {
       repo.addMember.mockResolvedValue({} as GroupMember);
       repo.findByIdWithMembers.mockResolvedValue(group);
 
-      await expect(service.joinByInviteCode('ABCDEF123456', 'GSTELLARKEY')).resolves.toBeDefined();
+      await expect(service.joinByInviteCode('ABCDEF123456', merchantId)).resolves.toBeDefined();
+      expect(blockchainWallet.getWallet).toHaveBeenCalledWith(merchantId);
     });
   });
 
