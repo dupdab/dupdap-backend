@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { QueryAdminPaymentsDto } from './dto/query-admin-payments.dto';
+import { UpdateFeeDto } from './dto/update-fee.dto';
 import { Request, Response } from 'express';
 import { AdminService } from './admin.service';
 import { RatesService } from '../rates/rates.service';
@@ -82,11 +83,11 @@ export class AdminController {
   @Patch('fees')
   @ApiOperation({ summary: 'Update a global fee rate' })
   updateFee(
-    @Body() dto: { feeType: string; newRate: string; reason?: string },
+    @Body() dto: UpdateFeeDto,
     @Req() req: Request & { user: { id: string } },
   ) {
     return this.adminService.updateGlobalFee(
-      dto.feeType as any,
+      dto.feeType,
       dto.newRate,
       req.user.id,
       dto.reason,

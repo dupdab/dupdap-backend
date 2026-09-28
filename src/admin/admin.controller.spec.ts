@@ -162,18 +162,18 @@ describe('AdminController', () => {
 
   describe('updateFee', () => {
     it('should forward fee type, rate, actor id and reason to the service', async () => {
-      const result = { feeType: 'payment', rate: '0.02' };
+      const result = { feeType: 'transfer', rate: '0.02' };
       mockAdminService.updateGlobalFee.mockResolvedValue(result);
       const req: any = { user: { id: 'admin-1' } };
 
       expect(
         await controller.updateFee(
-          { feeType: 'payment', newRate: '0.02', reason: 'promo' },
+          { feeType: 'transfer' as any, newRate: '0.02', reason: 'promo' },
           req,
         ),
       ).toBe(result);
       expect(service.updateGlobalFee).toHaveBeenCalledWith(
-        'payment',
+        'transfer',
         '0.02',
         'admin-1',
         'promo',

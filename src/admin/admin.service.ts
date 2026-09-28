@@ -511,8 +511,18 @@ export class AdminService {
   }
 
   private verifyTotpToken(secret: string, token: string): boolean {
+    if (typeof token !== 'string' || token.length !== 6) {
+      return false;
+    }
     const t = Math.floor(Date.now() / 1000);
-    return [-1, 0, 1].some(w => this.totpCode(secret, t + w * 30) === token);
+    const tokenBuf = Buffer.from(token);
+    return [-1, 0, 1].some((w) => {
+      const expectedBuf = Buffer.from(this.totpCode(secret, t + w * 30));
+      return (
+        expectedBuf.length === tokenBuf.length &&
+        crypto.timingSafeEqual(expectedBuf, tokenBuf)
+      );
+    });
   }
 
   // ── Generic Record Management (#soft-delete) ───────────────────────────────

@@ -1,17 +1,25 @@
-import { Controller, Get, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
-import { IsEnum } from 'class-validator';
+import { Controller, Get, Patch, Param, Body, Query, Req, UseGuards } from '@nestjs/common';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { Request } from 'express';
 import { AmlService } from './aml.service';
 import { AmlFlagStatus } from './entities/aml-flag.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { MerchantRole } from '../merchants/entities/merchant.entity';
+import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 
 export class ReviewFlagDto {
   @IsEnum(AmlFlagStatus)
   status: AmlFlagStatus;
-  reviewedBy: string;
+
+  @IsOptional()
+  @IsString()
   note?: string;
 }
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(IpAllowlistGuard, JwtAuthGuard, RolesGuard)
+@Roles(MerchantRole.ADMIN)
 @Controller('admin/aml')
 export class AmlController {
   constructor(private readonly amlService: AmlService) {}
@@ -32,7 +40,12 @@ export class AmlController {
   }
 
   @Patch(':id/review')
-  review(@Param('id') id: string, @Body() dto: ReviewFlagDto) {
-    return this.amlService.review(id, dto.status, dto.reviewedBy, dto.note);
+  review(
+    @Param('id') id: string,
+    @Body() dto: ReviewFlagDto,
+    @Req() req: Request & { user: { merchantId: string; email?: string } },
+  ) {
+    const reviewedBy = req.user.email ?? req.user.merchantId;
+    return this.amlService.review(id, dto.status, reviewedBy, dto.note);
   }
 }
