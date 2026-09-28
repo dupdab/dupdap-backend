@@ -239,28 +239,15 @@ export class AnalyticsExportService {
       averageBucketVolumeUsd,
       settlementSummary,
       topMetrics: [
-        { label: 'Total volume (USD)', value: this.formatCurrency(totalVolumeUsd) },
+        { label: 'Total Volume (USD)', value: this.formatCurrency(totalVolumeUsd) },
         { label: 'Payments', value: paymentCount.toLocaleString('en-US') },
-        {
-          label: 'Average payment value (USD)',
-          value: this.formatCurrency(averagePaymentValueUsd),
-        },
-        {
-          label: 'Highest volume bucket',
-          value: `${highestVolumeBucket.date} (${this.formatCurrency(
-            highestVolumeBucket.volumeUsd,
-          )})`,
-        },
-        {
-          label: 'Average bucket volume (USD)',
-          value: this.formatCurrency(averageBucketVolumeUsd),
-        },
-        {
-          label: 'Settlements',
-          value: `${settlementSummary.count.toLocaleString('en-US')} (net ${this.formatCurrency(
-            settlementSummary.netUsd,
-          )})`,
-        },
+        { label: 'Average Payment (USD)', value: this.formatCurrency(averagePaymentValueUsd) },
+        { label: 'Highest Volume Day', value: `${highestVolumeBucket.date} (${this.formatCurrency(highestVolumeBucket.volumeUsd)})` },
+        { label: 'Average Daily Volume (USD)', value: this.formatCurrency(averageBucketVolumeUsd) },
+        { label: 'Settlements', value: settlementSummary.count.toLocaleString('en-US') },
+        { label: 'Settled Gross (USD)', value: this.formatCurrency(settlementSummary.grossUsd) },
+        { label: 'Settled Net (USD)', value: this.formatCurrency(settlementSummary.netUsd) },
+        { label: 'Settlement Fees (USD)', value: this.formatCurrency(settlementSummary.feesUsd) },
       ],
     };
   }
@@ -269,86 +256,29 @@ export class AnalyticsExportService {
     exportRecord: AnalyticsExport,
     range: TimeRange,
   ): Promise<ExportMetrics['settlementSummary']> {
-    const query = this.settlementsRepo
+    const qb = this.settlementsRepo
       .createQueryBuilder('settlement')
       .where('settlement.createdAt >= :start', { start: range.start })
       .andWhere('settlement.createdAt < :end', { end: range.endExclusive })
       .andWhere('settlement.status = :status', { status: SettlementStatus.COMPLETED });
 
     if (exportRecord.scope === AnalyticsExportScope.MERCHANT && exportRecord.merchantId) {
-      query.andWhere('settlement.merchantId = :merchantId', {
+      qb.andWhere('settlement.merchantId = :merchantId', {
         merchantId: exportRecord.merchantId,
       });
     }
 
-    const settlements = await query.getMany();
-    const grossUsd = settlements.reduce((sum, item) => sum + Number(item.grossAmount ?? 0), 0);
-    const netUsd = settlements.reduce((sum, item) => sum + Number(item.netAmount ?? 0), 0);
-    const feesUsd = settlements.reduce((sum, item) => sum + Number(item.feeAmount ?? 0), 0);
-
-    return {
-      count: settlements.length,
-      grossUsd,
-      netUsd,
-      feesUsd,
-    };
-  }
-
-  private async buildPdf(metrics: ExportMetrics): Promise<Buffer> {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const PDFDocument = require('pdfkit');
-
-    return new Promise<Buffer>((resolve, reject) => {
-      try {
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
-        const chunks: Buffer[] = [];
-
-        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
-        doc.on('end', () => resolve(Buffer.concat(chunks)));
-        doc.on('error', reject);
-
-        doc.fontSize(20).text('Analytics Report', { align: 'center' });
-        doc.moveDown(0.5);
-        doc.fontSize(12).text(`Merchant: ${metrics.merchantName}`);
-        doc.text(`Period: ${metrics.periodLabel}`);
-        doc.text(`Generated: ${new Date().toISOString()}`);
-        doc.moveDown();
-
-        doc.fontSize(14).text('Summary');
-        doc.moveDown(0.5);
-        doc.fontSize(11);
-        for (const metric of metrics.topMetrics) {
-          doc.text(`${metric.label}: ${metric.value}`);
-        }
-        doc.moveDown();
-
-        doc.fontSize(14).text('Volume Breakdown');
-        doc.moveDown(0.5);
-        doc.fontSize(11);
-        if (metrics.volumeSeries.length === 0) {
-          doc.text('No volume data available for this period.');
-        } else {
-          for (const bucket of metrics.volumeSeries) {
-            doc.text(
-              `${bucket.date}: ${bucket.count.toLocaleString('en-US')} payments, ${this.formatCurrency(
-                bucket.volumeUsd,
-              )}`,
-            );
-          }
-        }
-
-        doc.end();
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
-  private buildFileName(exportRecord: AnalyticsExport, metrics: ExportMetrics): string {
-    const scopeLabel =
-      exportRecord.scope === AnalyticsExportScope.ADMIN ? 'admin' : 'merchant';
-    const safePeriod = metrics.periodLabel.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '');
-    return `analytics-${scopeLabel}-${safePeriod || 'report'}.pdf`;
+    const settlements = await qb.getMany();
+    return settlements.reduce(
+      (summary, settlement) => {
+        summary.count += 1;
+        summary.grossUsd += Number(settlement.grossAmount ?? 0);
+        summary.netUsd += Number(settlement.netAmount ?? 0);
+        summary.feesUsd += Number(settlement.feeAmount ?? 0);
+        return summary;
+      },
+      { count: 0, grossUsd: 0, netUsd: 0, feesUsd: 0 },
+    );
   }
 
   private resolveRange(
@@ -359,42 +289,92 @@ export class AnalyticsExportService {
     const end = dateTo ? new Date(dateTo) : new Date();
     const start = dateFrom
       ? new Date(dateFrom)
-      : this.previousMoment(end, period, 12);
+      : new Date(end.getTime() - (period === 'monthly' ? 365 : 30) * 24 * 60 * 60 * 1000);
 
-    return {
-      start,
-      endExclusive: this.nextMoment(end, period),
-    };
+    return { start, endExclusive: new Date(end.getTime() + 24 * 60 * 60 * 1000) };
   }
 
-  private previousMoment(date: Date, period: AnalyticsPeriod, steps = 1): Date {
-    const result = new Date(date);
-    if (period === 'monthly') {
-      result.setUTCMonth(result.getUTCMonth() - steps);
-    } else {
-      result.setUTCDate(result.getUTCDate() - steps);
-    }
-    return result;
-  }
-
-  private nextMoment(date: Date, period: AnalyticsPeriod): Date {
-    const result = new Date(date);
-    if (period === 'monthly') {
-      result.setUTCMonth(result.getUTCMonth() + 1);
-    } else {
-      result.setUTCDate(result.getUTCDate() + 1);
-    }
-    return result;
+  private previousMoment(date: Date, period: AnalyticsPeriod): Date {
+    const previous = new Date(date);
+    previous.setDate(previous.getDate() - (period === 'monthly' ? 30 : 1));
+    return previous;
   }
 
   private formatRangeLabel(date: Date, period: AnalyticsPeriod): string {
-    if (period === 'monthly') {
-      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-    }
-    return date.toISOString().slice(0, 10);
+    return period === 'monthly'
+      ? `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+      : date.toISOString().slice(0, 10);
   }
 
   private formatCurrency(value: number): string {
     return `$${value.toFixed(2)}`;
+  }
+
+  private buildFileName(exportRecord: AnalyticsExport, metrics: ExportMetrics): string {
+    const safeName = metrics.merchantName
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+    const stamp = new Date().toISOString().slice(0, 10);
+    return `${safeName || 'analytics'}-${metrics.period}-${stamp}.pdf`;
+  }
+
+  private async buildPdf(metrics: ExportMetrics): Promise<Buffer> {
+    const lines: string[] = [];
+    const text = (x: number, y: number, size: number, value: string) => {
+      lines.push(
+        `BT /F1 ${size} Tf ${x} ${y} Td (${this.escapePdfText(value)}) Tj ET`,
+      );
+    };
+
+    text(40, 555, 22, `${metrics.merchantName} Analytics Report`);
+    text(40, 530, 12, `Period: ${metrics.periodLabel}`);
+
+    let cursor = 495;
+    for (const metric of metrics.topMetrics) {
+      text(40, cursor, 12, `${metric.label}: ${metric.value}`);
+      cursor -= 20;
+    }
+
+    const content = lines.join('\n');
+    const objects: string[] = [];
+    objects.push('<< /Type /Catalog /Pages 2 0 R >>');
+    objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+    objects.push(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    );
+    objects.push(
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    );
+    objects.push(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
+
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [];
+    for (let i = 0; i < objects.length; i += 1) {
+      offsets.push(Buffer.byteLength(pdf, 'latin1'));
+      pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+    }
+
+    const xrefOffset = Buffer.byteLength(pdf, 'latin1');
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += '0000000000 65535 f \n';
+    for (const offset of offsets) {
+      pdf += `${offset.toString().padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+    return Buffer.from(pdf, 'latin1');
+  }
+
+  private escapePdfText(value: string): string {
+    return value
+      .replace(/[\u0080-\u00FF]/g, (char) => {
+        const code = char.charCodeAt(0);
+        return `\\${code.toString(8).padStart(3, '0')}`;
+      })
+      .replace(/[^\x20-\x7E]/g, '?')
+      .replace(/\\/g, '\\\\')
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)');
   }
 }
