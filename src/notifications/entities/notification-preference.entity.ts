@@ -40,7 +40,7 @@ export class NotificationPreference {
   @Column({ type: 'enum', enum: NotificationChannel })
   channel: NotificationChannel;
 
-  @Column({ type: 'enum', enum: NotificationEventType })
+  @Column({ name: 'event_type', type: 'enum', enum: NotificationEventType })
   eventType: NotificationEventType;
 
   /**
@@ -50,9 +50,9 @@ export class NotificationPreference {
   @Column({ default: true })
   enabled: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

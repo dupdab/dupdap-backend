@@ -77,7 +77,7 @@ export class NotificationPrefsService {
           eventType: item.eventType,
           enabled,
         })
-        .orUpdate(['enabled', 'updated_at'], ['merchant_id', 'channel', 'event_type'])
+        .orUpdate(['enabled', 'updatedAt'], ['merchant_id', 'channel', 'eventType'])
         .execute();
     }
 
