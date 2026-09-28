@@ -7,6 +7,19 @@ type CacheEnvelope =
   | { v: 1; encoding: 'json'; payload: string }
   | { v: 1; encoding: 'gzip+base64'; payload: string };
 
+export interface SlidingWindowRateLimitOptions {
+  limit: number;
+  windowSeconds: number;
+}
+
+export interface SlidingWindowRateLimitResult {
+  allowed: boolean;
+  limit: number;
+  remaining: number;
+  resetAt: number; // Unix timestamp (seconds)
+  retryAfter?: number; // seconds until reset
+}
+
 /** Channel on which key-invalidation events are broadcast to all instances. */
 export const CACHE_INVALIDATION_CHANNEL = 'cache:invalidate';
 
@@ -32,6 +45,12 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
   private readonly redis: Redis;
   /** Dedicated subscriber connection (ioredis subscriber mode blocks the connection). */
   private readonly subscriber: Redis;
+
+  /**
+   * Process-local sliding-window store used when Redis is unavailable.
+   * Key → timestamped member scores (seconds).
+   */
+  private readonly memoryWindows = new Map<string, Array<{ member: string; score: number }>>();
 
   /** Namespace prefix: "{env}:cache:" */
   readonly ns: string;
@@ -160,5 +179,97 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     const value = await fetchFn();
     await this.set(key, value, { ttlSeconds: options.ttlSeconds });
     return { value, cacheHit: false };
+  }
+
+  /**
+   * Sliding-window rate limiter backed by a Redis sorted set.
+   * Falls back to an in-memory window when Redis is unavailable so API-key
+   * auth degrades gracefully instead of throwing on every request.
+   */
+  async checkSlidingWindowRateLimit(
+    key: string,
+    options: SlidingWindowRateLimitOptions,
+  ): Promise<SlidingWindowRateLimitResult> {
+    try {
+      return await this.checkSlidingWindowRateLimitRedis(key, options);
+    } catch (err) {
+      this.logger.warn(
+        `Redis sliding-window rate limit failed for "${key}"; using in-memory fallback: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return this.checkSlidingWindowRateLimitMemory(key, options);
+    }
+  }
+
+  private async checkSlidingWindowRateLimitRedis(
+    key: string,
+    options: SlidingWindowRateLimitOptions,
+  ): Promise<SlidingWindowRateLimitResult> {
+    const { limit, windowSeconds } = options;
+    const now = Math.floor(Date.now() / 1000);
+    const windowStart = now - windowSeconds;
+    const nsKey = this.k(key);
+
+    await this.redis.zremrangebyscore(nsKey, '-inf', windowStart);
+    const count = await this.redis.zcard(nsKey);
+
+    if (count >= limit) {
+      const oldest = await this.redis.zrange(nsKey, 0, 0, 'WITHSCORES');
+      const oldestScore = oldest.length >= 2 ? parseInt(oldest[1], 10) : now;
+      const resetAt = oldestScore + windowSeconds;
+      return {
+        allowed: false,
+        limit,
+        remaining: 0,
+        resetAt,
+        retryAfter: Math.max(resetAt - now, 0),
+      };
+    }
+
+    await this.redis.zadd(nsKey, now, `${now}-${Math.random()}`);
+    await this.redis.expire(nsKey, windowSeconds);
+
+    return {
+      allowed: true,
+      limit,
+      remaining: limit - count - 1,
+      resetAt: now + windowSeconds,
+    };
+  }
+
+  private checkSlidingWindowRateLimitMemory(
+    key: string,
+    options: SlidingWindowRateLimitOptions,
+  ): SlidingWindowRateLimitResult {
+    const { limit, windowSeconds } = options;
+    const now = Math.floor(Date.now() / 1000);
+    const windowStart = now - windowSeconds;
+    const nsKey = this.k(key);
+
+    const entries = (this.memoryWindows.get(nsKey) ?? []).filter((e) => e.score > windowStart);
+
+    if (entries.length >= limit) {
+      const oldestScore = entries.reduce((min, e) => Math.min(min, e.score), entries[0].score);
+      const resetAt = oldestScore + windowSeconds;
+      this.memoryWindows.set(nsKey, entries);
+      return {
+        allowed: false,
+        limit,
+        remaining: 0,
+        resetAt,
+        retryAfter: Math.max(resetAt - now, 0),
+      };
+    }
+
+    entries.push({ member: `${now}-${Math.random()}`, score: now });
+    this.memoryWindows.set(nsKey, entries);
+
+    return {
+      allowed: true,
+      limit,
+      remaining: limit - entries.length,
+      resetAt: now + windowSeconds,
+    };
   }
 }

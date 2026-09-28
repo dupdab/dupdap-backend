@@ -24,43 +24,19 @@ export class RateLimitService {
 
   async checkApiKeyRateLimit(merchantId: string, role: string): Promise<RateLimitResult> {
     const limit = RATE_LIMITS[role] ?? RATE_LIMITS['merchant'];
-    const now = Math.floor(Date.now() / 1000);
-    const windowStart = now - WINDOW_SECONDS;
     const key = `ratelimit:apikey:${merchantId}`;
 
-    // Sliding window using Redis sorted set
-    const redis = (this.cache as any).redis;
-
-    // Remove entries outside the current window
-    await redis.zremrangebyscore(key, '-inf', windowStart);
-
-    // Count requests in current window
-    const count: number = await redis.zcard(key);
-
-    if (count >= limit) {
-      // Get oldest entry to calculate reset time
-      const oldest = await redis.zrange(key, 0, 0, 'WITHSCORES');
-      const oldestScore = oldest.length >= 2 ? parseInt(oldest[1], 10) : now;
-      const resetAt = oldestScore + WINDOW_SECONDS;
-      return {
-        allowed: false,
-        limit,
-        remaining: 0,
-        resetAt,
-        retryAfter: resetAt - now,
-      };
-    }
-
-    // Add current request with timestamp as score
-    await redis.zadd(key, now, `${now}-${Math.random()}`);
-    await redis.expire(key, WINDOW_SECONDS);
-
-    const resetAt = now + WINDOW_SECONDS;
-    return {
-      allowed: true,
+    const result = await this.cache.checkSlidingWindowRateLimit(key, {
       limit,
-      remaining: limit - count - 1,
-      resetAt,
+      windowSeconds: WINDOW_SECONDS,
+    });
+
+    return {
+      allowed: result.allowed,
+      limit: result.limit,
+      remaining: result.remaining,
+      resetAt: result.resetAt,
+      ...(result.retryAfter !== undefined ? { retryAfter: result.retryAfter } : {}),
     };
   }
 }
