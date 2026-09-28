@@ -121,10 +121,11 @@ export class CronAdminController {
       await this.jobRegistry.trigger(jobName);
       return { triggered: true, jobName };
     } catch (error) {
-      throw new InternalServerErrorException(
-        `Failed to trigger job: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('not found')) {
+        throw new BadRequestException(message);
+      }
+      throw new InternalServerErrorException(`Failed to trigger job: ${message}`);
     }
   }
 }
-

@@ -5,14 +5,6 @@ import { SettlementsService } from '../settlements/settlements.service';
 import { UptimeHeartbeatService } from './uptime-heartbeat.service';
 import { QueueMetricsService } from '../queues/queue-metrics.service';
 
-const KNOWN_JOBS = [
-  'notification-purge',
-  'soroban-event-indexer',
-  'batch-small-confirmed-payments',
-  'uptime-heartbeat',
-  'queue-metrics-check',
-];
-
 @Injectable()
 export class CronJobRegistry {
   private readonly logger = new Logger(CronJobRegistry.name);
@@ -52,8 +44,9 @@ export class CronJobRegistry {
   getRegisteredJobs(): string[] {
     const availableJobs = Array.from(this.jobs.keys());
     if (availableJobs.length === 0) {
-      this.logger.warn('No jobs registered in CronJobRegistry; falling back to known jobs list');
-      return KNOWN_JOBS;
+      this.logger.warn(
+        'No jobs registered in CronJobRegistry; all job dependencies were unavailable',
+      );
     }
     return availableJobs;
   }
@@ -61,8 +54,23 @@ export class CronJobRegistry {
   async trigger(jobName: string): Promise<void> {
     const fn = this.jobs.get(jobName);
     if (!fn) {
-      throw new Error(`Job not found: ${jobName}`);
+      if (this.isKnownJobName(jobName)) {
+        throw new Error(
+          `Job not registered: ${jobName} (its dependency was unavailable at startup)`,
+        );
+      }
+      throw new Error(`Unknown job name: ${jobName}`);
     }
     await fn();
+  }
+
+  private isKnownJobName(jobName: string): boolean {
+    return [
+      'notification-purge',
+      'soroban-event-indexer',
+      'batch-small-confirmed-payments',
+      'uptime-heartbeat',
+      'queue-metrics-check',
+    ].includes(jobName);
   }
 }
