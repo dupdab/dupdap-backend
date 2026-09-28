@@ -129,6 +129,7 @@ export class Merchant {
   @Column({ default: false })
   sandboxMode: boolean;
 
+  @Exclude()
   @Column({ nullable: true })
   totpSecret: string | null;
 

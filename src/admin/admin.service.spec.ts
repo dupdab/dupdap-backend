@@ -7,7 +7,6 @@ import { Payment } from '../payments/entities/payment.entity';
 import { Settlement } from '../settlements/entities/settlement.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
-import { Settlement } from '../settlements/entities/settlement.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { FilterService } from '../common/filter.service';
 import { CacheService } from '../cache/cache.service';

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { instanceToPlain } from 'class-transformer';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { Merchant, MerchantStatus, MerchantRole } from '../merchants/entities/merchant.entity';
@@ -59,7 +60,7 @@ export class AdminService {
       actor: entry.actor ?? 'system',
       action: entry.action,
       resourceType: entry.resourceType,
-      resourceId: entry.resourceId ?? null,
+      resourceId: entry.resourceId ?? undefined,
       details: entry.details ?? null,
     });
     await this.auditLogRepo.save(log);
@@ -190,9 +191,16 @@ export class AdminService {
     };
   }
 
+  /**
+   * Serialize a Merchant through class-transformer so @Exclude() / @Transform()
+   * on the entity (passwordHash, apiKeyHash, totpSecret, bankAccountNumber, …)
+   * are applied. Manual destructuring is avoided — it drifts from the entity
+   * masks and also downgrades class instances to plain objects that skip transforms.
+   */
   private sanitize(merchant: Merchant) {
-    const { passwordHash, apiKeyHash, ...rest } = merchant as any;
-    return rest;
+    const instance =
+      merchant instanceof Merchant ? merchant : Object.assign(new Merchant(), merchant);
+    return instanceToPlain(instance);
   }
 
   // ── Fee Management ─────────────────────────────────────────────────────────
@@ -437,7 +445,7 @@ export class AdminService {
     const rows = data.map(row =>
       columns
         .map(col => {
-          const val = (row as Record<string, unknown>)[col];
+          const val = (row as unknown as Record<string, unknown>)[col];
           return this.csvField(val);
         })
         .join(','),

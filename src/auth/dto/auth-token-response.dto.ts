@@ -8,7 +8,7 @@ export class AuthTokenResponseDto {
   @ApiProperty({
     type: 'object',
     additionalProperties: true,
-    description: 'Merchant profile (password and key hashes stripped)',
+    description: 'Merchant profile (password/key hashes and totpSecret stripped via @Exclude)',
   })
   merchant!: Merchant;
 }
