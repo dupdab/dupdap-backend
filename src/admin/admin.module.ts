@@ -34,6 +34,6 @@ import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
   ],
   controllers: [AdminController, CronAdminController],
   providers: [AdminService, IpAllowlistGuard],
-  exports: [AdminService],
+  exports: [AdminService, TypeOrmModule],
 })
 export class AdminModule {}

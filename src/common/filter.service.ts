@@ -19,7 +19,11 @@ export class FilterService {
         throw new BadRequestException(`Invalid filter field: ${field}`);
       }
 
-      const value = query[key];
+      const rawValue = query[key];
+      // Express parses repeated query keys (e.g. ?status_in=a&status_in=b) into an
+      // array. Normalize to a comma-separated string so operators like 'in' and
+      // 'between' don't throw a raw TypeError on .split.
+      const value = Array.isArray(rawValue) ? rawValue.join(',') : rawValue;
 
       switch (op) {
         case 'eq':

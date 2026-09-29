@@ -272,4 +272,31 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
       resetAt: now + windowSeconds,
     };
   }
+
+  // ── Distributed locks ──────────────────────────────────────────────────────
+
+  /**
+   * Attempt to acquire a distributed lock keyed on `key` using Redis `SET NX PX`.
+   * Returns a unique token when the lock is acquired, or `undefined` when it is
+   * already held by another caller/instance.
+   */
+  async acquireLock(key: string, ttlMs: number): Promise<string | undefined> {
+    const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const result = await this.redis.set(this.k(`lock:${key}`), token, 'PX', ttlMs, 'NX');
+    return result === 'OK' ? token : undefined;
+  }
+
+  /**
+   * Release a previously acquired lock. Only deletes the key when the stored
+   * token still matches, so a lock that already expired and was re-acquired by
+   * another caller is not released by mistake.
+   */
+  async releaseLock(key: string, token: string): Promise<void> {
+    const nsKey = this.k(`lock:${key}`);
+    const current = await this.redis.get(nsKey);
+    if (current === token) {
+      await this.redis.del(nsKey);
+    }
+  }
+  }
 }

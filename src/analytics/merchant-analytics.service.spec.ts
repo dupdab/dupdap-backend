@@ -125,4 +125,36 @@ describe('MerchantAnalyticsService', () => {
       expect(mockDataSource.query).toHaveBeenCalledTimes(1); // Should only query once due to caching
     });
   });
+
+  describe('getMetrics', () => {
+    it('should query the merchants table and not the vestigial users/sessions tables', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+
+      await service.getMetrics('30d');
+
+      const queries = mockDataSource.query.mock.calls.map((call) => call[0] as string);
+      expect(queries.length).toBeGreaterThan(0);
+
+      for (const sql of queries) {
+        expect(sql).toContain('merchants');
+        expect(sql).not.toMatch(/\busers\b/);
+        expect(sql).not.toMatch(/\bsessions\b/);
+        expect(sql).not.toContain('is_admin');
+        expect(sql).not.toContain('is_treasury');
+      }
+    });
+
+    it('should return the expected metrics shape', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+
+      const result = await service.getMetrics('30d');
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          period: '30d',
+          generatedAt: expect.any(String),
+        }),
+      );
+    });
+  });
 });

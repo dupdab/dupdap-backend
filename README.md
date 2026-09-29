@@ -320,3 +320,6 @@ CI also runs migration safety/rollback checks, an uncommitted-migration check, a
 
 <!-- handsoff-issue-340 -->
 - #340: RuntimeConfigService.get() passes a raw number instead of {ttlSeconds} to CacheService.set, silently caching config for 24h instead of 60s
+
+<!-- handsoff-issue-137 -->
+- #137: SorobanService contract calls are all TODO stubs, not real contract invocations

@@ -7,6 +7,8 @@ import {
   HttpHealthIndicator,
 } from '@nestjs/terminus';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { CacheService } from '../cache/cache.service';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -22,6 +24,7 @@ export class HealthController {
     private http: HttpHealthIndicator,
     private config: ConfigService,
     private cache: CacheService,
+    @InjectQueue('webhook-delivery') private webhookQueue: Queue,
   ) {}
 
   @Get()
@@ -233,24 +236,25 @@ export class HealthController {
   private async checkQueue(): Promise<{ status: string; latency: number }> {
     const startTime = Date.now();
     try {
-      // Check if queue system is configured
-      const queueUrl = this.config.get('QUEUE_URL');
-      if (!queueUrl) {
+      // Verify the Bull/Redis queue backend is connected and responsive.
+      // `isReady()` reflects the underlying Redis connection state, and
+      // `client.ping()` confirms the connection actually answers commands.
+      if (!this.webhookQueue.isReady()) {
         return {
-          status: 'ok', // Not configured, so not critical
-          latency: 0,
+          status: 'down',
+          latency: Date.now() - startTime,
         };
       }
 
-      // For now, return ok since queue isn't implemented yet
-      // TODO: Implement actual queue health check when queue system is added
+      await this.webhookQueue.client.ping();
+      const latency = Date.now() - startTime;
       return {
-        status: 'ok',
-        latency: Date.now() - startTime,
+        status: latency > 1000 ? 'degraded' : 'ok',
+        latency,
       };
     } catch (error) {
       return {
-        status: 'degraded',
+        status: 'down',
         latency: Date.now() - startTime,
       };
     }
@@ -261,26 +265,10 @@ export class HealthController {
   ): { status: string; latency: number } {
     if (result.status === 'fulfilled') {
       return result.value;
-    } else {
-      return {
-        status: 'down',
-        latency: 0,
-      };
     }
-  }
-
-  @Get('ready')
-  @HealthCheck()
-  @ApiOperation({ summary: 'Readiness — checks DB and Stellar' })
-  readiness() {
-    const horizonUrl = this.config.get(
-      'STELLAR_HORIZON_URL',
-      'https://horizon-testnet.stellar.org',
-    );
-
-    return this.health.check([
-      () => this.db.pingCheck('database'),
-      () => this.http.pingCheck('stellar', `${horizonUrl}/`),
-    ]);
+    return {
+      status: 'down',
+      latency: 0,
+    };
   }
 }
