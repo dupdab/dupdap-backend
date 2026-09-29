@@ -26,13 +26,6 @@ export enum PaymentStatus {
 
 export enum PaymentNetwork {
   STELLAR = 'stellar',
-  POLYGON = 'polygon',
-  BASE = 'base',
-  CELO = 'celo',
-  ARBITRUM = 'arbitrum',
-  OPTIMISM = 'optimism',
-  STARKNET = 'starknet',
-  STACKS = 'stacks',
 }
 
 @Entity('payments')
