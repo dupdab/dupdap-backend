@@ -1,15 +1,3 @@
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
-import { RateLimitService } from './rate-limit.service';
-import { ApiKeyRateLimitGuard } from './guards/api-key-rate-limit.guard';
 import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -20,6 +8,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { RateLimitService } from './rate-limit.service';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { CacheModule } from '../cache/cache.module';
 
@@ -32,14 +21,14 @@ import { CacheModule } from '../cache/cache.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({
-        secret: config.get('JWT_SECRET', 'fallback-secret'),
+        secret: config.getOrThrow<string>('JWT_SECRET'),
         signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '7d') },
       }),
       inject: [ConfigService],
     }),
   ],
   controllers: [AuthController],
-  providers: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
-  exports: [RateLimitService, ApiKeyRateLimitGuard, RateLimitService, ApiKeyRateLimitGuard, AuthService, JwtAuthGuard, RolesGuard],
+  providers: [RateLimitService, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
+  exports: [RateLimitService, AuthService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

@@ -66,8 +66,8 @@ merchant sees the settlement in the dashboard
 | `aml/` | Anti-money-laundering checks |
 | `groups/` | Merchant grouping/org structures |
 | `notifications/`, `email/` | Notification preferences and email delivery (SMTP/SendGrid) |
-| `queues/`, `queue/`, `retry/` | Bull/Redis queue definitions and per-queue retry policies |
-| `cache/` | Redis-backed caching (with in-memory fallback) |
+| `queues/`, `retry/` | Bull/Redis queue definitions and per-queue retry policies |
+| `cache/` | Redis-backed caching (requires a reachable Redis instance) |
 | `cron/` | Scheduled jobs |
 | `backup/` | Database backup to S3 |
 | `audit/` | Audit logging for compliance |
@@ -320,3 +320,6 @@ CI also runs migration safety/rollback checks, an uncommitted-migration check, a
 
 <!-- handsoff-issue-340 -->
 - #340: RuntimeConfigService.get() passes a raw number instead of {ttlSeconds} to CacheService.set, silently caching config for 24h instead of 60s
+
+<!-- handsoff-issue-137 -->
+- #137: SorobanService contract calls are all TODO stubs, not real contract invocations

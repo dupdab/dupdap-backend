@@ -85,30 +85,6 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
   }
 }
 
-@Processor(QUEUE_NAMES.webhook)
-export class WebhookQueueProcessor extends BaseQueueProcessor {
-  constructor() {
-    super(WebhookQueueProcessor.name);
-  }
-
-  @Process(DEFAULT_QUEUE_JOB)
-  handle(job: Job<QueueDispatchPayload>): void {
-    this.logJob(job);
-  }
-}
-
-@Processor(QUEUE_NAMES.notification)
-export class NotificationQueueProcessor extends BaseQueueProcessor {
-  constructor() {
-    super(NotificationQueueProcessor.name);
-  }
-
-  @Process(DEFAULT_QUEUE_JOB)
-  handle(job: Job<QueueDispatchPayload>): void {
-    this.logJob(job);
-  }
-}
-
 @Processor(QUEUE_NAMES.stellarMonitor)
 export class StellarMonitorQueueProcessor extends BaseQueueProcessor {
   constructor(

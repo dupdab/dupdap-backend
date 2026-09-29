@@ -10,7 +10,7 @@ import { QueueConfigService } from "../config/queue-config.service";
 import {
   WEBHOOK_DELIVERY_JOB,
   WEBHOOK_DELIVERY_QUEUE,
-} from "../queue/queue.constants";
+} from "../queues/queue.constants";
 import { Webhook } from "./entities/webhook.entity";
 import { WebhookDeliveryLog } from "./entities/webhook-delivery-log.entity";
 import { Merchant } from "../merchants/entities/merchant.entity";

@@ -10,6 +10,11 @@ function makeMockRedis() {
     subscribe: jest.fn().mockResolvedValue(undefined),
     on: jest.fn(),
     quit: jest.fn().mockResolvedValue(undefined),
+    zremrangebyscore: jest.fn().mockResolvedValue(0),
+    zcard: jest.fn().mockResolvedValue(0),
+    zrange: jest.fn().mockResolvedValue([]),
+    zadd: jest.fn().mockResolvedValue(1),
+    expire: jest.fn().mockResolvedValue(1),
   };
 }
 
@@ -21,7 +26,7 @@ describe('CacheService', () => {
   beforeEach(async () => {
     redis = makeMockRedis();
     subscriber = makeMockRedis();
-    service = new CacheService(redis as any, subscriber as any);
+    service = new CacheService(undefined, redis as any, subscriber as any);
     await service.onModuleInit();
   });
 
@@ -111,6 +116,63 @@ describe('CacheService', () => {
 
     it('registers a message handler on the subscriber', () => {
       expect(subscriber.on).toHaveBeenCalledWith('message', expect.any(Function));
+    });
+  });
+
+  describe('checkSlidingWindowRateLimit', () => {
+    it('allows a request under the limit and records it in Redis', async () => {
+      redis.zcard.mockResolvedValue(2);
+
+      const result = await service.checkSlidingWindowRateLimit('ratelimit:apikey:m1', {
+        limit: 10,
+        windowSeconds: 3600,
+      });
+
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(10);
+      expect(result.remaining).toBe(7);
+      expect(redis.zremrangebyscore).toHaveBeenCalledWith(`${ns}ratelimit:apikey:m1`, '-inf', expect.any(Number));
+      expect(redis.zadd).toHaveBeenCalled();
+      expect(redis.expire).toHaveBeenCalledWith(`${ns}ratelimit:apikey:m1`, 3600);
+    });
+
+    it('denies when the window is full and reports retryAfter', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      redis.zcard.mockResolvedValue(3);
+      redis.zrange.mockResolvedValue(['old', String(now - 100)]);
+
+      const result = await service.checkSlidingWindowRateLimit('ratelimit:apikey:m1', {
+        limit: 3,
+        windowSeconds: 3600,
+      });
+
+      expect(result.allowed).toBe(false);
+      expect(result.remaining).toBe(0);
+      expect(result.resetAt).toBe(now - 100 + 3600);
+      expect(result.retryAfter).toBeGreaterThan(0);
+      expect(redis.zadd).not.toHaveBeenCalled();
+    });
+
+    it('falls back to in-memory when Redis throws', async () => {
+      redis.zremrangebyscore.mockRejectedValue(new Error('redis down'));
+
+      const first = await service.checkSlidingWindowRateLimit('ratelimit:apikey:m2', {
+        limit: 2,
+        windowSeconds: 3600,
+      });
+      const second = await service.checkSlidingWindowRateLimit('ratelimit:apikey:m2', {
+        limit: 2,
+        windowSeconds: 3600,
+      });
+      const third = await service.checkSlidingWindowRateLimit('ratelimit:apikey:m2', {
+        limit: 2,
+        windowSeconds: 3600,
+      });
+
+      expect(first.allowed).toBe(true);
+      expect(second.allowed).toBe(true);
+      expect(third.allowed).toBe(false);
+      expect(third.remaining).toBe(0);
     });
   });
 });

@@ -7,7 +7,9 @@ import {
   ApiConflictResponse,
   ApiUnauthorizedResponse,
   ApiBearerAuth,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -53,10 +55,12 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Merchant login' })
   @ApiResponse({ status: 200, description: 'Authenticated', type: AuthTokenResponseDto })
   @ApiBadRequestResponse({ description: 'Validation failed' })
-  @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
+  @ApiUnauthorizedResponse({ description: 'Invalid credentials or account locked' })
+  @ApiTooManyRequestsResponse({ description: 'IP rate limit exceeded' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   login(@Body() dto: LoginDto): Promise<AuthTokenResponseDto> {
     return this.authService.login(dto);

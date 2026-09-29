@@ -5,7 +5,7 @@ import { Transform } from 'class-transformer';
 export class CreateWebhookDto {
   @ApiProperty({ example: 'https://example.com/webhooks/dupdub' })
   @IsString()
-  @IsUrl({ require_protocol: true, require_tld: false })
+  @IsUrl({ protocols: ['https'], require_protocol: true, require_tld: false })
   @Transform(({ value }) => value?.trim())
   url!: string;
 

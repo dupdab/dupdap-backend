@@ -23,6 +23,7 @@ const mockAuthService = {
 
 const mockConfigService = {
   get: jest.fn().mockReturnValue('test-jwt-secret'),
+  getOrThrow: jest.fn().mockReturnValue('test-jwt-secret'),
 };
 
 const basePayload = () => ({
@@ -40,6 +41,7 @@ describe('JwtStrategy', () => {
     jest.clearAllMocks();
     mockCacheService.set.mockResolvedValue(undefined);
     mockConfigService.get.mockReturnValue('test-jwt-secret');
+    mockConfigService.getOrThrow.mockReturnValue('test-jwt-secret');
     mockAuthService.isBlacklisted.mockResolvedValue(false);
 
     const module: TestingModule = await Test.createTestingModule({

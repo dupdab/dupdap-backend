@@ -1,13 +1,16 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
+import { instanceToPlain } from 'class-transformer';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { CacheService } from '../cache/cache.service';
 
 jest.mock('bcrypt');
+jest.mock('@nestjs/typeorm', () => ({
+  InjectRepository: () => () => undefined,
+  getRepositoryToken: (entity: unknown) => entity,
+}));
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -26,23 +29,21 @@ describe('AuthService', () => {
   const mockCacheService = {
     get: jest.fn(),
     set: jest.fn().mockResolvedValue(undefined),
+    del: jest.fn().mockResolvedValue(undefined),
   };
 
-  beforeEach(async () => {
+  beforeEach(() => {
     jest.clearAllMocks();
     mockJwtService.sign.mockReturnValue('signed-jwt-token');
     mockCacheService.set.mockResolvedValue(undefined);
+    mockCacheService.del.mockResolvedValue(undefined);
+    mockCacheService.get.mockResolvedValue(undefined);
 
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AuthService,
-        { provide: getRepositoryToken(Merchant), useValue: mockMerchantsRepo },
-        { provide: JwtService, useValue: mockJwtService },
-        { provide: CacheService, useValue: mockCacheService },
-      ],
-    }).compile();
-
-    service = module.get<AuthService>(AuthService);
+    service = new AuthService(
+      mockMerchantsRepo as any,
+      mockJwtService as unknown as JwtService,
+      mockCacheService as unknown as CacheService,
+    );
   });
 
   describe('register', () => {
@@ -57,7 +58,11 @@ describe('AuthService', () => {
       (bcrypt.hash as jest.Mock).mockResolvedValueOnce('hashed-password');
       const created = { email: dto.email, businessName: dto.businessName, passwordHash: 'hashed-password' };
       mockMerchantsRepo.create.mockReturnValueOnce(created);
-      const saved = { id: 'm1', email: dto.email, role: 'merchant', ...created };
+      const saved = Object.assign(new Merchant(), {
+        id: 'm1',
+        role: 'merchant',
+        ...created,
+      });
       mockMerchantsRepo.save.mockResolvedValueOnce(saved);
 
       const result = await service.register(dto as any);
@@ -72,6 +77,29 @@ describe('AuthService', () => {
 
       await expect(service.register(dto as any)).rejects.toThrow(ConflictException);
       expect(mockMerchantsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('strips totpSecret and passwordHash when the register merchant is serialized', async () => {
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(null);
+      (bcrypt.hash as jest.Mock).mockResolvedValueOnce('hashed-password');
+      const created = { email: dto.email, businessName: dto.businessName, passwordHash: 'hashed-password' };
+      mockMerchantsRepo.create.mockReturnValueOnce(created);
+      const saved = Object.assign(new Merchant(), {
+        id: 'm1',
+        email: dto.email,
+        role: 'merchant',
+        passwordHash: 'hashed-password',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+        totpEnabled: true,
+      });
+      mockMerchantsRepo.save.mockResolvedValueOnce(saved);
+
+      const result = await service.register(dto as any);
+      const serialized = instanceToPlain(result.merchant);
+
+      expect(serialized).not.toHaveProperty('totpSecret');
+      expect(serialized).not.toHaveProperty('passwordHash');
+      expect(serialized).not.toHaveProperty('apiKeyHash');
     });
   });
 
@@ -93,12 +121,42 @@ describe('AuthService', () => {
 
       expect(bcrypt.compare).toHaveBeenCalledWith(dto.password, merchant.passwordHash);
       expect(result).toEqual({ accessToken: 'signed-jwt-token', merchant });
+      expect(mockCacheService.del).toHaveBeenCalledWith('auth:failed:merchant@example.com');
+    });
+
+    it('strips totpSecret from the login merchant when ClassSerializerInterceptor serializes it', async () => {
+      const merchant = Object.assign(new Merchant(), {
+        id: 'm1',
+        email: dto.email,
+        role: 'merchant',
+        passwordHash: 'hashed-password',
+        status: MerchantStatus.ACTIVE,
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+        totpEnabled: true,
+        apiKeyHash: 'api-hash',
+      });
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(merchant);
+      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
+
+      const result = await service.login(dto as any);
+      const serialized = instanceToPlain(result.merchant);
+
+      expect(serialized).not.toHaveProperty('totpSecret');
+      expect(serialized).not.toHaveProperty('passwordHash');
+      expect(serialized).not.toHaveProperty('apiKeyHash');
+      expect(serialized.email).toBe(dto.email);
+      expect(serialized.totpEnabled).toBe(true);
     });
 
     it('throws UnauthorizedException when the merchant does not exist', async () => {
       mockMerchantsRepo.findOne.mockResolvedValueOnce(null);
 
       await expect(service.login(dto as any)).rejects.toThrow(UnauthorizedException);
+      expect(mockCacheService.set).toHaveBeenCalledWith(
+        'auth:failed:merchant@example.com',
+        1,
+        { ttlSeconds: 15 * 60 },
+      );
     });
 
     it('throws UnauthorizedException when the password does not match', async () => {
@@ -111,13 +169,43 @@ describe('AuthService', () => {
 
       await expect(service.login(dto as any)).rejects.toThrow(UnauthorizedException);
     });
+
+    it('rejects login while the account is locked out', async () => {
+      mockCacheService.get.mockResolvedValueOnce(true);
+
+      await expect(service.login(dto as any)).rejects.toThrow(/temporarily locked/i);
+      expect(mockMerchantsRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('locks the account after 5 failed password attempts', async () => {
+      mockMerchantsRepo.findOne.mockResolvedValue({
+        id: 'm1',
+        email: dto.email,
+        passwordHash: 'hashed-password',
+      });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+      mockCacheService.get
+        .mockResolvedValueOnce(undefined) // not locked
+        .mockResolvedValueOnce(4); // already 4 failures
+
+      await expect(service.login(dto as any)).rejects.toThrow(UnauthorizedException);
+
+      expect(mockCacheService.set).toHaveBeenCalledWith(
+        'auth:lockout:merchant@example.com',
+        true,
+        { ttlSeconds: 15 * 60 },
+      );
+      expect(mockCacheService.del).toHaveBeenCalledWith('auth:failed:merchant@example.com');
+    });
   });
 
   describe('logout / isBlacklisted', () => {
     it('writes a blacklist cache entry with the given TTL on logout', async () => {
       await service.logout('session-1', 120);
 
-      expect(mockCacheService.set).toHaveBeenCalledWith('session:blacklist:session-1', true, { ttlSeconds: 120 });
+      expect(mockCacheService.set).toHaveBeenCalledWith('session:blacklist:session-1', true, {
+        ttlSeconds: 120,
+      });
     });
 
     it('reports blacklisted when the cache entry is true', async () => {
@@ -136,22 +224,17 @@ describe('AuthService', () => {
 
   describe('findMerchantByApiKey', () => {
     it('returns the merchant whose api key hash matches', async () => {
-      const merchants = [
-        { id: 'm1', apiKeyHash: 'hash-1' },
-        { id: 'm2', apiKeyHash: 'hash-2' },
-      ];
-      mockMerchantsRepo.find.mockResolvedValueOnce(merchants);
-      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const merchant = { id: 'm1', apiKeyHash: 'hash-1', apiKeyLookupHash: 'lookup' };
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(merchant);
+      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
 
       const result = await service.findMerchantByApiKey('raw-key');
 
-      expect(result).toBe(merchants[1]);
+      expect(result).toBe(merchant);
     });
 
     it('returns null when no merchant matches the raw key', async () => {
-      const merchants = [{ id: 'm1', apiKeyHash: 'hash-1' }];
-      mockMerchantsRepo.find.mockResolvedValueOnce(merchants);
-      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(false);
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(null);
 
       const result = await service.findMerchantByApiKey('raw-key');
 

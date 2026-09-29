@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { instanceToPlain } from 'class-transformer';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { Merchant, MerchantStatus, MerchantRole } from '../merchants/entities/merchant.entity';
@@ -13,7 +14,7 @@ import { Payment } from '../payments/entities/payment.entity';
 import { Settlement, SettlementStatus } from '../settlements/entities/settlement.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
-import { AuditLog } from './entities/audit-log.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 import { FilterService } from '../common/filter.service';
 import { PaginationDto, PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { CacheService } from '../cache/cache.service';
@@ -55,11 +56,13 @@ export class AdminService {
     resourceId?: string | null;
     details?: Record<string, any> | null;
   }): Promise<void> {
+    // Map admin-shaped fields onto the migrated audit_logs schema
+    // (actor, action, resource, before, after, ip) — see CreateAuditLogTable.
     const log = this.auditLogRepo.create({
       actor: entry.actor ?? 'system',
       action: entry.action,
       resourceType: entry.resourceType,
-      resourceId: entry.resourceId ?? null,
+      resourceId: entry.resourceId ?? undefined,
       details: entry.details ?? null,
     });
     await this.auditLogRepo.save(log);
@@ -190,9 +193,16 @@ export class AdminService {
     };
   }
 
+  /**
+   * Serialize a Merchant through class-transformer so @Exclude() / @Transform()
+   * on the entity (passwordHash, apiKeyHash, totpSecret, bankAccountNumber, …)
+   * are applied. Manual destructuring is avoided — it drifts from the entity
+   * masks and also downgrades class instances to plain objects that skip transforms.
+   */
   private sanitize(merchant: Merchant) {
-    const { passwordHash, apiKeyHash, ...rest } = merchant as any;
-    return rest;
+    const instance =
+      merchant instanceof Merchant ? merchant : Object.assign(new Merchant(), merchant);
+    return instanceToPlain(instance);
   }
 
   // ── Fee Management ─────────────────────────────────────────────────────────
@@ -407,7 +417,7 @@ export class AdminService {
     pagination: PaginationDto,
     exportCsv = false,
   ): Promise<PaginatedResponseDto<AuditLog> | string> {
-    const allowedFields = ['actor', 'action', 'resourceType', 'createdAt'];
+    const allowedFields = ['actor', 'action', 'resource', 'createdAt'];
     const where = this.filterService.buildWhereConditions(query, allowedFields);
 
     if (exportCsv) {
@@ -429,7 +439,7 @@ export class AdminService {
   }
 
   private toCsv(data: AuditLog[]): string {
-    const columns = ['id', 'actor', 'action', 'resourceType', 'resourceId', 'details', 'createdAt'];
+    const columns = ['id', 'actor', 'action', 'resource', 'before', 'after', 'ip', 'createdAt'];
     const headerLine = columns.map(c => this.csvField(c)).join(',');
 
     if (data.length === 0) return headerLine + '\n';
@@ -437,7 +447,7 @@ export class AdminService {
     const rows = data.map(row =>
       columns
         .map(col => {
-          const val = (row as Record<string, unknown>)[col];
+          const val = (row as unknown as Record<string, unknown>)[col];
           return this.csvField(val);
         })
         .join(','),
@@ -511,8 +521,18 @@ export class AdminService {
   }
 
   private verifyTotpToken(secret: string, token: string): boolean {
+    if (typeof token !== 'string' || token.length !== 6) {
+      return false;
+    }
     const t = Math.floor(Date.now() / 1000);
-    return [-1, 0, 1].some(w => this.totpCode(secret, t + w * 30) === token);
+    const tokenBuf = Buffer.from(token);
+    return [-1, 0, 1].some((w) => {
+      const expectedBuf = Buffer.from(this.totpCode(secret, t + w * 30));
+      return (
+        expectedBuf.length === tokenBuf.length &&
+        crypto.timingSafeEqual(expectedBuf, tokenBuf)
+      );
+    });
   }
 
   // ── Generic Record Management (#soft-delete) ───────────────────────────────
@@ -655,7 +675,7 @@ export class AdminService {
   async getAccessControlReport(from: Date, to: Date) {
     return this.auditLogRepo
       .createQueryBuilder('log')
-      .select(['log.id', 'log.actor', 'log.action', 'log.resourceType', 'log.resourceId', 'log.createdAt'])
+      .select(['log.id', 'log.actor', 'log.action', 'log.resource', 'log.createdAt'])
       .where('log.createdAt BETWEEN :from AND :to', { from, to })
       .orderBy('log.createdAt', 'DESC')
       .getMany();

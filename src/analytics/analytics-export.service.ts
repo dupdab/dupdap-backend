@@ -140,7 +140,7 @@ export class AnalyticsExportService {
 
     try {
       const metrics = await this.buildMetrics(exportRecord);
-      const buffer = this.buildPdf(metrics);
+      const buffer = await this.buildPdf(metrics);
       const token = randomBytes(24).toString('hex');
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const fileName = this.buildFileName(exportRecord, metrics);
@@ -231,29 +231,19 @@ export class AnalyticsExportService {
       totalVolumeUsd,
       paymentCount,
       averagePaymentValueUsd,
-      highestVolumeBucket: {
-        date: highestVolumeBucket.date,
-        volumeUsd: highestVolumeBucket.volumeUsd,
-      },
+      highestVolumeBucket,
       averageBucketVolumeUsd,
       settlementSummary,
       topMetrics: [
-        {
-          label: 'Highest Volume Bucket',
-          value: `${highestVolumeBucket.date}: ${this.formatUsd(highestVolumeBucket.volumeUsd)}`,
-        },
-        {
-          label: 'Average Bucket Volume',
-          value: this.formatUsd(averageBucketVolumeUsd),
-        },
-        {
-          label: 'Fee Revenue',
-          value: this.formatUsd(settlementSummary.feesUsd),
-        },
-        {
-          label: 'Average Payment Value',
-          value: this.formatUsd(averagePaymentValueUsd),
-        },
+        { label: 'Total Volume (USD)', value: this.formatCurrency(totalVolumeUsd) },
+        { label: 'Payments', value: paymentCount.toLocaleString('en-US') },
+        { label: 'Average Payment (USD)', value: this.formatCurrency(averagePaymentValueUsd) },
+        { label: 'Highest Volume Day', value: `${highestVolumeBucket.date} (${this.formatCurrency(highestVolumeBucket.volumeUsd)})` },
+        { label: 'Average Daily Volume (USD)', value: this.formatCurrency(averageBucketVolumeUsd) },
+        { label: 'Settlements', value: settlementSummary.count.toLocaleString('en-US') },
+        { label: 'Settled Gross (USD)', value: this.formatCurrency(settlementSummary.grossUsd) },
+        { label: 'Settled Net (USD)', value: this.formatCurrency(settlementSummary.netUsd) },
+        { label: 'Settlement Fees (USD)', value: this.formatCurrency(settlementSummary.feesUsd) },
       ],
     };
   }
@@ -262,160 +252,122 @@ export class AnalyticsExportService {
     exportRecord: AnalyticsExport,
     range: DateRange,
   ): Promise<ExportMetrics['settlementSummary']> {
-    const timestampExpression =
-      'COALESCE("settlement"."completedAt", "settlement"."createdAt")';
-    const query = this.settlementsRepo
+    const qb = this.settlementsRepo
       .createQueryBuilder('settlement')
-      .select('COUNT(*)', 'count')
-      .addSelect('COALESCE(SUM("settlement"."totalAmountUsd"), 0)::numeric(18,6)::text', 'grossUsd')
-      .addSelect('COALESCE(SUM("settlement"."netAmountUsd"), 0)::numeric(18,6)::text', 'netUsd')
-      .addSelect('COALESCE(SUM("settlement"."feeAmountUsd"), 0)::numeric(18,6)::text', 'feesUsd')
-      .where('"settlement"."status" = :status', { status: SettlementStatus.COMPLETED })
-      .andWhere(`${timestampExpression} >= :start`, { start: range.start })
-      .andWhere(`${timestampExpression} < :end`, { end: range.endExclusive });
+      .where('settlement.createdAt >= :start', { start: range.start })
+      .andWhere('settlement.createdAt < :end', { end: range.endExclusive })
+      .andWhere('settlement.status = :status', { status: SettlementStatus.COMPLETED });
 
-    if (exportRecord.merchantId) {
-      query.andWhere('"settlement"."merchantId" = :merchantId', {
+    if (exportRecord.scope === AnalyticsExportScope.MERCHANT && exportRecord.merchantId) {
+      qb.andWhere('settlement.merchantId = :merchantId', {
         merchantId: exportRecord.merchantId,
       });
     }
 
-    const result = await query.getRawOne<{
-      count: string;
-      grossUsd: string;
-      netUsd: string;
-      feesUsd: string;
-    }>();
+    const settlements = await qb.getMany();
+    return settlements.reduce(
+      (summary, settlement) => {
+        summary.count += 1;
+        summary.grossUsd += Number(settlement.grossAmount ?? 0);
+        summary.netUsd += Number(settlement.netAmount ?? 0);
+        summary.feesUsd += Number(settlement.feeAmount ?? 0);
+        return summary;
+      },
+      { count: 0, grossUsd: 0, netUsd: 0, feesUsd: 0 },
+    );
+  }
 
-    return {
-      count: Number(result?.count ?? 0),
-      grossUsd: Number(result?.grossUsd ?? 0),
-      netUsd: Number(result?.netUsd ?? 0),
-      feesUsd: Number(result?.feesUsd ?? 0),
-    };
+  private resolveRange(
+    period: AnalyticsPeriod,
+    dateFrom?: string,
+    dateTo?: string,
+  ): TimeRange {
+    const end = dateTo ? new Date(dateTo) : new Date();
+    const start = dateFrom
+      ? new Date(dateFrom)
+      : new Date(end.getTime() - (period === 'monthly' ? 365 : 30) * 24 * 60 * 60 * 1000);
+
+    return { start, endExclusive: new Date(end.getTime() + 24 * 60 * 60 * 1000) };
+  }
+
+  private previousMoment(date: Date, period: AnalyticsPeriod): Date {
+    const previous = new Date(date);
+    previous.setDate(previous.getDate() - (period === 'monthly' ? 30 : 1));
+    return previous;
+  }
+
+  private formatRangeLabel(date: Date, period: AnalyticsPeriod): string {
+    return period === 'monthly'
+      ? `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+      : date.toISOString().slice(0, 10);
+  }
+
+  private formatCurrency(value: number): string {
+    return `$${value.toFixed(2)}`;
   }
 
   private buildFileName(exportRecord: AnalyticsExport, metrics: ExportMetrics): string {
-    const scopePrefix =
-      exportRecord.scope === AnalyticsExportScope.ADMIN ? 'platform' : 'merchant';
-    const sanitizedName = metrics.merchantName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    return `${scopePrefix}-analytics-report-${sanitizedName}-${Date.now()}.pdf`;
+    const safeName = metrics.merchantName
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+    const stamp = new Date().toISOString().slice(0, 10);
+    return `${safeName || 'analytics'}-${metrics.period}-${stamp}.pdf`;
   }
 
-  private buildPdf(metrics: ExportMetrics): Buffer {
-    const width = 842;
-    const height = 595;
-    const commands: string[] = [];
-
+  private async buildPdf(metrics: ExportMetrics): Promise<Buffer> {
+    const lines: string[] = [];
     const text = (x: number, y: number, size: number, value: string) => {
-      commands.push(`BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${this.escapePdfText(value)}) Tj ET`);
+      lines.push(
+        `BT /F1 ${size} Tf ${x} ${y} Td (${this.escapePdfText(value)}) Tj ET`,
+      );
     };
 
-    const line = (x1: number, y1: number, x2: number, y2: number) => {
-      commands.push(`${x1} ${y1} m ${x2} ${y2} l S`);
-    };
-
-    const fillRect = (
-      x: number,
-      y: number,
-      rectWidth: number,
-      rectHeight: number,
-      r: number,
-      g: number,
-      b: number,
-    ) => {
-      commands.push(`${r} ${g} ${b} rg ${x} ${y} ${rectWidth} ${rectHeight} re f`);
-    };
-
-    fillRect(0, 0, width, height, 1, 1, 1);
-    fillRect(0, 535, width, 60, 0.93, 0.78, 0.18);
     text(40, 555, 22, `${metrics.merchantName} Analytics Report`);
-    text(40, 535, 11, `Period: ${metrics.periodLabel}`);
-    text(650, 555, 10, `Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`);
+    text(40, 530, 12, `Period: ${metrics.periodLabel}`);
 
-    text(40, 500, 16, 'Volume Chart');
-    const chartLeft = 40;
-    const chartBottom = 275;
-    const chartWidth = 470;
-    const chartHeight = 180;
-    commands.push('0.20 0.20 0.20 RG 1 w');
-    line(chartLeft, chartBottom, chartLeft, chartBottom + chartHeight);
-    line(chartLeft, chartBottom, chartLeft + chartWidth, chartBottom);
+    let cursor = 495;
+    for (const metric of metrics.topMetrics) {
+      text(40, cursor, 12, `${metric.label}: ${metric.value}`);
+      cursor -= 20;
+    }
 
-    const maxVolume = Math.max(...metrics.volumeSeries.map((item) => item.volumeUsd), 1);
-    const barGap = 4;
-    const barWidth = Math.max(
-      4,
-      (chartWidth - barGap * Math.max(metrics.volumeSeries.length - 1, 0)) /
-        Math.max(metrics.volumeSeries.length, 1),
+    const content = lines.join('\n');
+    const objects: string[] = [];
+    objects.push('<< /Type /Catalog /Pages 2 0 R >>');
+    objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+    objects.push(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
     );
-
-    metrics.volumeSeries.forEach((item, index) => {
-      const barHeight = (item.volumeUsd / maxVolume) * (chartHeight - 10);
-      const x = chartLeft + index * (barWidth + barGap);
-      fillRect(x, chartBottom, barWidth, barHeight, 0.94, 0.70, 0.18);
-
-      const labelStep = Math.max(1, Math.ceil(metrics.volumeSeries.length / 6));
-      if (index % labelStep === 0 || index === metrics.volumeSeries.length - 1) {
-        text(x, chartBottom - 18, 8, item.date);
-      }
-    });
-
-    text(chartLeft, chartBottom + chartHeight + 8, 9, `Max volume: ${this.formatUsd(maxVolume)}`);
-
-    text(550, 500, 16, 'Key Stats');
-    text(550, 475, 11, `Total Volume: ${this.formatUsd(metrics.totalVolumeUsd)}`);
-    text(550, 455, 11, `Payment Count: ${metrics.paymentCount}`);
-    text(550, 435, 11, `Average Payment: ${this.formatUsd(metrics.averagePaymentValueUsd)}`);
-    text(550, 415, 11, `Report Period: ${metrics.period}`);
-
-    text(40, 235, 16, 'Settlement Summary');
-    text(40, 210, 11, `Completed Settlements: ${metrics.settlementSummary.count}`);
-    text(40, 190, 11, `Gross Settled: ${this.formatUsd(metrics.settlementSummary.grossUsd)}`);
-    text(40, 170, 11, `Net Settled: ${this.formatUsd(metrics.settlementSummary.netUsd)}`);
-    text(40, 150, 11, `Fees Collected: ${this.formatUsd(metrics.settlementSummary.feesUsd)}`);
-
-    text(550, 235, 16, 'Top Metrics');
-    metrics.topMetrics.forEach((metric, index) => {
-      text(550, 210 - index * 22, 11, `${metric.label}: ${metric.value}`);
-    });
-
-    const content = commands.join('\n');
-    return this.createPdfDocument(content);
-  }
-
-  private createPdfDocument(content: string): Buffer {
-    const stream = Buffer.from(content, 'utf8');
-    const streamContent = stream.toString('utf8');
-    const objects = [
-      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
-      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
-      '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
-      `5 0 obj << /Length ${stream.length} >> stream\n${streamContent}\nendstream endobj`,
-    ];
+    objects.push(
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    );
+    objects.push(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
 
     let pdf = '%PDF-1.4\n';
     const offsets: number[] = [];
-
-    for (const object of objects) {
-      offsets.push(Buffer.byteLength(pdf, 'utf8'));
-      pdf += `${object}\n`;
+    for (let i = 0; i < objects.length; i += 1) {
+      offsets.push(Buffer.byteLength(pdf, 'latin1'));
+      pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
     }
 
-    const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+    const xrefOffset = Buffer.byteLength(pdf, 'latin1');
     pdf += `xref\n0 ${objects.length + 1}\n`;
     pdf += '0000000000 65535 f \n';
-    offsets.forEach((offset) => {
+    for (const offset of offsets) {
       pdf += `${offset.toString().padStart(10, '0')} 00000 n \n`;
-    });
-    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
 
-    return Buffer.from(pdf, 'utf8');
+    return Buffer.from(pdf, 'latin1');
   }
 
   private escapePdfText(value: string): string {
     return value
+      .replace(/[\u0080-\u00FF]/g, (char) => {
+        const code = char.charCodeAt(0);
+        return `\\${code.toString(8).padStart(3, '0')}`;
+      })
       .replace(/[^\x20-\x7E]/g, '?')
       .replace(/\\/g, '\\\\')
       .replace(/\(/g, '\\(')

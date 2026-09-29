@@ -2,16 +2,16 @@ module.exports = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: 'src',
   testEnvironment: 'node',
-  testRegex: 'soroban/soroban\\.service\\.spec\\.ts$',
+  testRegex: '.*\\.spec\\.ts$',
   transform: {
     '^.+\\.(t|j)s$': 'ts-jest',
   },
   collectCoverage: true,
-  collectCoverageFrom: ['soroban/soroban.service.ts'],
+  collectCoverageFrom: ['**/*.(t|j)s'],
   coverageThreshold: {
     global: {
-      lines: 0,
-      branches: 0,
+      lines: 80,
+      branches: 80,
     },
   },
 };

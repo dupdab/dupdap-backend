@@ -1,22 +1,47 @@
-import { DataSource } from 'typeorm';
-import { AppConfig } from '../../app-config/entities/app-config.entity';
+import { Connection } from 'typeorm';
+import { RuntimeConfig } from '../../runtime-config/entities/runtime-config.entity';
 
-const DEFAULTS: Array<{ key: string; value: unknown; description: string }> = [
-  { key: 'maintenance_mode',         value: false,   description: 'Put the app in maintenance mode' },
-  { key: 'staking_enabled',          value: true,    description: 'Enable/disable staking features' },
-  { key: 'fiat_settlement_enabled',  value: true,    description: 'Enable/disable fiat settlement' },
-  { key: 'virtual_accounts_enabled', value: true,    description: 'Enable/disable virtual accounts' },
-  { key: 'referral_reward_usdc',     value: '1.00',  description: 'USDC reward per referral' },
-  { key: 'max_daily_deposit_usdc',   value: '10000', description: 'Max USDC deposit per user per day' },
-];
+export async function seedAppConfigs(connection: Connection): Promise<void> {
+  const repo = connection.getRepository(RuntimeConfig);
 
-export async function seedAppConfigs(dataSource: DataSource): Promise<void> {
-  const repo = dataSource.getRepository(AppConfig);
-  for (const seed of DEFAULTS) {
-    await repo.upsert(
-      { key: seed.key, value: seed.value, description: seed.description },
-      { conflictPaths: ['key'], skipUpdateIfNoValuesChanged: true },
-    );
+  const seeds = [
+    {
+      key: 'platform.name',
+      value: 'Stellar Payment Gateway',
+      description: 'Human readable platform name',
+    },
+    {
+      key: 'platform.support_email',
+      value: 'support@localhost',
+      description: 'Support contact email',
+    },
+    {
+      key: 'payments.default_network',
+      value: 'stellar',
+      description: 'Default payment network',
+    },
+    {
+      key: 'payments.min_amount_usd',
+      value: '1',
+      description: 'Minimum accepted payment amount in USD',
+    },
+    {
+      key: 'settlements.auto_approve',
+      value: 'false',
+      description: 'Whether settlements are auto-approved',
+    },
+  ];
+
+  for (const seed of seeds) {
+    const existing = await repo.findOne({ where: { key: seed.key } });
+    if (existing) {
+      const merged = repo.merge(existing, seed);
+      merged.id = existing.id;
+      await repo.save(merged);
+    } else {
+      await repo.save(repo.create(seed));
+    }
   }
+
   console.log('App configs seeded.');
 }
