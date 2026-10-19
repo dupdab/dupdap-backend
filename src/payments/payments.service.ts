@@ -357,17 +357,28 @@ export class PaymentsService {
     return saved2;
   }
 
+  /**
+   * List payments WITHOUT eager merchant loading (#532).
+   * `relations: []` is deliberate: the full merchant row (incl. encrypted
+   * bank fields) is never needed here. Only merchant id + businessName are
+   * projected via a selective join. Compare with/without via:
+   * `pnpm run explain:queries` (see scripts/explain-list-queries.ts).
+   */
   async findAll(
     merchantId: string,
     page = 1,
     limit = 20,
   ): Promise<PaginatedResponseDto<Payment>> {
-    const [items, total] = await this.paymentsRepo.findAndCount({
-      where: { merchantId },
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const qb = this.paymentsRepo
+      .createQueryBuilder('payment')
+      .leftJoin('payment.merchant', 'merchant')
+      .addSelect(['merchant.id', 'merchant.businessName'])
+      .where('payment.merchantId = :merchantId', { merchantId })
+      .orderBy('payment.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
 
     return {
       items,
