@@ -43,6 +43,44 @@ export class RetryConfigService {
     };
   }
 
+  /**
+   * Default payment retry policy (#551): 3 attempts, 5 minute delay.
+   * Per-merchant overrides live on the Merchant entity — see resolvePaymentRetry().
+   */
+  get payment(): RetryConfig {
+    return {
+      maxAttempts: this.config.get<number>('PAYMENT_RETRY_COUNT', 3),
+      delaysMs: this.parseDelays(
+        this.config.get('PAYMENT_RETRY_DELAYS_MS'),
+        [5 * MINUTE],
+      ),
+    };
+  }
+
+  /**
+   * Resolve the effective payment retry policy for a merchant.
+   * Merchant-level `paymentRetryMaxAttempts` / `paymentRetryDelayMs` win;
+   * otherwise fall back to the global payment defaults above.
+   */
+  resolvePaymentRetry(merchant?: {
+    paymentRetryMaxAttempts?: number | null;
+    paymentRetryDelayMs?: number | null;
+  }): RetryConfig {
+    const defaults = this.payment;
+    const maxAttempts =
+      merchant?.paymentRetryMaxAttempts && merchant.paymentRetryMaxAttempts > 0
+        ? merchant.paymentRetryMaxAttempts
+        : defaults.maxAttempts;
+    const baseDelay =
+      merchant?.paymentRetryDelayMs && merchant.paymentRetryDelayMs > 0
+        ? Number(merchant.paymentRetryDelayMs)
+        : defaults.delaysMs[0];
+    return {
+      maxAttempts,
+      delaysMs: Array.from({ length: maxAttempts }, () => baseDelay),
+    };
+  }
+
   get stellarMonitor(): RetryConfig {
     return {
       maxAttempts: this.config.get<number>('STELLAR_MONITOR_RETRY_COUNT', 1),

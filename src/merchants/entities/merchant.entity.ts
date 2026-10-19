@@ -134,6 +134,17 @@ export class Merchant {
   })
   customFeeRate: string | null;
 
+  /**
+   * Per-merchant payment retry policy (#551). Bull jobs honour these values
+   * when retrying failed payment-related work.
+   * Defaults: 3 attempts, 5 minute (300,000 ms) delay.
+   */
+  @Column({ name: 'payment_retry_max_attempts', type: 'int', default: 3 })
+  paymentRetryMaxAttempts: number;
+
+  @Column({ name: 'payment_retry_delay_ms', type: 'int', default: 300000 })
+  paymentRetryDelayMs: number;
+
   @Column({ default: false })
   sandboxMode: boolean;
 
