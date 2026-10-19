@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Counter, Histogram } from 'prom-client';
+import { dbSlowQueryTotal } from '../database/slow-query.logger';
 
 @Injectable()
 export class MetricsService {
@@ -11,6 +12,7 @@ export class MetricsService {
   readonly httpRequestsTotal: Counter<string>;
   readonly httpRequestDurationMs: Histogram<string>;
   readonly cacheRequestsTotal: Counter<string>;
+  readonly dbSlowQueryTotal: Counter<string>;
 
   constructor() {
     this.paymentCreatedTotal = new Counter({
@@ -56,6 +58,9 @@ export class MetricsService {
       help: 'Total cache lookups by key pattern and result',
       labelNames: ['key_pattern', 'result'],
     });
+
+    // Shared with SlowQueryLogger (single registration, exposed via /metrics).
+    this.dbSlowQueryTotal = dbSlowQueryTotal;
   }
 
   incrementPaymentCreated(type: string): void {
@@ -87,6 +92,10 @@ export class MetricsService {
 
   recordCacheLookup(keyPattern: string, result: 'hit' | 'miss'): void {
     this.cacheRequestsTotal.inc({ key_pattern: keyPattern, result });
+  }
+
+  recordDbSlowQuery(table: string): void {
+    this.dbSlowQueryTotal.inc({ table });
   }
 }
 
