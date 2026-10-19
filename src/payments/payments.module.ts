@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
 import { PaymentsController, PublicPaymentController } from './payments.controller';
 import { Payment } from './entities/payment.entity';
+import { PaymentEvent } from './entities/payment-event.entity';
 import { StellarModule } from '../stellar/stellar.module';
 import { CacheModule } from '../cache/cache.module';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
@@ -18,7 +19,7 @@ import { PaymentsSorobanListener } from './payments-soroban.listener';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment]),
+    TypeOrmModule.forFeature([Payment, PaymentEvent]),
     forwardRef(() => StellarModule),
     CacheModule,
     WebhooksModule,
