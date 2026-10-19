@@ -5,7 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Connection, Repository, createConnection } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CacheService } from '../cache/cache.service';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
@@ -80,12 +80,12 @@ class TestSettlementsListener {
 }
 
 describe('SorobanEventIndexer (integration)', () => {
-  let connection: Connection;
+  let connection: DataSource;
   let module: TestingModule;
   let indexer: SorobanEventIndexer;
 
   beforeAll(async () => {
-    connection = await createConnection({
+    connection = await new DataSource({
       type: 'postgres',
       host: process.env.DB_HOST ?? 'localhost',
       port: Number(process.env.DB_PORT ?? 5432),
@@ -96,7 +96,7 @@ describe('SorobanEventIndexer (integration)', () => {
       synchronize: true,
       logging: false,
       name: 'soroban-indexer-integration',
-    } as any);
+    }).initialize();
 
     module = await Test.createTestingModule({
       imports: [
@@ -146,7 +146,7 @@ describe('SorobanEventIndexer (integration)', () => {
 
   afterAll(async () => {
     await module.close();
-    if (connection.isConnected) await connection.close();
+    if (connection.isInitialized) await connection.destroy();
   });
 
   it('indexes a payment_confirmed contract event and updates payment status', async () => {

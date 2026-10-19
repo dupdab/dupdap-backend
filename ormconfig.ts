@@ -1,8 +1,8 @@
 import 'reflect-metadata';
-import { ConnectionOptions } from 'typeorm';
+import { DataSource } from 'typeorm';
 import * as path from 'path';
 
-const config: ConnectionOptions = {
+export const AppDataSource = new DataSource({
   type: 'postgres',
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432', 10),
@@ -19,9 +19,6 @@ const config: ConnectionOptions = {
     connectionTimeoutMillis: parseInt(process.env.DB_ACQUIRE_TIMEOUT_MS || '10000', 10),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '60000', 10),
   },
-  cli: {
-    migrationsDir: 'src/database/migrations',
-  },
-};
+});
 
-export = config;
+export default AppDataSource;
