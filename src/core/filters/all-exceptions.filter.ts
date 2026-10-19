@@ -77,6 +77,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
         method: request.method,
       });
 
+      if (exception instanceof SorobanRpcException) {
+        scope.setTag("blockchain", "stellar-soroban");
+        scope.setTag("soroban_code", exception.sorobanCode ?? "unknown");
+        scope.setContext("soroban", {
+          code: exception.sorobanCode ?? null,
+          rpcMethod: exception.rpcMethod ?? null,
+          rpcParams: exception.rpcParams ?? null,
+        });
+        scope.addBreadcrumb({
+          category: "soroban.rpc",
+          message: `Soroban RPC ${exception.rpcMethod ?? "unknown"}`,
+          data: {
+            method: exception.rpcMethod ?? null,
+            params: exception.rpcParams ?? null,
+            code: exception.sorobanCode ?? null,
+          },
+          level: "error",
+        });
+      }
+
       Sentry.captureException(exception);
     });
   }
