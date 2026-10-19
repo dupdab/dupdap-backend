@@ -34,6 +34,17 @@ export class MerchantsService {
     return value;
   }
 
+  /** Top merchant IDs for cache warmup (ordered by creation, capped). */
+  async getTopMerchantIds(limit = 50): Promise<string[]> {
+    const merchants = await this.merchantsRepo.find({
+      where: { status: MerchantStatus.ACTIVE },
+      select: ['id'],
+      order: { createdAt: 'ASC' },
+      take: limit,
+    });
+    return merchants.map((m) => m.id);
+  }
+
   async findOne(id: string): Promise<Merchant> {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
