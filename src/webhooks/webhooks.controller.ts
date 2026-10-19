@@ -17,6 +17,7 @@ import { WebhooksService } from './webhooks.service';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
 import { CreateWebhookDto } from './dto/create-webhook.dto';
+import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 
 @ApiTags('webhooks')
 @ApiBearerAuth('bearer')
@@ -47,6 +48,19 @@ export class WebhooksController {
   @ApiResponse({ status: 500, description: 'Internal server error' })
   create(@Request() req: { user: { merchantId: string } }, @Body() dto: CreateWebhookDto) {
     return this.webhooksService.create(req.user.merchantId, dto.url, dto.events, dto.secret);
+  }
+
+  @Post('replay')
+  @Scopes('webhooks:manage')
+  @ApiOperation({ summary: 'Replay missed webhook events (1 replay per 5 minutes)' })
+  @ApiOkResponse({ description: 'Replay enqueued' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  @ApiForbiddenResponse({ description: 'API key missing webhooks:manage scope' })
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  @ApiResponse({ status: 429, description: 'Replay rate limit exceeded' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  replay(@Request() req: { user: { merchantId: string } }, @Body() dto: ReplayWebhooksDto) {
+    return this.webhooksService.replay(req.user.merchantId, dto);
   }
 
   @Delete(':id')

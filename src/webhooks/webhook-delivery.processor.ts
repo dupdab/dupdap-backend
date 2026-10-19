@@ -24,6 +24,8 @@ interface WebhookDeliveryJobData {
   event: string;
   body: string;
   attemptNumber: number;
+  /** Set by bulk replay (#552); surfaced as the X-Webhook-Replay header. */
+  replay?: boolean;
 }
 
 @Injectable()
@@ -50,11 +52,14 @@ export class WebhookDeliveryProcessor {
     const data = job.data;
     const requestBody = data.body;
     const signature = this.sign(requestBody, data.secret);
-    const headers = {
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "x-webhook-signature": signature,
       "x-webhook-event": data.event,
     };
+    if (data.replay) {
+      headers["X-Webhook-Replay"] = "true";
+    }
 
     try {
       const response = await axios.post(data.url, requestBody, {

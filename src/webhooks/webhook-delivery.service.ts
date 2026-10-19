@@ -19,6 +19,8 @@ interface WebhookDeliveryPayload {
   event: string;
   body: string;
   attemptNumber: number;
+  /** True when this delivery is a bulk replay (#552). */
+  replay: boolean;
 }
 
 @Injectable()
@@ -111,6 +113,7 @@ export class WebhookDeliveryService {
     webhook: Webhook,
     event: string,
     body: string,
+    opts?: { replay?: boolean },
   ): Promise<void> {
     try {
       await this.assertSafeUrl(webhook.url);
@@ -129,6 +132,7 @@ export class WebhookDeliveryService {
       event,
       body,
       attemptNumber: 1,
+      replay: opts?.replay === true,
     };
 
     await this.webhookQueue.add(WEBHOOK_DELIVERY_JOB, jobPayload, {

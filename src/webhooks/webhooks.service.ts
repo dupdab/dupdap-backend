@@ -1,11 +1,14 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as net from 'net';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryLog } from './entities/webhook-delivery-log.entity';
 import { WebhookDeliveryService } from './webhook-delivery.service';
+import { CacheService } from '../cache/cache.service';
+import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 
 @Injectable()
 export class WebhooksService {
@@ -15,6 +18,11 @@ export class WebhooksService {
     @InjectRepository(Webhook)
     private webhooksRepo: Repository<Webhook>,
     private webhookDelivery: WebhookDeliveryService,
+    @Optional()
+    @InjectRepository(WebhookDeliveryLog)
+    private deliveryLogs?: Repository<WebhookDeliveryLog>,
+    @Optional()
+    private cache?: CacheService,
   ) {}
 
   async dispatch(merchantId: string, event: string, payload: Record<string, any>): Promise<void> {
@@ -57,6 +65,80 @@ export class WebhooksService {
     }
     await this.webhooksRepo.remove(webhook);
     return webhook;
+  }
+
+  /**
+   * Bulk replay of missed webhook events (#552).
+   *
+   * Re-enqueues the latest stored delivery per (webhook, event) inside the
+   * [from, to] window, optionally filtered by event type. Rate limited to
+   * 1 replay per 5 minutes per merchant. Replayed deliveries carry the
+   * `X-Webhook-Replay: true` header.
+   */
+  async replay(
+    merchantId: string,
+    dto: ReplayWebhooksDto,
+  ): Promise<{ replayed: number; windowFrom: string; windowTo: string }> {
+    if (!this.cache || !this.deliveryLogs) {
+      throw new ServiceUnavailableException('Webhook replay is currently unavailable');
+    }
+
+    const rate = await this.cache.checkSlidingWindowRateLimit(
+      `webhook-replay:${merchantId}`,
+      { limit: 1, windowSeconds: 5 * 60 },
+    );
+    if (!rate.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: 'Webhook replay rate limit exceeded. Only 1 replay per 5 minutes is allowed.',
+          retryAfter: rate.retryAfter,
+          resetAt: rate.resetAt,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const from = new Date(dto.from);
+    const to = new Date(dto.to);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+      throw new BadRequestException('Invalid from/to replay window');
+    }
+
+    const hooks = await this.webhooksRepo.find({ where: { merchantId, isActive: true } });
+    if (hooks.length === 0) {
+      return { replayed: 0, windowFrom: from.toISOString(), windowTo: to.toISOString() };
+    }
+    const byId = new Map(hooks.map((h) => [h.id, h]));
+
+    const logs = await this.deliveryLogs.find({
+      where: {
+        webhookId: In([...byId.keys()]),
+        createdAt: Between(from, to),
+        ...(dto.eventType ? { event: dto.eventType } : {}),
+      },
+      order: { createdAt: 'DESC' },
+      take: 500,
+    });
+
+    const seen = new Set<string>();
+    let replayed = 0;
+    for (const log of logs) {
+      const key = `${log.webhookId}:${log.event}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const hook = byId.get(log.webhookId);
+      if (!hook) {
+        continue;
+      }
+      await this.webhookDelivery.enqueueDelivery(hook, log.event, log.requestBody, { replay: true });
+      replayed++;
+    }
+
+    this.logger.log(`Webhook replay for merchant ${merchantId}: ${replayed} events re-enqueued`);
+    return { replayed, windowFrom: from.toISOString(), windowTo: to.toISOString() };
   }
 
   /**

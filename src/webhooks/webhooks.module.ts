@@ -14,6 +14,7 @@ import { QueueConfigService } from '../config/queue-config.service';
 import { WEBHOOK_DELIVERY_QUEUE } from '../queues/queue.constants';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CacheModule } from '../cache/cache.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BullModule.registerQueue({ name: WEBHOOK_DELIVERY_QUEUE }),
     AdminAlertModule,
     NotificationsModule,
+    CacheModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService],
