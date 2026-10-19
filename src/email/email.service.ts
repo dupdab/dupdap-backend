@@ -58,4 +58,27 @@ export class EmailService {
     this.logger.log(`Queued email logId=${log.id} to=${to} template=${templateAlias}`);
     return log;
   }
+
+  /**
+   * Settlement status notification including the fee breakdown (#554).
+   */
+  async sendSettlementStatusEmail(
+    to: string,
+    settlement: {
+      id: string;
+      status: string;
+      totalAmountUsd?: string;
+      netAmountUsd?: string;
+    },
+    feeBreakdown?: Record<string, unknown>,
+  ): Promise<EmailLog> {
+    return this.queue(to, 'settlement-status', {
+      subject: `Settlement ${settlement.id} ${settlement.status}`,
+      settlementId: settlement.id,
+      status: settlement.status,
+      totalAmountUsd: settlement.totalAmountUsd,
+      netAmountUsd: settlement.netAmountUsd,
+      feeBreakdown: feeBreakdown ?? null,
+    });
+  }
 }

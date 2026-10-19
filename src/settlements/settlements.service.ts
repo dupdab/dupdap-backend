@@ -30,6 +30,18 @@ export interface PartnerCallbackPayload {
   failureReason?: string;
 }
 
+/** Fee audit report for a single settlement (#554). */
+export interface SettlementFeeBreakdown {
+  settlementId: string;
+  merchantId: string;
+  grossAmount: string;
+  feeRate: string;
+  feeAmount: string;
+  netAmount: string;
+  tierApplied: string;
+  fiatCurrency: string | null;
+}
+
 const SMALL_BATCH_THRESHOLD_USD = 10;
 const MAX_BATCH_PAYMENT_COUNT = 50;
 const BATCH_WINDOW_MINUTES = 15;
@@ -403,6 +415,56 @@ export class SettlementsService {
     return settlement;
   }
 
+  /**
+   * Fee audit report for a merchant settlement (#554): gross amount, applied
+   * fee rate, fee amount, net amount and the fee tier that was applied.
+   */
+  private toFeeBreakdown(merchantId: string, settlement: Settlement): SettlementFeeBreakdown {
+    const gross = this.toBig(settlement.totalAmountUsd);
+    const fee = this.toBig(settlement.feeAmountUsd);
+    const feeRate = gross.eq(0) ? new Big(0) : fee.div(gross);
+    return {
+      settlementId: settlement.id,
+      merchantId,
+      grossAmount: settlement.totalAmountUsd,
+      feeRate: feeRate.toFixed(6),
+      feeAmount: settlement.feeAmountUsd,
+      netAmount: settlement.netAmountUsd,
+      tierApplied: feeRate.eq(BATCH_FEE_RATE) ? 'standard' : 'custom',
+      fiatCurrency: settlement.fiatCurrency ?? null,
+    };
+  }
+
+  async getFeeBreakdown(merchantId: string, settlementId: string): Promise<SettlementFeeBreakdown> {
+    const settlement = await this.findOneForMerchant(merchantId, settlementId);
+    return this.toFeeBreakdown(merchantId, settlement);
+  }
+
+  /**
+   * CSV export of a merchant's settlements including the fee breakdown (#554).
+   */
+  async exportCsvForMerchant(merchantId: string): Promise<string> {
+    const settlements = await this.findForMerchant(merchantId);
+    const header =
+      'settlement_id,merchant_id,gross_amount_usd,fee_rate,fee_amount_usd,net_amount_usd,tier_applied,fiat_currency,status,created_at';
+    const lines = settlements.map((settlement) => {
+      const breakdown = this.toFeeBreakdown(merchantId, settlement);
+      return [
+        breakdown.settlementId,
+        breakdown.merchantId,
+        breakdown.grossAmount,
+        breakdown.feeRate,
+        breakdown.feeAmount,
+        breakdown.netAmount,
+        breakdown.tierApplied,
+        breakdown.fiatCurrency ?? '',
+        settlement.status,
+        settlement.createdAt?.toISOString() ?? '',
+      ].join(',');
+    });
+    return [header, ...lines].join('\n');
+  }
+
   async findForAdmin(query: AdminSettlementsQueryDto): Promise<PaginatedResponseDto<Settlement>> {
     const { page = 1, limit = 20, status, merchantId, from, to } = query;
     const where: Record<string, unknown> = {};
@@ -448,7 +510,17 @@ export class SettlementsService {
       settlementId: settlement.id,
     });
 
-    await this.emailService.sendSettlementStatusEmail(settlement.merchantId, settlement);
+    const feeBreakdown = this.toFeeBreakdown(settlement.merchantId, settlement);
+    let recipient: string | null = null;
+    try {
+      const merchant = await this.merchantsService.findOne(settlement.merchantId);
+      recipient = merchant?.email ?? null;
+    } catch {
+      recipient = null;
+    }
+    if (recipient) {
+      await this.emailService.sendSettlementStatusEmail(recipient, settlement, feeBreakdown);
+    }
 
     await this.notificationPrefs.notify(
       settlement.merchantId,
