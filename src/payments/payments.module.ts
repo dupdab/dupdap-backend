@@ -15,6 +15,8 @@ import { PaymentEscrowService } from '../blockchain-wallet/payment-escrow.servic
 import { SorobanService } from '../blockchain-wallet/soroban.service';
 import { AmlModule } from '../aml/aml.module';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
+import { TransactionLimitsService } from './transaction-limits.service';
+import { AdminAlertModule } from '../alerts/admin-alert.module';
 
 @Module({
   imports: [
@@ -25,10 +27,11 @@ import { PaymentsSorobanListener } from './payments-soroban.listener';
     NotificationsModule,
     MerchantsModule,
     ConfigModule,
+    AdminAlertModule,
     forwardRef(() => AmlModule),
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener],
+  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

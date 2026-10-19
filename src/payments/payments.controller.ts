@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Query, UseGuards, Request, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Query, UseGuards, UseFilters, Request, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -23,11 +23,13 @@ import { Scopes } from '../auth/decorators/scopes.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { Auditable } from '../audit/decorators/auditable.decorator';
+import { TransactionLimitFilter } from './transaction-limit.filter';
 
 @ApiTags('payments')
 @ApiBearerAuth('bearer')
 @ApiSecurity('api-key')
 @UseGuards(JwtAuthGuard)
+@UseFilters(TransactionLimitFilter)
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}

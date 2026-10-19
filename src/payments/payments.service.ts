@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,6 +16,7 @@ import { MerchantsService } from '../merchants/merchants.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { TransactionLimitsService } from './transaction-limits.service';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -41,6 +42,8 @@ export class PaymentsService {
     private soroban: PaymentEscrowService,
     private analytics: AnalyticsService,
     private dataSource: DataSource,
+    @Optional()
+    private txLimits?: TransactionLimitsService,
   ) {}
 
   /**
@@ -64,6 +67,9 @@ export class PaymentsService {
   }
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
+    // Enforce per-merchant rolling 24h transaction limits (#553).
+    await this.txLimits?.checkAndIncrement(merchantId);
+
     const xlmRate = await this.resolveXlmRate();
     const amountXlm = new Big(dto.amountUsd).div(xlmRate);
 
@@ -179,6 +185,9 @@ export class PaymentsService {
     dto: BatchCreatePaymentDto,
   ): Promise<BatchPaymentResultDto> {
     const { payments: items } = dto;
+
+    // Enforce per-merchant rolling 24h transaction limits (#553).
+    await this.txLimits?.checkAndIncrement(merchantId);
 
     // ── Validate all inputs before touching the DB (atomic revert on failure) ──
     for (let i = 0; i < items.length; i++) {
