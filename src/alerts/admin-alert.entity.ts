@@ -18,6 +18,7 @@ export enum AdminAlertType {
 export enum AdminAlertStatus {
   OPEN = 'open',
   ACKNOWLEDGED = 'acknowledged',
+  RESOLVED = 'resolved',
 }
 
 @Entity('admin_alerts')
@@ -59,6 +60,12 @@ export class AdminAlert {
 
   @Column({ name: 'acknowledged_by', type: 'uuid', nullable: true })
   acknowledgedBy: string | null;
+
+  @Column({ name: 'resolved_at', type: 'timestamp', nullable: true })
+  resolvedAt: Date | null;
+
+  @Column({ name: 'resolved_by', type: 'uuid', nullable: true })
+  resolvedBy: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

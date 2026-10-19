@@ -98,6 +98,69 @@ export class AdminAlertService {
     return this.adminAlertRepo.save(alert);
   }
 
+  async resolve(id: string, adminId: string | null): Promise<AdminAlert> {
+    const alert = await this.adminAlertRepo.findOne({ where: { id } });
+    if (!alert) {
+      throw new NotFoundException(`AdminAlert ${id} not found`);
+    }
+
+    alert.status = AdminAlertStatus.RESOLVED;
+    alert.resolvedAt = new Date();
+    alert.resolvedBy = adminId;
+    return this.adminAlertRepo.save(alert);
+  }
+
+  /** Age of an alert in milliseconds since creation. */
+  getAlertAgeMs(alert: AdminAlert, now: Date = new Date()): number {
+    return now.getTime() - new Date(alert.createdAt).getTime();
+  }
+
+  /** Whether an OPEN alert is overdue (older than threshold, default 60 min). */
+  isOverdue(alert: AdminAlert, now: Date = new Date()): boolean {
+    if (alert.status !== AdminAlertStatus.OPEN) {
+      return false;
+    }
+    const thresholdMs =
+      this.getNumberEnv('ADMIN_ALERT_OVERDUE_MINUTES', 60) * 60_000;
+    return this.getAlertAgeMs(alert, now) > thresholdMs;
+  }
+
+  /**
+   * Re-notify for overdue open alerts so they escalate instead of
+   * accumulating silently. Returns the number of escalated alerts.
+   */
+  async escalateOverdueAlerts(): Promise<number> {
+    const openAlerts = await this.adminAlertRepo.find({
+      where: { status: AdminAlertStatus.OPEN },
+    });
+    const now = new Date();
+    let escalated = 0;
+    for (const alert of openAlerts) {
+      if (this.isOverdue(alert, now)) {
+        alert.lastNotifiedAt = now;
+        await this.adminAlertRepo.save(alert);
+        await this.notify(alert);
+        escalated += 1;
+      }
+    }
+    if (escalated > 0) {
+      this.logger.warn(`Escalated ${escalated} overdue open admin alerts`);
+    }
+    return escalated;
+  }
+
+  /** Count open alerts grouped for the `admin_alerts_open` Prometheus metric. */
+  async countOpenAlertsByType(): Promise<Record<string, number>> {
+    const openAlerts = await this.adminAlertRepo.find({
+      where: { status: AdminAlertStatus.OPEN },
+    });
+    const counts: Record<string, number> = {};
+    for (const alert of openAlerts) {
+      counts[alert.type] = (counts[alert.type] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   private meetsThreshold(type: AdminAlertType, value: number): boolean {
     if (type === AdminAlertType.STELLAR_MONITOR) {
       return value >= this.getNumberEnv('ADMIN_ALERT_STELLAR_FAILURE_THRESHOLD', 1);

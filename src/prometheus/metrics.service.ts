@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Counter, Histogram } from 'prom-client';
+import { Counter, Gauge, Histogram } from 'prom-client';
 
 @Injectable()
 export class MetricsService {
@@ -11,6 +11,7 @@ export class MetricsService {
   readonly httpRequestsTotal: Counter<string>;
   readonly httpRequestDurationMs: Histogram<string>;
   readonly cacheRequestsTotal: Counter<string>;
+  readonly openAdminAlerts: Gauge<string>;
 
   constructor() {
     this.paymentCreatedTotal = new Counter({
@@ -56,6 +57,12 @@ export class MetricsService {
       help: 'Total cache lookups by key pattern and result',
       labelNames: ['key_pattern', 'result'],
     });
+
+    this.openAdminAlerts = new Gauge({
+      name: 'admin_alerts_open',
+      help: 'Number of currently open admin alerts',
+      labelNames: ['type'],
+    });
   }
 
   incrementPaymentCreated(type: string): void {
@@ -87,6 +94,10 @@ export class MetricsService {
 
   recordCacheLookup(keyPattern: string, result: 'hit' | 'miss'): void {
     this.cacheRequestsTotal.inc({ key_pattern: keyPattern, result });
+  }
+
+  setOpenAdminAlerts(type: string, count: number): void {
+    this.openAdminAlerts.set({ type }, count);
   }
 }
 
