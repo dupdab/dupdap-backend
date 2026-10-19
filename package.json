@@ -30,7 +30,8 @@
     "db:reset": "ts-node --transpile-only scripts/db-reset.ts",
     "migration:check": "ts-node --transpile-only scripts/migration-check.ts",
     "migration:rollback:check": "ts-node --transpile-only scripts/migration-rollback-check.ts",
-    "migration:uncommitted:check": "ts-node --transpile-only scripts/migration-uncommitted-check.ts"
+    "migration:uncommitted:check": "ts-node --transpile-only scripts/migration-uncommitted-check.ts",
+    "export:openapi": "ts-node --transpile-only scripts/export-openapi.ts openapi.json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
