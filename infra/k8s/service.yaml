@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dupdap-backend
+  labels:
+    app: dupdap-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: dupdap-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

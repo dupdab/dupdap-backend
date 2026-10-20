@@ -12,6 +12,7 @@ import {
 } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
+import { UpdateSettlementPreferenceDto } from './dto/update-settlement-preference.dto';
 import { GenerateApiKeyDto } from './dto/generate-api-key.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
@@ -67,6 +68,22 @@ export class MerchantsController {
       req.user.merchantId,
       dto.scopes,
       dto.expiresAt,
+    );
+  }
+
+  @Patch('me/settings')
+  @Scopes('merchant:manage')
+  @ApiOperation({ summary: 'Update merchant settlement preference' })
+  @ApiOkResponse({ description: 'Updated merchant settlement preference' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  updateSettings(
+    @Request() req: { user: { merchantId: string } },
+    @Body() dto: UpdateSettlementPreferenceDto,
+  ) {
+    return this.merchantsService.updateSettlementPreference(
+      req.user.merchantId,
+      dto.settlementFrequency,
     );
   }
 

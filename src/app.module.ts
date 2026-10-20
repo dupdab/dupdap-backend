@@ -28,6 +28,7 @@ import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
 import { SentryModule } from './sentry/sentry.module';
 import { CronModule } from './cron/cron.module';
 import { DatabaseModule } from './database/database.module';
+import { SlowQueryLogger } from './database/slow-query.logger';
 import { BackupModule } from './backup/backup.module';
 import { PrometheusModule } from './prometheus/prometheus.module';
 import { AuditModule } from './audit/audit.module';
@@ -118,6 +119,12 @@ import Redis from 'ioredis';
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: false,
         logging: config.get('NODE_ENV') === 'development',
+        // Slow-query profiler (#533): queries slower than this log a WARN
+        // with full text + params and bump db_slow_query_total{table}.
+        maxQueryExecutionTime: config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
+        logger: new SlowQueryLogger(
+          config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
+        ),
         extra: {
           max: config.get<number>('DB_POOL_MAX', 10),
           min: config.get<number>('DB_POOL_MIN', 2),

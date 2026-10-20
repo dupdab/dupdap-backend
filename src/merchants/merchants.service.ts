@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { Merchant, MerchantStatus } from './entities/merchant.entity';
+import { Merchant, MerchantStatus, SettlementFrequency } from './entities/merchant.entity';
 import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { CacheService } from '../cache/cache.service';
@@ -158,6 +158,15 @@ export class MerchantsService {
   async verifyMerchant(id: string): Promise<Merchant> {
     const merchant = await this.findOne(id);
     merchant.status = MerchantStatus.ACTIVE;
+    return this.merchantsRepo.save(merchant);
+  }
+
+  async updateSettlementPreference(
+    id: string,
+    settlementFrequency: SettlementFrequency,
+  ): Promise<Merchant> {
+    const merchant = await this.findOne(id);
+    merchant.settlementFrequency = settlementFrequency;
     return this.merchantsRepo.save(merchant);
   }
 }

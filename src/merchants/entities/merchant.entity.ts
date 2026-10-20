@@ -28,6 +28,12 @@ export enum MerchantRole {
   SUPERADMIN = 'superadmin',
 }
 
+export enum SettlementFrequency {
+  INSTANT = 'INSTANT',
+  DAILY = 'DAILY',
+  WEEKLY = 'WEEKLY',
+}
+
 /**
  * Maps a merchant's country to the fiat currency used for its settlements.
  * Falls back to USD for unknown/missing countries so settlements are never
@@ -149,6 +155,9 @@ export class Merchant {
 
   @Column({ default: true })
   paymentConfirmedEmailEnabled: boolean;
+
+  @Column({ type: 'enum', enum: SettlementFrequency, default: SettlementFrequency.INSTANT })
+  settlementFrequency: SettlementFrequency;
 
   @OneToMany(() => Payment, (payment) => payment.merchant)
   payments: Payment[];

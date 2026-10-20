@@ -98,8 +98,28 @@ Postgres (via TypeORM) is the system of record for payments, merchants, settleme
 - Node.js 20+ and pnpm (CI uses pnpm 10; npm also works for local dev)
 - PostgreSQL 16+
 - Redis 6+
+- (recommended) Docker + Docker Compose — runs PostgreSQL 16 and Redis 6 for you
 
-### Setup
+### Setup with Docker Compose (recommended)
+
+```bash
+# Start PostgreSQL 16 + Redis 6 (+ Adminer DB UI)
+docker compose up -d
+
+# Set up environment variables (defaults already match the Compose services)
+cp .env.example .env
+
+# Run database migrations
+pnpm migration:run
+
+# Start development server
+pnpm start:dev
+```
+
+- Adminer DB UI: http://localhost:8080 (server: `postgres`, user: `postgres`, password: `postgres`, database: `dupdub`)
+- Test database: `docker compose -f docker-compose.test.yml up -d` (Postgres on `:5433`, DB `dupdub_test`, Redis on `:6380`)
+
+### Setup (manual services)
 
 ```bash
 # Install dependencies

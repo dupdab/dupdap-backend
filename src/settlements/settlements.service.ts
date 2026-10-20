@@ -104,6 +104,20 @@ export class SettlementsService {
   }
 
   async initiateSettlement(payment: Payment): Promise<void> {
+    // Respect merchant settlement preference: DAILY/WEEKLY merchants are
+    // batched by the scheduled cron jobs below; only INSTANT settles here.
+    try {
+      const merchant = await this.merchantsService.findOne(payment.merchantId);
+      const frequency = (merchant as { settlementFrequency?: string })?.settlementFrequency;
+      if (frequency && frequency !== 'INSTANT') {
+        this.logger.debug(
+          `Payment ${payment.id} deferred: merchant prefers ${frequency} settlement.`,
+        );
+        return;
+      }
+    } catch {
+      // Fall through to default instant behavior if preference is unreadable.
+    }
     const amountUsd = this.toBig(payment.amountUsd);
     if (amountUsd.lt(SMALL_BATCH_THRESHOLD_USD)) {
       this.logger.debug(
@@ -202,6 +216,54 @@ export class SettlementsService {
 
       return confirmedPayments.length;
     });
+  }
+
+  /** End-of-day batch for merchants preferring DAILY settlement. */
+  @Cron('0 0 * * * *')
+  async batchDailyPreferredPayments(): Promise<void> {
+    await this.cronJobService.run('batch-daily-preferred-payments', async () => {
+      return this.flushScheduledPreference('DAILY');
+    });
+  }
+
+  /** Weekly batch for merchants preferring WEEKLY settlement (Monday 00:00). */
+  @Cron('0 0 * * 1')
+  async batchWeeklyPreferredPayments(): Promise<void> {
+    await this.cronJobService.run('batch-weekly-preferred-payments', async () => {
+      return this.flushScheduledPreference('WEEKLY');
+    });
+  }
+
+  private async flushScheduledPreference(frequency: 'DAILY' | 'WEEKLY'): Promise<number> {
+    const pending = await this.paymentsRepo.find({
+      where: { status: PaymentStatus.CONFIRMED, settlementId: IsNull() },
+      order: { merchantId: 'ASC', confirmedAt: 'ASC', createdAt: 'ASC' },
+    });
+    if (pending.length === 0) {
+      return 0;
+    }
+    const groups = new Map<string, Payment[]>();
+    for (const payment of pending) {
+      const list = groups.get(payment.merchantId) ?? [];
+      list.push(payment);
+      groups.set(payment.merchantId, list);
+    }
+    let flushed = 0;
+    for (const [merchantId, payments] of groups) {
+      let preferred: string | undefined;
+      try {
+        const merchant = await this.merchantsService.findOne(merchantId);
+        preferred = (merchant as { settlementFrequency?: string })?.settlementFrequency;
+      } catch {
+        continue;
+      }
+      if (preferred !== frequency) {
+        continue;
+      }
+      await this.createBatchSettlement(payments);
+      flushed += payments.length;
+    }
+    return flushed;
   }
 
   private async flushMerchantBatch(payments: Payment[]): Promise<void> {

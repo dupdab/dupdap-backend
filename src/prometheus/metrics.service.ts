@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Counter, Gauge, Histogram } from 'prom-client';
+import { dbSlowQueryTotal } from '../database/slow-query.logger';
 
 @Injectable()
 export class MetricsService {
@@ -12,6 +13,7 @@ export class MetricsService {
   readonly httpRequestDurationMs: Histogram<string>;
   readonly cacheRequestsTotal: Counter<string>;
   readonly openAdminAlerts: Gauge<string>;
+  readonly dbSlowQueryTotal: Counter<string>;
 
   constructor() {
     this.paymentCreatedTotal = new Counter({
@@ -58,6 +60,9 @@ export class MetricsService {
       labelNames: ['key_pattern', 'result'],
     });
 
+    // Shared with SlowQueryLogger (single registration, exposed via /metrics).
+    this.dbSlowQueryTotal = dbSlowQueryTotal;
+
     this.openAdminAlerts = new Gauge({
       name: 'admin_alerts_open',
       help: 'Number of currently open admin alerts',
@@ -98,6 +103,10 @@ export class MetricsService {
 
   setOpenAdminAlerts(type: string, count: number): void {
     this.openAdminAlerts.set({ type }, count);
+  }
+
+  recordDbSlowQuery(table: string): void {
+    this.dbSlowQueryTotal.inc({ table });
   }
 }
 
