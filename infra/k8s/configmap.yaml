@@ -16,3 +16,58 @@ data:
   REDIS_PORT: '6379'
   STELLAR_NETWORK: TESTNET
   STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dupdap-prometheus-alert-rules
+  labels:
+    app.kubernetes.io/part-of: dupdap
+    role: prometheus-rules
+data:
+  payment-alerts.rules.yml: |
+    groups:
+      - name: payment-confirmation-failures
+        rules:
+          - alert: PaymentFailureRateHigh
+            expr: |
+              sum(rate(payment_confirmations_total{status="failed"}[5m]))
+              /
+              sum(rate(payment_confirmations_total[5m]))
+              > 0.05
+            for: 5m
+            labels:
+              severity: critical
+              team: payments
+              receiver: payments-oncall
+            annotations:
+              summary: "Payment confirmation failure rate above 5%"
+              description: "Payment failure rate is {{ $value | humanizePercentage }} over the last 5 minutes (threshold 5%)."
+              runbook_url: "https://github.com/dupdap/dupdap/blob/main/docs/runbooks/payment-failure-rate.md"
+
+          - alert: SettlementQueueDepthHigh
+            expr: settlement_queue_depth > 500
+            for: 10m
+            labels:
+              severity: critical
+              team: payments
+              receiver: payments-oncall
+            annotations:
+              summary: "Settlement queue depth above 500"
+              description: "Settlement queue depth is {{ $value }} (threshold 500) sustained for more than 10 minutes."
+              runbook_url: "https://github.com/dupdap/dupdap/blob/main/docs/runbooks/settlement-queue-depth.md"
+
+          - alert: StellarMonitorDown
+            expr: |
+              absent(up{job="stellar-monitor"} == 1)
+              or
+              up{job="stellar-monitor"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              team: payments
+              receiver: payments-oncall
+            annotations:
+              summary: "Stellar monitor is not running"
+              description: "The Stellar monitor target has been absent or down for more than 2 minutes."
+              runbook_url: "https://github.com/dupdap/dupdap/blob/main/docs/runbooks/stellar-monitor-down.md"
