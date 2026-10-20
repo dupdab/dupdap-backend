@@ -3,7 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class RefundPaymentDto {
   @ApiPropertyOptional({
-    description: 'Amount to refund in USD. If not provided, the full payment amount will be refunded.',
+    description: 'Amount to refund in USD. Partial refunds are supported and may be repeated until the payment is fully refunded. If not provided, the remaining refundable balance will be refunded.',
     example: 10.50,
   })
   @IsOptional()
