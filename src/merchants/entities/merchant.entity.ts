@@ -112,7 +112,7 @@ export class Merchant {
   apiKeyHash: string;
 
   @Exclude()
-  @Column({ name: 'api_key_lookup_hash', nullable: true, unique: true })
+  @Column({ name: 'api_key_lookup_hash', type: 'varchar', nullable: true, unique: true })
   apiKeyLookupHash?: string | null;
 
   /** UTC timestamp at which this API key expires. Null means the key never expires. */
@@ -155,7 +155,7 @@ export class Merchant {
   sandboxMode: boolean;
 
   @Exclude()
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   totpSecret: string | null;
 
   @Column({ default: false })

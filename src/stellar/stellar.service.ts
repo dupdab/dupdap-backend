@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { CacheService } from '../cache/cache.service';
-import { AdminAlertService } from '../admin/admin-alert.service';
+import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { StellarTxQueueService } from './stellar-tx-queue.service';
 

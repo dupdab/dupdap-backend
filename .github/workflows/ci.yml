@@ -35,6 +35,17 @@ jobs:
       - name: Test with coverage
         run: pnpm test:cov:ci
 
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+
+      - name: Type check
+        if: always()
+        run: pnpm exec tsc --noEmit
+
       - name: Migration safety check
         run: pnpm migration:check
 
@@ -52,6 +63,29 @@ jobs:
         with:
           name: openapi-spec
           path: openapi.json
+
+  merchant-e2e:
+    name: Merchant onboarding and settlement E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start E2E infrastructure
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Merchant lifecycle E2E
+        run: pnpm test:e2e:ci
+
+      - name: Stop E2E infrastructure
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
 
   release-openapi:
     name: Publish OpenAPI spec to release

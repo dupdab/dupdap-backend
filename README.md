@@ -343,3 +343,60 @@ CI also runs migration safety/rollback checks, an uncommitted-migration check, a
 
 <!-- handsoff-issue-137 -->
 - #137: SorobanService contract calls are all TODO stubs, not real contract invocations
+
+### Merchant lifecycle verification and coverage
+
+![Coverage gate](https://img.shields.io/badge/coverage%20gate-70%25-blue)
+
+Run `pnpm test:cov:ci` for repository-wide coverage. `jest.config.js` enforces
+70% statements, branches, functions and lines; the CI configuration extends it.
+Coverage includes untested source files and excludes module wiring, bootstrap,
+test files and test doubles. Reports are uploaded as the `coverage` CI artifact.
+The badge describes the enforced target, not a claim that the current suite passes.
+
+Run the database-backed merchant suite locally:
+
+```sh
+docker compose -f docker-compose.test.yml up -d --wait
+pnpm test:e2e
+# Cleanup after testing:
+docker compose -f docker-compose.test.yml down -v
+```
+
+The independent CI job uses PostgreSQL 16 and Redis 6. Each suite rebuilds the
+explicit disposable `dupdub_test` database and seeds a second merchant, clears
+Redis database 15, then exercises registration, login, payment creation,
+confirmation, a Redis settlement job, partner transfer and HTTP webhook receipt.
+Auth, payment, settlement and webhook services and database repositories are real.
+Stellar quoting and the partner/delivery network boundaries are controlled test
+adapters. Confirmation is an internal contract action, so the suite calls the
+real confirmation service rather than adding a test-only public API.
+
+### Payment latency benchmark
+
+```sh
+TOKEN='<test merchant JWT>' \
+CONFIRMATION_DRIVER_URL='http://localhost:4000/fund-testnet-payment' \
+BASE_URL='http://localhost:3000/api/v1' \
+k6 run --summary-export=payment-latency-summary.json load-tests/payment-latency.k6.ts
+```
+
+The funding driver accepts the created payment JSON and submits a testnet payment
+to its address/memo. Use an INSTANT-settlement test merchant with working Stellar
+and partner adapters. Configure `VUS`, `ITERATIONS` and `TIMEOUT_MS` as needed.
+No funding endpoint is exposed by the production merchant API.
+
+The JSON report contains median (p50), p95 and p99 for `payment_creation_ms`,
+`payment_confirmation_ms` and `settlement_dispatch_ms`. Creation must have p95
+below 200 ms and confirmation below 5,000 ms. HTTP failures and lifecycle
+timeouts fail the run. Confirmation includes funding-driver latency and polling
+resolution (50 ms); dispatch measures observable settlement initiation after
+confirmation, not bank completion or worker execution. The settlement ID is
+persisted before enqueue, so this last metric is a proxy for dispatch latency.
+
+Validation on this branch: the PostgreSQL/Redis merchant lifecycle test passed;
+54 focused critical-service/context tests passed. The initial full-suite run
+reported 41.41% lines, 41.34% statements, 36.36% branches and 30.89% functions;
+the 70% gate correctly fails. Existing stale tests and health-controller syntax
+errors still prevent a green repository-wide build. No funded testnet k6 run
+has been performed, so production latency percentiles are not yet available.

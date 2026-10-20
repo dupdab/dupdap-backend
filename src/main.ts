@@ -11,7 +11,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { VersioningInterceptor } from './common/interceptors/versioning.interceptor';
 import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
 import { SentryService } from './sentry/sentry.service';
-import { getCorrelationId } from './common/correlation-id.context';
+import { requestContextFormat } from './common/request-context.format';
 import { isOriginAllowed, parseAllowedOrigins, validateCorsConfig } from './config/cors.config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { version } = require('../package.json') as { version: string };
@@ -35,21 +35,13 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string | s
 async function bootstrap(): Promise<void> {
   startTelemetry(readTelemetryConfig());
 
-  const correlationIdFormat = winston.format((info) => {
-    const correlationId = getCorrelationId();
-    if (typeof info.correlationId === 'undefined') {
-      info.correlationId = correlationId ?? 'N/A';
-    }
-    return info;
-  });
-
   const app = await NestFactory.create(AppModule, { rawBody: true, logger: WinstonModule.createLogger({
     level: 'silly',
     transports: [
       new winston.transports.Console({
         format: winston.format.combine(
           winston.format.timestamp(),
-          correlationIdFormat(),
+          requestContextFormat(),
           winston.format.json(),
         ),
       }),
@@ -57,7 +49,7 @@ async function bootstrap(): Promise<void> {
         filename: 'logs/app.log',
         format: winston.format.combine(
           winston.format.timestamp(),
-          correlationIdFormat(),
+          requestContextFormat(),
           winston.format.json(),
         ),
       }),
@@ -113,8 +105,8 @@ async function bootstrap(): Promise<void> {
         },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-correlation-id'],
-    exposedHeaders: ['X-Correlation-ID'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-correlation-id', 'x-request-id'],
+    exposedHeaders: ['X-Correlation-ID', 'X-Request-ID'],
   });
 
   app.setGlobalPrefix(apiPrefix, {
