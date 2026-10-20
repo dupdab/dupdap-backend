@@ -1,4 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  GoneException,
+  Logger,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -15,7 +23,10 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { PaginatedResponseDto } from '../common/dto/pagination.dto';
-import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
+import {
+  PaymentEscrowService,
+  PaymentExpiredError,
+} from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
 
@@ -149,7 +160,13 @@ export class PaymentsService {
     // Persist the expiry_ledger so NestJS cron can query it without RPC calls.
     saved.expiryLedger = contractPayment.expiryLedger;
     const final = await this.paymentsRepo.save(saved);
-    await this.recordEvent(final.id, PaymentEventType.CREATED, null, PaymentStatus.PENDING, merchantId);
+    await this.recordEvent(
+      final.id,
+      PaymentEventType.CREATED,
+      null,
+      PaymentStatus.PENDING,
+      merchantId,
+    );
     return final;
   }
 
@@ -158,10 +175,7 @@ export class PaymentsService {
    * ledger-based expiry. Throws PaymentExpiredError (→ 410) if the payment
    * window has passed, regardless of NestJS state.
    */
-  async confirmPayment(
-    paymentId: string,
-    customerAddress: string,
-  ): Promise<Payment> {
+  async confirmPayment(paymentId: string, customerAddress: string): Promise<Payment> {
     const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
     if (!payment) throw new NotFoundException('Payment not found');
 
@@ -174,8 +188,16 @@ export class PaymentsService {
         const previousStatus = payment.status;
         payment.status = PaymentStatus.EXPIRED;
         await this.paymentsRepo.save(payment);
-        await this.recordEvent(paymentId, PaymentEventType.EXPIRED, previousStatus, PaymentStatus.EXPIRED);
-        throw new BadRequestException(err.message);
+        await this.recordEvent(
+          paymentId,
+          PaymentEventType.EXPIRED,
+          previousStatus,
+          PaymentStatus.EXPIRED,
+        );
+        throw new BadRequestException({
+          errorCode: 'PAYMENT_EXPIRED',
+          message: 'This payment has expired. Create a new payment to continue.',
+        });
       }
       throw err;
     }
@@ -184,7 +206,14 @@ export class PaymentsService {
     payment.customerWalletAddress = customerAddress;
     payment.confirmedAt = new Date();
     const saved = await this.paymentsRepo.save(payment);
-    await this.recordEvent(paymentId, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { customerAddress });
+    await this.recordEvent(
+      paymentId,
+      PaymentEventType.CONFIRMED,
+      PaymentStatus.PENDING,
+      PaymentStatus.CONFIRMED,
+      undefined,
+      { customerAddress },
+    );
 
     // Invalidate merchant analytics caches since funnel and comparison data may have changed.
     this.analytics.clearCacheForMerchant(payment.merchantId);
@@ -192,7 +221,13 @@ export class PaymentsService {
     return saved;
   }
 
-  async applySorobanPaymentConfirmed(event: { paymentReference: string; txHash?: string; amount?: number; asset?: string; from?: string }): Promise<void> {
+  async applySorobanPaymentConfirmed(event: {
+    paymentReference: string;
+    txHash?: string;
+    amount?: number;
+    asset?: string;
+    from?: string;
+  }): Promise<void> {
     const payment = await this.paymentsRepo.findOne({ where: { id: event.paymentReference } });
     if (!payment) {
       this.logger.warn(`Soroban payment confirmed for unknown payment ${event.paymentReference}`);
@@ -208,7 +243,14 @@ export class PaymentsService {
     if (event.txHash) payment.txHash = event.txHash;
     if (event.from) payment.customerWalletAddress = event.from;
     await this.paymentsRepo.save(payment);
-    await this.recordEvent(payment.id, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { txHash: event.txHash });
+    await this.recordEvent(
+      payment.id,
+      PaymentEventType.CONFIRMED,
+      PaymentStatus.PENDING,
+      PaymentStatus.CONFIRMED,
+      undefined,
+      { txHash: event.txHash },
+    );
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
   }
@@ -235,14 +277,10 @@ export class PaymentsService {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (!item.amountUsd || item.amountUsd <= 0) {
-        throw new BadRequestException(
-          `Batch item [${i}]: amountUsd must be greater than 0`,
-        );
+        throw new BadRequestException(`Batch item [${i}]: amountUsd must be greater than 0`);
       }
       if (!item.memo || item.memo.trim().length === 0) {
-        throw new BadRequestException(
-          `Batch item [${i}]: memo must not be empty`,
-        );
+        throw new BadRequestException(`Batch item [${i}]: memo must not be empty`);
       }
     }
 
@@ -293,9 +331,7 @@ export class PaymentsService {
       return manager.save(Payment, records);
     });
 
-    this.logger.log(
-      `Batch created ${saved.length} payments for merchant ${merchantId}`,
-    );
+    this.logger.log(`Batch created ${saved.length} payments for merchant ${merchantId}`);
 
     // Audit log: one immutable CREATED event per payment in the batch.
     await this.eventsRepo.save(
@@ -324,11 +360,7 @@ export class PaymentsService {
     };
   }
 
-  async refund(
-    merchantId: string,
-    paymentId: string,
-    dto: RefundPaymentDto,
-  ): Promise<Payment> {
+  async refund(merchantId: string, paymentId: string, dto: RefundPaymentDto): Promise<Payment> {
     const payment = await this.findOne(merchantId, paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
 
@@ -345,8 +377,7 @@ export class PaymentsService {
 
     const alreadyRefundedUsd = new Big(payment.refundAmountUsd ?? '0');
     const remainingUsd = new Big(payment.amountUsd).minus(alreadyRefundedUsd);
-    const refundAmount =
-      dto.amountUsd !== undefined ? new Big(dto.amountUsd) : remainingUsd;
+    const refundAmount = dto.amountUsd !== undefined ? new Big(dto.amountUsd) : remainingUsd;
 
     if (refundAmount.gt(remainingUsd)) {
       throw new BadRequestException(
@@ -357,15 +388,21 @@ export class PaymentsService {
     const newRefundedUsd = alreadyRefundedUsd.plus(refundAmount);
     const previousStatus = payment.status;
     payment.refundAmountUsd = newRefundedUsd.toFixed(6);
-    payment.status =
-      newRefundedUsd.gte(new Big(payment.amountUsd))
-        ? PaymentStatus.REFUNDED
-        : PaymentStatus.PARTIALLY_REFUNDED;
+    payment.status = newRefundedUsd.gte(new Big(payment.amountUsd))
+      ? PaymentStatus.REFUNDED
+      : PaymentStatus.PARTIALLY_REFUNDED;
     payment.refundReason = dto.reason;
     payment.refundedAt = new Date();
 
     const saved2 = await this.paymentsRepo.save(payment);
-    await this.recordEvent(payment.id, PaymentEventType.REFUNDED, previousStatus, payment.status, merchantId, { refundAmountUsd: dto.amountUsd });
+    await this.recordEvent(
+      payment.id,
+      PaymentEventType.REFUNDED,
+      previousStatus,
+      payment.status,
+      merchantId,
+      { refundAmountUsd: dto.amountUsd },
+    );
 
     await this.webhooks.dispatch(payment.merchantId, 'payment.refunded', {
       paymentId: payment.id,
@@ -388,11 +425,7 @@ export class PaymentsService {
    * projected via a selective join. Compare with/without via:
    * `pnpm run explain:queries` (see scripts/explain-list-queries.ts).
    */
-  async findAll(
-    merchantId: string,
-    page = 1,
-    limit = 20,
-  ): Promise<PaginatedResponseDto<Payment>> {
+  async findAll(merchantId: string, page = 1, limit = 20): Promise<PaginatedResponseDto<Payment>> {
     const qb = this.paymentsRepo
       .createQueryBuilder('payment')
       .leftJoin('payment.merchant', 'merchant')
@@ -429,7 +462,10 @@ export class PaymentsService {
     const payment = await this.paymentsRepo.findOne({ where: { reference } });
     if (!payment) throw new NotFoundException('Payment not found');
     if (payment.expiresAt && new Date(payment.expiresAt).getTime() < Date.now()) {
-      throw new GoneException('Payment QR code has expired');
+      throw new GoneException({
+        errorCode: 'PAYMENT_EXPIRED',
+        message: 'This payment QR code has expired. Create a new payment to continue.',
+      });
     }
     return payment;
   }

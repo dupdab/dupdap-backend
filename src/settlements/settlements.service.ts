@@ -1,4 +1,11 @@
-import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -18,7 +25,10 @@ import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
 import { EmailService } from '../email/email.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
-import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
+import {
+  NotificationChannel,
+  NotificationEventType,
+} from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
@@ -150,7 +160,9 @@ export class SettlementsService {
       feeAmountUsd: feeUsd.toFixed(6),
       netAmountUsd: netUsd.toFixed(6),
       fiatCurrency,
-      status: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      status: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD)
+        ? SettlementStatus.PENDING_APPROVAL
+        : SettlementStatus.PROCESSING,
       requiresApproval: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD),
     });
 
@@ -188,11 +200,15 @@ export class SettlementsService {
 
   private async enqueueSettlement(settlementId: string): Promise<void> {
     const settlementRetry = this.retryConfig.settlement;
-    await this.settlementQueue.add(DEFAULT_QUEUE_JOB, { settlementId }, {
-      attempts: settlementRetry.maxAttempts + 1,
-      backoff: { type: 'fixed', delay: settlementRetry.delaysMs[0] ?? 60_000 },
-      removeOnFail: false,
-    });
+    await this.settlementQueue.add(
+      DEFAULT_QUEUE_JOB,
+      { settlementId },
+      {
+        attempts: settlementRetry.maxAttempts + 1,
+        backoff: { type: 'fixed', delay: settlementRetry.delaysMs[0] ?? 60_000 },
+        removeOnFail: false,
+      },
+    );
   }
 
   @Cron('0 */15 * * * *')
@@ -313,7 +329,10 @@ export class SettlementsService {
       return;
     }
 
-    const totalAmountUsd = payments.reduce((sum, payment) => sum.plus(this.toBig(payment.amountUsd)), new Big(0));
+    const totalAmountUsd = payments.reduce(
+      (sum, payment) => sum.plus(this.toBig(payment.amountUsd)),
+      new Big(0),
+    );
     const feeAmountUsd = totalAmountUsd.times(BATCH_FEE_RATE);
     const netAmountUsd = totalAmountUsd.minus(feeAmountUsd);
 
@@ -325,7 +344,9 @@ export class SettlementsService {
       feeAmountUsd: feeAmountUsd.toFixed(6),
       netAmountUsd: netAmountUsd.toFixed(6),
       fiatCurrency,
-      status: netAmountUsd.gte(10000) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      status: netAmountUsd.gte(10000)
+        ? SettlementStatus.PENDING_APPROVAL
+        : SettlementStatus.PROCESSING,
       requiresApproval: netAmountUsd.gte(10000),
     });
 
@@ -431,7 +452,9 @@ export class SettlementsService {
     }
 
     if (settlement.status !== SettlementStatus.PENDING_APPROVAL) {
-      throw new Error(`Settlement ${settlementId} is not awaiting approval`);
+      throw new BadRequestException(
+        'This settlement is not awaiting approval. Refresh its status before taking action.',
+      );
     }
 
     settlement.status = SettlementStatus.PROCESSING;
@@ -443,7 +466,11 @@ export class SettlementsService {
     return saved;
   }
 
-  async rejectSettlement(settlementId: string, adminId: string, reason: string): Promise<Settlement> {
+  async rejectSettlement(
+    settlementId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<Settlement> {
     const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
     if (!settlement) {
       throw new NotFoundException(`Settlement ${settlementId} not found`);

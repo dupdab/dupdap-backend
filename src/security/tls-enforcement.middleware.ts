@@ -8,16 +8,19 @@ export class TlsEnforcementMiddleware implements NestMiddleware {
   private readonly logger = new Logger(TlsEnforcementMiddleware.name);
 
   use(req: Request, res: Response, next: NextFunction): void {
-    const forwardedProto =
-      (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0].trim().toLowerCase();
+    const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)
+      ?.split(',')[0]
+      .trim()
+      .toLowerCase();
     const isSecure = req.secure || forwardedProto === 'https';
 
     if (!isSecure) {
       this.logger.warn(
         `Rejected non-secure request: ${req.method} ${req.originalUrl} from ${req.ip}`,
       );
-      res.status(HttpStatus.UPGRADE_REQUIRED).json({
-        statusCode: HttpStatus.UPGRADE_REQUIRED,
+      res.status(426).json({
+        statusCode: 426,
+        errorCode: 'HTTPS_REQUIRED',
         message: 'HTTPS is required for all requests.',
       });
       return;
@@ -31,6 +34,7 @@ export class TlsEnforcementMiddleware implements NestMiddleware {
       );
       res.status(HttpStatus.FORBIDDEN).json({
         statusCode: HttpStatus.FORBIDDEN,
+        errorCode: 'TLS_VERSION_UNSUPPORTED',
         message: 'TLS 1.2 or higher is required.',
       });
       return;
