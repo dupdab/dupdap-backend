@@ -112,12 +112,15 @@ export class MerchantAnalyticsService {
               [asOf.toISOString(), DAILY_SIGNUP_WINDOW_DAYS - 1],
             ),
             this.dataSource.query<CountRow[]>(
-              `SELECT COUNT(*) FILTER (WHERE EXISTS (
-                 SELECT 1 FROM sessions
-                 WHERE sessions.user_id = users.id
-                   AND sessions."createdAt" <= users."createdAt" + ($1 * INTERVAL '1 day')
-               ))::text AS count, COUNT(*)::text AS total
-               FROM users WHERE "is_admin" = false AND "is_treasury" = false`,
+              `SELECT COUNT(*) FILTER (WHERE first_sessions.first_seen <= users."createdAt" + ($1 * INTERVAL '1 day'))::text AS count,
+                 COUNT(*)::text AS total
+               FROM users
+               LEFT JOIN (
+                 SELECT user_id, MIN("createdAt") AS first_seen
+                 FROM sessions
+                 GROUP BY user_id
+               ) first_sessions ON first_sessions.user_id = users.id
+               WHERE users."is_admin" = false AND users."is_treasury" = false`,
               [ACTIVATION_WINDOW_DAYS],
             ),
             this.dataSource.query<CountRow[]>(
