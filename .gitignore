@@ -24,3 +24,7 @@ yarn-error.log*
 
 # Scratch / temporary files
 tmp-*.json
+
+# Generated lint reports (CI lint output is authoritative)
+eslint-full-out.txt
+eslint-*.txt

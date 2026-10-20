@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, UseGuards, Request, Query } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -12,6 +12,7 @@ import {
 } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
+import { UpdateSettlementPreferenceDto } from './dto/update-settlement-preference.dto';
 import { GenerateApiKeyDto } from './dto/generate-api-key.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
@@ -52,6 +53,23 @@ export class MerchantsController {
     return this.merchantsService.update(req.user.merchantId, dto);
   }
 
+  @Get('audit-log')
+  @Scopes('profile:read')
+  @ApiOperation({ summary: 'List merchant settings audit log (paginated)' })
+  @ApiOkResponse({ description: 'Paginated audit entries' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  getAuditLog(
+    @Request() req: { user: { merchantId: string } },
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.merchantsService.getAuditLog(
+      req.user.merchantId,
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 20,
+    );
+  }
+
   @Post('api-keys')
   @Scopes('merchant:manage')
   @ApiOperation({ summary: 'Generate API key' })
@@ -67,6 +85,22 @@ export class MerchantsController {
       req.user.merchantId,
       dto.scopes,
       dto.expiresAt,
+    );
+  }
+
+  @Patch('me/settings')
+  @Scopes('merchant:manage')
+  @ApiOperation({ summary: 'Update merchant settlement preference' })
+  @ApiOkResponse({ description: 'Updated merchant settlement preference' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  updateSettings(
+    @Request() req: { user: { merchantId: string } },
+    @Body() dto: UpdateSettlementPreferenceDto,
+  ) {
+    return this.merchantsService.updateSettlementPreference(
+      req.user.merchantId,
+      dto.settlementFrequency,
     );
   }
 

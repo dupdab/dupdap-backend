@@ -16,6 +16,8 @@ export class SorobanRpcException extends Error {
     message: string,
     public readonly sorobanCode?: string,
     public readonly statusCode: number = HttpStatus.BAD_GATEWAY,
+    public readonly rpcMethod?: string,
+    public readonly rpcParams?: unknown,
   ) {
     super(message);
     this.name = 'SorobanRpcException';
@@ -242,6 +244,8 @@ export class StellarService implements OnModuleInit {
         'SOROBAN_CONTRACT_ID is not configured',
         'missing_contract_id',
         HttpStatus.INTERNAL_SERVER_ERROR,
+        fn,
+        args,
       );
     }
     if (!this.keypair) {
@@ -249,6 +253,8 @@ export class StellarService implements OnModuleInit {
         'STELLAR_ACCOUNT_SECRET is not configured',
         'missing_signer',
         HttpStatus.INTERNAL_SERVER_ERROR,
+        fn,
+        args,
       );
     }
 
@@ -274,6 +280,8 @@ export class StellarService implements OnModuleInit {
           'Soroban simulateTransaction failed',
           this.extractSorobanErrorCode(simulated.error),
           HttpStatus.BAD_REQUEST,
+          fn,
+          args,
         );
       }
 
@@ -287,6 +295,9 @@ export class StellarService implements OnModuleInit {
         throw new SorobanRpcException(
           'Soroban sendTransaction failed',
           this.extractSorobanErrorCode(submitted.errorResult ?? submitted),
+          HttpStatus.BAD_GATEWAY,
+          fn,
+          args,
         );
       }
 
@@ -299,6 +310,9 @@ export class StellarService implements OnModuleInit {
       throw new SorobanRpcException(
         `Soroban contract invocation failed for ${fn}`,
         this.extractSorobanErrorCode(error),
+        HttpStatus.BAD_GATEWAY,
+        fn,
+        args,
       );
     }
   }

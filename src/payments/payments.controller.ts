@@ -94,6 +94,16 @@ export class PaymentsController {
     return this.paymentsService.getStats(req.user.merchantId);
   }
 
+  @Get(':id/history')
+  @Scopes('payments:read')
+  @ApiOperation({ summary: 'Get immutable payment status history' })
+  @ApiParam({ name: 'id', description: 'Payment UUID' })
+  @ApiOkResponse({ description: 'Event log ordered by timestamp' })
+  @ApiNotFoundResponse({ description: 'Payment not found' })
+  getHistory(@Request() req: { user: { merchantId: string } }, @Param('id', ParseUUIDPipe) id: string) {
+    return this.paymentsService.getHistory(id, req.user.merchantId);
+  }
+
   @Get(':id')
   @Scopes('payments:read')
   @ApiOperation({ summary: 'Get payment by ID' })
@@ -137,6 +147,7 @@ export class PublicPaymentController {
   @ApiParam({ name: 'reference', example: 'PAY-abc123' })
   @ApiOkResponse({ type: PublicPaymentViewDto, description: 'Public payment view' })
   @ApiNotFoundResponse({ description: 'Unknown reference' })
+  @ApiResponse({ status: 410, description: 'QR code expired' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   async getByReference(@Param('reference') reference: string): Promise<PublicPaymentViewDto> {
     const payment = await this.paymentsService.findByReference(reference);

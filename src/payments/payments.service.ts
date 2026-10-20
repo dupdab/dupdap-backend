@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -6,6 +6,7 @@ import * as QRCode from 'qrcode';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import Big from 'big.js';
 import { Payment, PaymentStatus } from './entities/payment.entity';
+import { PaymentEvent, PaymentEventType } from './entities/payment-event.entity';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { BatchCreatePaymentDto, BatchPaymentResultDto } from './dto/batch-create-payment.dto';
@@ -35,6 +36,8 @@ export class PaymentsService {
   constructor(
     @InjectRepository(Payment)
     private paymentsRepo: Repository<Payment>,
+    @InjectRepository(PaymentEvent)
+    private eventsRepo: Repository<PaymentEvent>,
     private stellar: StellarService,
     private webhooks: WebhooksService,
     private notifications: NotificationsService,
@@ -47,7 +50,38 @@ export class PaymentsService {
   ) {}
 
   /**
-   * Resolve the XLM/USD rate for customer-facing payment creation.
+   * Append-only audit log of every status transition.
+   * PaymentEvent rows are never updated or deleted (immutable).
+   */
+  private async recordEvent(
+    paymentId: string,
+    eventType: PaymentEventType,
+    previousStatus: PaymentStatus | null,
+    newStatus: PaymentStatus | null,
+    actorId?: string,
+    metadata?: Record<string, any>,
+  ): Promise<void> {
+    await this.eventsRepo.save(
+      this.eventsRepo.create({
+        paymentId,
+        eventType,
+        previousStatus,
+        newStatus,
+        actorId: actorId ?? null,
+        metadata: metadata ?? null,
+      }),
+    );
+  }
+
+  /** Immutable event log for audit/debugging (no updates/deletes). */
+  async getHistory(paymentId: string, merchantId: string): Promise<PaymentEvent[]> {
+    await this.findOne(paymentId, merchantId);
+    return this.eventsRepo.find({
+      where: { paymentId },
+      order: { timestamp: 'ASC' },
+    });
+  }
+  /**
    *
    * getXlmUsdRate() now returns { rate, isFallback }. A fallback rate is a
    * fabricated/stale constant and must never be used to quote a deposit
@@ -76,11 +110,13 @@ export class PaymentsService {
     const memo = this.stellar.generateMemo();
     const depositAddress = this.stellar.getDepositAddress();
 
-    const stellarUri = `web+stellar:pay?destination=${depositAddress}&amount=${amountXlm.toFixed(7)}&memo=${memo}&memo_type=text`;
-    const qrCode = await QRCode.toDataURL(stellarUri);
-
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + (dto.expiryMinutes ?? 30));
+
+    // Bake expiry into the QR payload so the frontend can render a visual
+    // countdown/expiry indicator without an extra clock source (#545).
+    const stellarUri = `web+stellar:pay?destination=${depositAddress}&amount=${amountXlm.toFixed(7)}&memo=${memo}&memo_type=text&expires=${encodeURIComponent(expiresAt.toISOString())}`;
+    const qrCode = await QRCode.toDataURL(stellarUri);
 
     const payment = this.paymentsRepo.create({
       id: uuidv4(),
@@ -112,7 +148,9 @@ export class PaymentsService {
 
     // Persist the expiry_ledger so NestJS cron can query it without RPC calls.
     saved.expiryLedger = contractPayment.expiryLedger;
-    return this.paymentsRepo.save(saved);
+    const final = await this.paymentsRepo.save(saved);
+    await this.recordEvent(final.id, PaymentEventType.CREATED, null, PaymentStatus.PENDING, merchantId);
+    return final;
   }
 
   /**
@@ -133,8 +171,10 @@ export class PaymentsService {
     } catch (err) {
       if (err instanceof PaymentExpiredError) {
         // Sync NestJS state with contract state
+        const previousStatus = payment.status;
         payment.status = PaymentStatus.EXPIRED;
         await this.paymentsRepo.save(payment);
+        await this.recordEvent(paymentId, PaymentEventType.EXPIRED, previousStatus, PaymentStatus.EXPIRED);
         throw new BadRequestException(err.message);
       }
       throw err;
@@ -144,6 +184,7 @@ export class PaymentsService {
     payment.customerWalletAddress = customerAddress;
     payment.confirmedAt = new Date();
     const saved = await this.paymentsRepo.save(payment);
+    await this.recordEvent(paymentId, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { customerAddress });
 
     // Invalidate merchant analytics caches since funnel and comparison data may have changed.
     this.analytics.clearCacheForMerchant(payment.merchantId);
@@ -167,6 +208,7 @@ export class PaymentsService {
     if (event.txHash) payment.txHash = event.txHash;
     if (event.from) payment.customerWalletAddress = event.from;
     await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { txHash: event.txHash });
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
   }
@@ -255,6 +297,19 @@ export class PaymentsService {
       `Batch created ${saved.length} payments for merchant ${merchantId}`,
     );
 
+    // Audit log: one immutable CREATED event per payment in the batch.
+    await this.eventsRepo.save(
+      saved.map((p) =>
+        this.eventsRepo.create({
+          paymentId: p.id,
+          eventType: PaymentEventType.CREATED,
+          previousStatus: null,
+          newStatus: PaymentStatus.PENDING,
+          actorId: merchantId,
+        }),
+      ),
+    );
+
     return {
       payments: saved.map((p) => ({
         id: p.id,
@@ -296,6 +351,7 @@ export class PaymentsService {
     }
 
     const newRefundedUsd = alreadyRefundedUsd.plus(refundAmount);
+    const previousStatus = payment.status;
     payment.refundAmountUsd = newRefundedUsd.toFixed(6);
     payment.status =
       newRefundedUsd.gte(new Big(payment.amountUsd))
@@ -305,23 +361,35 @@ export class PaymentsService {
     payment.refundedAt = new Date();
 
     const saved2 = await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.REFUNDED, previousStatus, payment.status, merchantId, { refundAmountUsd: dto.amountUsd });
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
     return saved2;
   }
 
+  /**
+   * List payments WITHOUT eager merchant loading (#532).
+   * `relations: []` is deliberate: the full merchant row (incl. encrypted
+   * bank fields) is never needed here. Only merchant id + businessName are
+   * projected via a selective join. Compare with/without via:
+   * `pnpm run explain:queries` (see scripts/explain-list-queries.ts).
+   */
   async findAll(
     merchantId: string,
     page = 1,
     limit = 20,
   ): Promise<PaginatedResponseDto<Payment>> {
-    const [items, total] = await this.paymentsRepo.findAndCount({
-      where: { merchantId },
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const qb = this.paymentsRepo
+      .createQueryBuilder('payment')
+      .leftJoin('payment.merchant', 'merchant')
+      .addSelect(['merchant.id', 'merchant.businessName'])
+      .where('payment.merchantId = :merchantId', { merchantId })
+      .orderBy('payment.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
 
     return {
       items,
@@ -347,6 +415,9 @@ export class PaymentsService {
   async findByReference(reference: string): Promise<Payment> {
     const payment = await this.paymentsRepo.findOne({ where: { reference } });
     if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.expiresAt && new Date(payment.expiresAt).getTime() < Date.now()) {
+      throw new GoneException('Payment QR code has expired');
+    }
     return payment;
   }
 

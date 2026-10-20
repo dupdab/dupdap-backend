@@ -12,6 +12,7 @@ import { VersioningInterceptor } from './common/interceptors/versioning.intercep
 import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
 import { SentryService } from './sentry/sentry.service';
 import { getCorrelationId } from './common/correlation-id.context';
+import { isOriginAllowed, parseAllowedOrigins, validateCorsConfig } from './config/cors.config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { version } = require('../package.json') as { version: string };
 
@@ -97,15 +98,14 @@ async function bootstrap(): Promise<void> {
   const apiPrefix = String(config.get('API_PREFIX', 'api/v1'));
 
   const isDevelopment = process.env.NODE_ENV !== 'production';
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-    : [];
+  const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+  validateCorsConfig(process.env.NODE_ENV, allowedOrigins);
 
   app.enableCors({
     origin: isDevelopment
       ? true
       : (origin, callback) => {
-          if (!origin || allowedOrigins.includes(origin)) {
+          if (isOriginAllowed(origin, allowedOrigins)) {
             callback(null, true);
           } else {
             callback(new Error(`CORS: origin '${origin}' not allowed`));

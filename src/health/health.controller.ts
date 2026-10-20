@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, HttpException, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpStatus, HttpException, Optional, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import {
   HealthCheck,
@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { MerchantRole } from '../merchants/entities/merchant.entity';
+import { CacheWarmupService } from '../cache/cache-warmup.service';
 
 @ApiTags('health')
 @Controller('health')
@@ -25,12 +26,56 @@ export class HealthController {
     private config: ConfigService,
     private cache: CacheService,
     @InjectQueue('webhook-delivery') private webhookQueue: Queue,
+    @Optional() private readonly cacheWarmup?: CacheWarmupService,
   ) {}
 
   @Get()
   @ApiOperation({ summary: 'Liveness — always 200 while process is alive' })
   liveness() {
     return { status: 'ok' };
+  }
+
+  @Get('live')
+  @ApiOperation({ summary: 'Kubernetes liveness probe — process alive, no dependency checks' })
+  live() {
+    // Liveness must never touch external dependencies: a failing DB/Redis
+    // must not cause the container to be restarted.
+    return { status: 'ok' };
+  }
+
+  @Get('ready')
+  @ApiOperation({ summary: 'Kubernetes readiness probe — DB, Redis, and Stellar must be reachable' })
+  async ready() {
+    const [db, redis, stellar] = await Promise.allSettled([
+      this.db.pingCheck('database'),
+      this.cache.ping(),
+      this.http.pingCheck(
+        'stellar',
+        `${this.config.get('STELLAR_HORIZON_URL', 'https://horizon-testnet.stellar.org')}/`,
+      ),
+    ]);
+    const failed =
+      db.status === 'rejected' ||
+      redis.status === 'rejected' ||
+      stellar.status === 'rejected';
+    if (failed) {
+      throw new HttpException(
+        {
+          status: 'not ready',
+          database: db.status,
+          redis: redis.status,
+          stellar: stellar.status,
+        },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    if (this.cacheWarmup && !this.cacheWarmup.isWarmed()) {
+      throw new HttpException({ status: 'warming' }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    return { status: 'ready' };
+  }
+    }
+    return { status: 'ready' };
   }
 
   @Get('admin')

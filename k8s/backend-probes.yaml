@@ -1,0 +1,27 @@
+# Kubernetes probe wiring for the backend Deployment.
+# Liveness restarts only a dead process; readiness gates traffic on dependencies.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dupdub-backend
+spec:
+  template:
+    spec:
+      containers:
+        - name: backend
+          image: dupdub-backend:latest
+          ports:
+            - containerPort: 3000
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3

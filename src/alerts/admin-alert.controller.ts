@@ -29,4 +29,15 @@ export class AdminAlertController {
       null;
     return this.adminAlertService.acknowledge(id, adminId);
   }
+
+  @Patch(':id/resolve')
+  resolve(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<AdminAlert> {
+    const adminId =
+      (req as Request & { user?: { merchantId?: string } }).user?.merchantId ??
+      null;
+    return this.adminAlertService.resolve(id, adminId);
+  }
 }

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dupdap-backend
+  labels:
+    app: dupdap-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dupdap-backend
+  template:
+    metadata:
+      labels:
+        app: dupdap-backend
+    spec:
+      containers:
+        - name: api
+          image: dupdap-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: dupdap-backend-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dupdap-backend-secrets
+                  key: DB_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dupdap-backend-secrets
+                  key: JWT_SECRET
+            - name: STELLAR_ACCOUNT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dupdap-backend-secrets
+                  key: STELLAR_ACCOUNT_SECRET
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dupdap-backend-secrets
+                  key: REDIS_PASSWORD
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
