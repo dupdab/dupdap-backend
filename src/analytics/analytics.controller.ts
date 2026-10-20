@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Query, UseGuards, Request } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -79,12 +79,28 @@ export class AnalyticsController {
   @Get('funnel')
   @Scopes('analytics:read')
   @ApiOperation({ summary: 'Get payment funnel metrics' })
+  @ApiQuery({ name: 'merchantId', required: false, description: 'Merchant to inspect; merchants may only pass their own ID' })
+  @ApiQuery({ name: 'from', required: false, description: 'Start date in YYYY-MM-DD format' })
+  @ApiQuery({ name: 'to', required: false, description: 'End date in YYYY-MM-DD format' })
   @ApiQuery({ name: 'compareWith', enum: ['previous'], required: false })
   @ApiOkResponse({ description: 'Payment funnel metrics' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
   @ApiForbiddenResponse({ description: 'API key missing analytics:read scope' })
-  async getFunnel(@Request() req, @Query('compareWith') compareWith?: 'previous') {
-    return this.analyticsService.getFunnel(req.user.merchantId, compareWith);
+  async getFunnel(
+    @Request() req: { user: { merchantId: string; role: MerchantRole } },
+    @Query('merchantId') merchantId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('compareWith') compareWith?: 'previous',
+  ) {
+    const isAdmin =
+      req.user.role === MerchantRole.ADMIN || req.user.role === MerchantRole.SUPERADMIN;
+
+    if (!isAdmin && merchantId && merchantId !== req.user.merchantId) {
+      throw new ForbiddenException('Cannot view funnel for another merchant');
+    }
+
+    return this.analyticsService.getFunnel(merchantId ?? req.user.merchantId, compareWith, from, to);
   }
 
   @Get('comparison')
