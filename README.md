@@ -336,6 +336,30 @@ CI also runs migration safety/rollback checks, an uncommitted-migration check, a
 - Uptime/status page config: see `monitoring/` in `dupdapp_stellar`.
 - `AdminAlertService` pushes Slack/email alerts on repeated Stellar-monitor or settlement failures (`ADMIN_ALERT_*` env vars).
 
+### DB connection pool sizing
+
+`DB_POOL_MIN` / `DB_POOL_MAX` set the per-instance pg pool. Size `DB_POOL_MAX` from the database, not from traffic:
+
+```
+DB_POOL_MAX = min( 2 × vCPU + 1 , (max_connections − reserved) ÷ instances )
+```
+
+- `max_connections` is the PostgreSQL server setting (default 100).
+- `reserved` is headroom for superuser/admin sessions, migrations and backups (keep at least 10).
+- `instances` is the number of backend replicas connecting to the same database.
+- Each request holds a connection only while a query runs, so a larger pool than the formula allows just moves the queue into Postgres and makes overload worse.
+- With PgBouncer in transaction mode, size the app pool from the PgBouncer side instead (see `src/database/PGBOUNCER.md`).
+
+Pool metrics are exported on `/metrics`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `db_pool_size` | Gauge | Open connections (idle + active) |
+| `db_pool_active_connections` | Gauge | Connections checked out |
+| `db_pool_waiting_queries` | Gauge | Queries waiting for a connection |
+
+`PoolMonitorService` samples every 30s. It logs a warning and raises a `db_pool_exhausted` admin alert when queries are waiting, and raises the same alert type (dedupe key `db-pool-high-utilization`) when active connections stay above 80% of `DB_POOL_MAX` for more than 60s.
+
 ## Handsoff notes
 
 <!-- handsoff-issue-340 -->
