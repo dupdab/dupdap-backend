@@ -31,6 +31,9 @@ export enum PaymentNetwork {
 @Entity('payments')
 @Index(['merchantId', 'status'])
 @Index(['merchantId', 'createdAt'])
+@Index('IDX_payments_merchant_status_created_at', ['merchantId', 'status', 'createdAt'])
+@Index('IDX_payments_status_expires_at', ['status', 'expiresAt'])
+@Index('IDX_payments_created_at', ['createdAt'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
