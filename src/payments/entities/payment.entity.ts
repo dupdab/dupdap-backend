@@ -22,6 +22,7 @@ export enum PaymentStatus {
   EXPIRED = 'expired',
   REFUNDED = 'refunded',
   PARTIALLY_REFUNDED = 'partially_refunded',
+  HELD = 'held',
 }
 
 export enum PaymentNetwork {

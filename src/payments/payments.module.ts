@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
 import { PaymentsController, PublicPaymentController } from './payments.controller';
+import { PaymentsAdminController } from './payments-admin.controller';
 import { Payment } from './entities/payment.entity';
 import { PaymentEvent } from './entities/payment-event.entity';
 import { StellarModule } from '../stellar/stellar.module';
@@ -31,7 +32,7 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
     AdminAlertModule,
     forwardRef(() => AmlModule),
   ],
-  controllers: [PaymentsController, PublicPaymentController],
+  controllers: [PaymentsController, PublicPaymentController, PaymentsAdminController],
   providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
   exports: [PaymentsService],
 })

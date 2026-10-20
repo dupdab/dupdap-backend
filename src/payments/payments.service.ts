@@ -332,6 +332,10 @@ export class PaymentsService {
     const payment = await this.findOne(merchantId, paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
 
+    if (payment.status === PaymentStatus.HELD) {
+      throw new BadRequestException('Payment is on hold pending review and cannot be refunded');
+    }
+
     if (
       payment.status !== PaymentStatus.CONFIRMED &&
       payment.status !== PaymentStatus.PARTIALLY_REFUNDED
@@ -379,6 +383,65 @@ export class PaymentsService {
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
     return saved2;
+  }
+
+  /**
+   * Admin: place escrowed funds on HOLD for fraud review. HELD is excluded
+   * from both refunds and settlement (both only pick up CONFIRMED /
+   * PARTIALLY_REFUNDED payments), so it pauses both paths.
+   */
+  async hold(paymentId: string, reason: string, actorId?: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    if (
+      payment.status !== PaymentStatus.CONFIRMED &&
+      payment.status !== PaymentStatus.PARTIALLY_REFUNDED
+    ) {
+      throw new BadRequestException('Only confirmed payments can be placed on hold');
+    }
+
+    const previousStatus = payment.status;
+    payment.status = PaymentStatus.HELD;
+    const saved = await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.HELD, previousStatus, PaymentStatus.HELD, actorId, { reason });
+
+    await this.webhooks.dispatch(payment.merchantId, 'payment.held', {
+      paymentId: payment.id,
+      reference: payment.reference,
+      reason,
+    });
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    return saved;
+  }
+
+  /**
+   * Admin: lift a HOLD and restore the status the payment had before it was
+   * held, so it becomes eligible for refund or settlement again.
+   */
+  async release(paymentId: string, actorId?: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    if (payment.status !== PaymentStatus.HELD) {
+      throw new BadRequestException('Only held payments can be released');
+    }
+
+    const holdEvent = await this.eventsRepo.findOne({
+      where: { paymentId, eventType: PaymentEventType.HELD },
+      order: { timestamp: 'DESC' },
+    });
+    const restoredStatus = holdEvent?.previousStatus ?? PaymentStatus.CONFIRMED;
+
+    payment.status = restoredStatus;
+    const saved = await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.RELEASED, PaymentStatus.HELD, restoredStatus, actorId);
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    return saved;
   }
 
   /**
