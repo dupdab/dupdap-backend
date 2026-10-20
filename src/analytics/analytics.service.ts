@@ -5,10 +5,13 @@ import { Payment, PaymentNetwork, PaymentStatus } from '../payments/entities/pay
 import { Settlement, SettlementStatus } from '../settlements/entities/settlement.entity';
 import { CacheService } from '../cache/cache.service';
 import {
+  AnalyticsRangeInput,
+  AnalyticsRangePreset,
   DateRange,
   addUtcDays,
   addUtcMonths,
   parseIsoDate,
+  resolveAnalyticsWindow,
   resolveDateRange,
   startOfUtcDay,
   startOfUtcMonth,
@@ -25,6 +28,9 @@ interface VolumeOptions {
   merchantId?: string;
   scope: VolumeScope;
   period: AnalyticsPeriod;
+  preset?: AnalyticsRangePreset;
+  from?: string;
+  to?: string;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -39,6 +45,7 @@ interface RevenueOptions {
   merchantId?: string;
   scope: RevenueScope;
   period: AnalyticsPeriod;
+  preset?: AnalyticsRangePreset;
   from?: string;
   to?: string;
 }
@@ -102,6 +109,59 @@ export class AnalyticsService {
     return { currentStart, currentEnd, prevStart: new Date(now.getFullYear(), now.getMonth() - 1, 1), prevEnd: currentStart };
   }
 
+  private describeWindow(window?: DateRange): string {
+    return window
+      ? `${window.start.toISOString()}-${window.endExclusive.toISOString()}`
+      : 'default';
+  }
+
+  /**
+   * Splits a requested window into the current span and the equal-length span before it.
+   * Monthly buckets are whole months, so the current span is widened to month boundaries.
+   */
+  private resolveWindowPeriods(
+    period: AnalyticsPeriod,
+    window: DateRange,
+  ): { current: DateRange; previous: DateRange } {
+    const current: DateRange =
+      period === 'daily'
+        ? window
+        : {
+            start: startOfUtcMonth(window.start),
+            endExclusive: addUtcMonths(startOfUtcMonth(addUtcDays(window.endExclusive, -1)), 1),
+          };
+    const previousStart =
+      period === 'daily'
+        ? addUtcDays(current.start, -this.diffUtcDays(current.start, current.endExclusive))
+        : addUtcMonths(current.start, -this.diffUtcMonths(current.start, current.endExclusive));
+
+    return { current, previous: { start: previousStart, endExclusive: current.start } };
+  }
+
+  private buildRevenueRanges(
+    period: AnalyticsPeriod,
+    window: DateRange,
+  ): { current: RevenueRange; previous: RevenueRange } {
+    const { current, previous } = this.resolveWindowPeriods(period, window);
+    return {
+      current: this.buildRevenueRange(period, current),
+      previous: this.buildRevenueRange(period, previous),
+    };
+  }
+
+  private buildRevenueRange(period: AnalyticsPeriod, range: DateRange): RevenueRange {
+    const endInclusive = addUtcDays(range.endExclusive, -1);
+    const format = (value: Date) =>
+      period === 'daily' ? this.formatDay(value) : this.formatMonth(value);
+    return {
+      start: range.start,
+      endInclusive,
+      endExclusive: range.endExclusive,
+      labelStart: format(range.start),
+      labelEnd: format(endInclusive),
+    };
+  }
+
   private pctChange(current: number, previous: number): number | null {
     if (previous === 0) return null;
     return parseFloat((((current - previous) / previous) * 100).toFixed(2));
@@ -112,8 +172,11 @@ export class AnalyticsService {
   }
 
   async getVolume(options: VolumeOptions) {
-    const { merchantId, period, scope, dateFrom, dateTo } = options;
-    const range = resolveDateRange(period, dateFrom, dateTo);
+    const { merchantId, period, scope, preset, from, to, dateFrom, dateTo } = options;
+    const window = resolveAnalyticsWindow({ preset, from: from ?? dateFrom, to: to ?? dateTo });
+    const range = window
+      ? this.resolveWindowPeriods(period, window).current
+      : resolveDateRange(period, dateFrom, dateTo);
     const cacheKey = this.analyticsCacheKey({
       merchantId: scope === 'admin' ? 'admin' : (merchantId ?? 'unknown'),
       endpoint: 'volume',
@@ -136,11 +199,12 @@ export class AnalyticsService {
     );
   }
 
-  async getFunnel(merchantId: string, compareWith?: 'previous') {
+  async getFunnel(merchantId: string, compareWith?: 'previous', range?: AnalyticsRangeInput) {
+    const window = resolveAnalyticsWindow(range ?? {});
     const cacheKey = this.analyticsCacheKey({
       merchantId,
       endpoint: 'funnel',
-      dateRange: compareWith ?? 'none',
+      dateRange: `${compareWith ?? 'none'}:${this.describeWindow(window)}`,
     });
     return this.getCachedData(cacheKey, async () => {
       const fetchCounts = async (start?: Date, end?: Date) => {
@@ -165,10 +229,18 @@ export class AnalyticsService {
       };
 
       if (compareWith !== 'previous') {
-        return fetchCounts();
+        return window ? fetchCounts(window.start, window.endExclusive) : fetchCounts();
       }
 
-      const { currentStart, currentEnd, prevStart, prevEnd } = this.getPeriodBounds('daily');
+      const periods = window ? this.resolveWindowPeriods('daily', window) : undefined;
+      const { currentStart, currentEnd, prevStart, prevEnd } = periods
+        ? {
+            currentStart: periods.current.start,
+            currentEnd: periods.current.endExclusive,
+            prevStart: periods.previous.start,
+            prevEnd: periods.previous.endExclusive,
+          }
+        : this.getPeriodBounds('daily');
       const [current, previous] = await Promise.all([
         fetchCounts(currentStart, currentEnd),
         fetchCounts(prevStart, prevEnd),
@@ -186,17 +258,24 @@ export class AnalyticsService {
     }, MERCHANT_ANALYTICS_TTL_MS);
   }
 
-  async getComparison(merchantId: string, period: AnalyticsPeriod) {
+  async getComparison(merchantId: string, period: AnalyticsPeriod, range?: AnalyticsRangeInput) {
+    const window = resolveAnalyticsWindow(range ?? {});
     const cacheKey = this.analyticsCacheKey({
       merchantId,
       endpoint: 'comparison',
-      dateRange: period,
+      dateRange: `${period}:${this.describeWindow(window)}`,
     });
     return this.getCachedData(cacheKey, async () => {
       const now = new Date();
       let currentStart: Date, currentEnd: Date, prevStart: Date, prevEnd: Date;
 
-      if (period === 'daily') {
+      if (window) {
+        const periods = this.resolveWindowPeriods(period, window);
+        currentStart = periods.current.start;
+        currentEnd = periods.current.endExclusive;
+        prevStart = periods.previous.start;
+        prevEnd = periods.previous.endExclusive;
+      } else if (period === 'daily') {
         currentStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         currentEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         prevStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
@@ -224,8 +303,11 @@ export class AnalyticsService {
   }
 
   async getRevenue(options: RevenueOptions) {
-    const { merchantId, period, scope, from, to } = options;
-    const { current, previous } = this.resolveRevenueRanges(period, from, to);
+    const { merchantId, period, scope, preset, from, to } = options;
+    const window = resolveAnalyticsWindow({ preset, from, to });
+    const { current, previous } = window
+      ? this.buildRevenueRanges(period, window)
+      : this.resolveRevenueRanges(period, from, to);
     const cacheKey = this.analyticsCacheKey({
       merchantId: scope === 'admin' ? 'admin' : (merchantId ?? 'unknown'),
       endpoint: 'revenue',
@@ -286,33 +368,44 @@ export class AnalyticsService {
     return parseFloat(result?.total || 0);
   }
 
-  async getNetworkBreakdown(merchantId: string, sortBy: 'volume' | 'count' = 'volume', period: 'daily' | 'monthly' = 'daily') {
+  async getNetworkBreakdown(
+    merchantId: string,
+    sortBy: 'volume' | 'count' = 'volume',
+    period: 'daily' | 'monthly' = 'daily',
+    range?: AnalyticsRangeInput,
+  ) {
+    const window = resolveAnalyticsWindow(range ?? {});
     const cacheKey = this.analyticsCacheKey({
       merchantId,
       endpoint: 'networks',
-      dateRange: `${period}:${sortBy}`,
+      dateRange: `${period}:${sortBy}:${this.describeWindow(window)}`,
     });
     return this.getCachedData(cacheKey, async () => {
       const dateFormat = period === 'daily' ? 'YYYY-MM-DD' : 'YYYY-MM';
+      const settledPayments = () => {
+        const qb = this.paymentsRepo
+          .createQueryBuilder('payment')
+          .where('payment.merchantId = :merchantId', { merchantId })
+          .andWhere('payment.status = :status', { status: PaymentStatus.SETTLED });
+        if (window) {
+          qb.andWhere('payment.createdAt >= :start', { start: window.start })
+            .andWhere('payment.createdAt < :end', { end: window.endExclusive });
+        }
+        return qb;
+      };
 
       const [rows, trendRows] = await Promise.all([
-        this.paymentsRepo
-          .createQueryBuilder('payment')
+        settledPayments()
           .select('payment.network', 'network')
           .addSelect('COUNT(*)', 'count')
           .addSelect('COALESCE(SUM(payment.amountUsd), 0)', 'volumeUsd')
-          .where('payment.merchantId = :merchantId', { merchantId })
-          .andWhere('payment.status = :status', { status: PaymentStatus.SETTLED })
           .groupBy('payment.network')
           .getRawMany(),
-        this.paymentsRepo
-          .createQueryBuilder('payment')
+        settledPayments()
           .select('payment.network', 'network')
           .addSelect(`TO_CHAR(payment.createdAt, '${dateFormat}')`, 'date')
           .addSelect('COUNT(*)', 'count')
           .addSelect('COALESCE(SUM(payment.amountUsd), 0)', 'volumeUsd')
-          .where('payment.merchantId = :merchantId', { merchantId })
-          .andWhere('payment.status = :status', { status: PaymentStatus.SETTLED })
           .groupBy('payment.network')
           .addGroupBy('date')
           .orderBy('date', 'ASC')

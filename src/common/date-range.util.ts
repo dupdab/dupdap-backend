@@ -7,6 +7,17 @@ export interface DateRange {
   endExclusive: Date;
 }
 
+export const ANALYTICS_RANGE_PRESETS = ['today', '7d', '30d', '90d', 'ytd', 'custom'] as const;
+export type AnalyticsRangePreset = (typeof ANALYTICS_RANGE_PRESETS)[number];
+
+export interface AnalyticsRangeInput {
+  preset?: AnalyticsRangePreset;
+  from?: string;
+  to?: string;
+}
+
+const MAX_ANALYTICS_RANGE_YEARS = 1;
+
 export function parseIsoDate(value: string): Date {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new BadRequestException('Dates must use YYYY-MM-DD format');
@@ -34,6 +45,79 @@ export function addUtcDays(value: Date, days: number): Date {
 
 export function addUtcMonths(value: Date, months: number): Date {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + months, 1));
+}
+
+function addUtcYears(value: Date, years: number): Date {
+  return new Date(Date.UTC(value.getUTCFullYear() + years, value.getUTCMonth(), value.getUTCDate()));
+}
+
+function parseIsoDateTime(value: string, field: string): Date {
+  const parsed = new Date(value);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value) || Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(`"${field}" must be an ISO 8601 date or datetime`);
+  }
+
+  return parsed;
+}
+
+/**
+ * Resolves an analytics range into a half-open UTC window aligned to whole days.
+ * Presets end today (inclusive). Custom `from`/`to` accept ISO 8601 dates or datetimes
+ * and are inclusive by day. Returns undefined when no range is requested so callers can
+ * keep their own defaults. Windows are capped at one year.
+ */
+export function resolveAnalyticsWindow(
+  input: AnalyticsRangeInput,
+  now = new Date(),
+): DateRange | undefined {
+  const { preset, from, to } = input;
+  if (!preset && !from && !to) {
+    return undefined;
+  }
+
+  if (preset && !ANALYTICS_RANGE_PRESETS.includes(preset)) {
+    throw new BadRequestException(
+      `"preset" must be one of: ${ANALYTICS_RANGE_PRESETS.join(', ')}`,
+    );
+  }
+
+  const today = startOfUtcDay(now);
+  if (preset && preset !== 'custom') {
+    if (from || to) {
+      throw new BadRequestException('"preset" cannot be combined with "from" or "to"');
+    }
+
+    const starts: Record<Exclude<AnalyticsRangePreset, 'custom'>, Date> = {
+      today,
+      '7d': addUtcDays(today, -6),
+      '30d': addUtcDays(today, -29),
+      '90d': addUtcDays(today, -89),
+      ytd: new Date(Date.UTC(now.getUTCFullYear(), 0, 1)),
+    };
+
+    return { start: starts[preset], endExclusive: addUtcDays(today, 1) };
+  }
+
+  if (!from) {
+    throw new BadRequestException('"from" is required for a custom range');
+  }
+
+  const start = startOfUtcDay(parseIsoDateTime(from, 'from'));
+  const endExclusive = to
+    ? addUtcDays(startOfUtcDay(parseIsoDateTime(to, 'to')), 1)
+    : addUtcDays(today, 1);
+
+  if (start >= endExclusive) {
+    throw new BadRequestException('"from" must be before or equal to "to"');
+  }
+
+  if (endExclusive > addUtcYears(start, MAX_ANALYTICS_RANGE_YEARS)) {
+    throw new BadRequestException(
+      `Analytics range must not exceed ${MAX_ANALYTICS_RANGE_YEARS} year`,
+    );
+  }
+
+  return { start, endExclusive };
 }
 
 /**
