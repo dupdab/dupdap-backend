@@ -18,15 +18,17 @@ function makeMockRedis() {
   };
 }
 
+type MockRedis = ReturnType<typeof makeMockRedis>;
+
 describe('CacheService', () => {
   let service: CacheService;
-  let redis: ReturnType<typeof makeMockRedis>;
-  let subscriber: ReturnType<typeof makeMockRedis>;
+  let redis: MockRedis;
+  let subscriber: MockRedis;
 
   beforeEach(async () => {
     redis = makeMockRedis();
     subscriber = makeMockRedis();
-    service = new CacheService(undefined, redis as any, subscriber as any);
+    service = new CacheService(undefined, redis as unknown as never, subscriber as unknown as never);
     await service.onModuleInit();
   });
 
