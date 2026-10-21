@@ -60,9 +60,12 @@ export class SorobanService implements OnModuleInit {
       );
 
       if (simulation?.error) {
-        throw new BadRequestException(
-          `Soroban simulation failed: ${this.describeSimulationError(simulation)}`,
-        );
+        this.logger.warn(`Soroban simulation failed: ${this.describeSimulationError(simulation)}`);
+        throw new BadRequestException({
+          errorCode: 'BLOCKCHAIN_OPERATION_FAILED',
+          message:
+            'The blockchain rejected this request. Check the payment details and wallet permissions before retrying.',
+        });
       }
 
       return simulation;
@@ -71,10 +74,7 @@ export class SorobanService implements OnModuleInit {
     }
   }
 
-  async submitTx(
-    transaction: any,
-    signer?: StellarSdk.Keypair | string,
-  ): Promise<any> {
+  async submitTx(transaction: any, signer?: StellarSdk.Keypair | string): Promise<any> {
     try {
       const preparedTransaction = await this.prepareTransaction(transaction);
       this.signTransaction(preparedTransaction, signer);
@@ -85,9 +85,7 @@ export class SorobanService implements OnModuleInit {
       );
 
       if (!submission?.hash) {
-        throw new BadGatewayException(
-          'Soroban RPC did not return a transaction hash',
-        );
+        throw new BadGatewayException('Soroban RPC did not return a transaction hash');
       }
 
       const finalResponse = await this.withRetry(
@@ -99,16 +97,17 @@ export class SorobanService implements OnModuleInit {
         'poll transaction',
       );
 
-      const status = String(
-        finalResponse?.status ?? submission?.status ?? '',
-      ).toUpperCase();
+      const status = String(finalResponse?.status ?? submission?.status ?? '').toUpperCase();
 
       if (status && status !== 'SUCCESS') {
-        throw new BadRequestException(
-          `Soroban transaction failed: ${this.describeTransactionFailure(
-            finalResponse ?? submission,
-          )}`,
+        this.logger.warn(
+          `Soroban transaction failed: ${this.describeTransactionFailure(finalResponse ?? submission)}`,
         );
+        throw new BadRequestException({
+          errorCode: 'BLOCKCHAIN_OPERATION_FAILED',
+          message:
+            'The blockchain transaction did not complete. Check the payment status before retrying.',
+        });
       }
 
       return finalResponse ?? submission;
@@ -130,10 +129,7 @@ export class SorobanService implements OnModuleInit {
       networkPassphrase: await this.getNetworkPassphrase(),
     })
       .addOperation(
-        contract.call(
-          options.method,
-          ...(options.args ?? []).map((value) => this.toScVal(value)),
-        ),
+        contract.call(options.method, ...(options.args ?? []).map((value) => this.toScVal(value))),
       )
       .setTimeout(options.timeoutInSeconds ?? 30)
       .build();
@@ -163,11 +159,9 @@ export class SorobanService implements OnModuleInit {
   }
 
   async getStakeBalance(stellarAddress: string): Promise<string> {
-    const result = await this.invokeConfiguredContract(
-      'getStakeBalance',
-      [stellarAddress],
-      { readOnly: true },
-    );
+    const result = await this.invokeConfiguredContract('getStakeBalance', [stellarAddress], {
+      readOnly: true,
+    });
     return this.stringifyContractResult(result.result);
   }
 
@@ -190,9 +184,7 @@ export class SorobanService implements OnModuleInit {
   ): Promise<any> {
     const contractId = this.configService.get<string>('SOROBAN_CONTRACT_ID');
     if (!contractId) {
-      throw new ServiceUnavailableException(
-        'SOROBAN_CONTRACT_ID is not configured',
-      );
+      throw new ServiceUnavailableException('SOROBAN_CONTRACT_ID is not configured');
     }
 
     return this.invokeContract({
@@ -216,10 +208,7 @@ export class SorobanService implements OnModuleInit {
     }
 
     const simulation = await this.simulateTx(transaction);
-    const assembled = (StellarSdk.rpc as any)?.assembleTransaction?.(
-      transaction,
-      simulation,
-    );
+    const assembled = (StellarSdk.rpc as any)?.assembleTransaction?.(transaction, simulation);
 
     if (assembled?.build) {
       return assembled.build();
@@ -228,10 +217,7 @@ export class SorobanService implements OnModuleInit {
     return assembled ?? transaction;
   }
 
-  private signTransaction(
-    transaction: any,
-    signer?: StellarSdk.Keypair | string,
-  ): void {
+  private signTransaction(transaction: any, signer?: StellarSdk.Keypair | string): void {
     const resolvedSigner =
       signer ??
       this.configService.get<string>('SOROBAN_SOURCE_SECRET') ??
@@ -277,9 +263,7 @@ export class SorobanService implements OnModuleInit {
       return this.networkPassphrase;
     }
 
-    const explicitPassphrase = this.configService.get<string>(
-      'SOROBAN_NETWORK_PASSPHRASE',
-    );
+    const explicitPassphrase = this.configService.get<string>('SOROBAN_NETWORK_PASSPHRASE');
     if (explicitPassphrase) {
       this.networkPassphrase = explicitPassphrase;
       return explicitPassphrase;
@@ -300,8 +284,7 @@ export class SorobanService implements OnModuleInit {
       () => this.rpcClient.getNetwork(),
       'load network details',
     );
-    this.networkPassphrase =
-      networkDetails?.passphrase ?? StellarSdk.Networks.TESTNET;
+    this.networkPassphrase = networkDetails?.passphrase ?? StellarSdk.Networks.TESTNET;
 
     return this.networkPassphrase;
   }
@@ -371,14 +354,10 @@ export class SorobanService implements OnModuleInit {
     }
 
     try {
-      const txResult = StellarSdk.xdr.TransactionResult.fromXDR(
-        rawValue,
-        'base64',
-      ) as any;
+      const txResult = StellarSdk.xdr.TransactionResult.fromXDR(rawValue, 'base64') as any;
       const txResultValue =
         typeof txResult?.result === 'function' ? txResult.result() : txResult?.result;
-      const resultCode =
-        txResultValue?.switch?.().name ?? txResult?.switch?.().name;
+      const resultCode = txResultValue?.switch?.().name ?? txResult?.switch?.().name;
 
       if (resultCode) {
         return `transaction_result:${resultCode}`;
@@ -411,9 +390,7 @@ export class SorobanService implements OnModuleInit {
       );
     }
 
-    return new BadGatewayException(
-      `Soroban RPC error while trying to ${action}: ${message}`,
-    );
+    return new BadGatewayException(`Soroban RPC error while trying to ${action}: ${message}`);
   }
 
   private describeError(error: unknown): string {
@@ -460,10 +437,7 @@ export class SorobanService implements OnModuleInit {
     ].some((fragment) => message.includes(fragment));
   }
 
-  private async withRetry<T>(
-    operation: () => Promise<T>,
-    action: string,
-  ): Promise<T> {
+  private async withRetry<T>(operation: () => Promise<T>, action: string): Promise<T> {
     const maxAttempts = 3;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -483,9 +457,7 @@ export class SorobanService implements OnModuleInit {
       }
     }
 
-    throw new ServiceUnavailableException(
-      `Soroban RPC ${action} failed after retries`,
-    );
+    throw new ServiceUnavailableException(`Soroban RPC ${action} failed after retries`);
   }
 
   private sleep(delayMs: number): Promise<void> {

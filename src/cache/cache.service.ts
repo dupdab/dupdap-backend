@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { MetricsService } from '../prometheus/metrics.service';
-import Redis from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 type CacheEnvelope =
@@ -27,14 +27,15 @@ const compressThresholdBytes = 8 * 1024;
 
 function buildRedisClient(): Redis {
   const url = process.env.REDIS_URL;
-  if (url) return new Redis(url as any);
-  return new Redis({
+  if (url) return new Redis(url);
+  const options: RedisOptions = {
     host: process.env.REDIS_HOST ?? '127.0.0.1',
     port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : 6379,
     password: process.env.REDIS_PASSWORD || undefined,
     maxRetriesPerRequest: 3,
     enableOfflineQueue: true,
-  } as any);
+  };
+  return new Redis(options);
 }
 
 @Injectable()
@@ -118,15 +119,15 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  async get<T>(key: string): Promise<T | undefined> {
+  async get<T>(key: string): Promise<T | null> {
     const raw = await this.redis.get(this.k(key));
     if (!raw) {
       this.recordLookup(key, 'miss');
-      return undefined;
+      return null;
     }
     const value = this.decode<T>(raw);
     this.recordLookup(key, value === undefined ? 'miss' : 'hit');
-    return value;
+    return value === undefined ? null : value;
   }
 
   async set<T>(key: string, value: T, options?: { ttlSeconds?: number }): Promise<void> {
@@ -175,7 +176,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     options: { ttlSeconds: number },
   ): Promise<{ value: T; cacheHit: boolean }> {
     const cached = await this.get<T>(key);
-    if (cached !== undefined) return { value: cached, cacheHit: true };
+    if (cached !== null) return { value: cached, cacheHit: true };
     const value = await fetchFn();
     await this.set(key, value, { ttlSeconds: options.ttlSeconds });
     return { value, cacheHit: false };
@@ -245,14 +246,17 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     const { limit, windowSeconds } = options;
     const now = Math.floor(Date.now() / 1000);
     const windowStart = now - windowSeconds;
-    const nsKey = this.k(key);
 
-    const entries = (this.memoryWindows.get(nsKey) ?? []).filter((e) => e.score > windowStart);
+    const existing = this.memoryWindows.get(key) ?? [];
+    const withinWindow = existing.filter((entry) => entry.score > windowStart);
 
-    if (entries.length >= limit) {
-      const oldestScore = entries.reduce((min, e) => Math.min(min, e.score), entries[0].score);
+    if (withinWindow.length >= limit) {
+      const oldestScore = withinWindow.reduce(
+        (min, entry) => (entry.score < min ? entry.score : min),
+        withinWindow[0].score,
+      );
       const resetAt = oldestScore + windowSeconds;
-      this.memoryWindows.set(nsKey, entries);
+      this.memoryWindows.set(key, withinWindow);
       return {
         allowed: false,
         limit,
@@ -262,40 +266,14 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    entries.push({ member: `${now}-${Math.random()}`, score: now });
-    this.memoryWindows.set(nsKey, entries);
+    withinWindow.push({ member: `${now}-${Math.random()}`, score: now });
+    this.memoryWindows.set(key, withinWindow);
 
     return {
       allowed: true,
       limit,
-      remaining: limit - entries.length,
+      remaining: limit - withinWindow.length,
       resetAt: now + windowSeconds,
     };
-  }
-
-  // ── Distributed locks ──────────────────────────────────────────────────────
-
-  /**
-   * Attempt to acquire a distributed lock keyed on `key` using Redis `SET NX PX`.
-   * Returns a unique token when the lock is acquired, or `undefined` when it is
-   * already held by another caller/instance.
-   */
-  async acquireLock(key: string, ttlMs: number): Promise<string | undefined> {
-    const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const result = await this.redis.set(this.k(`lock:${key}`), token, 'PX', ttlMs, 'NX');
-    return result === 'OK' ? token : undefined;
-  }
-
-  /**
-   * Release a previously acquired lock. Only deletes the key when the stored
-   * token still matches, so a lock that already expired and was re-acquired by
-   * another caller is not released by mistake.
-   */
-  async releaseLock(key: string, token: string): Promise<void> {
-    const nsKey = this.k(`lock:${key}`);
-    const current = await this.redis.get(nsKey);
-    if (current === token) {
-      await this.redis.del(nsKey);
-    }
   }
 }

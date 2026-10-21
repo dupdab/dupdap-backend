@@ -1,10 +1,11 @@
-import { Injectable, Logger, Inject, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Inject, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import * as Handlebars from 'handlebars';
 import * as fs from 'fs';
 import * as path from 'path';
 import { emailConfig } from '../config/email.config';
+import { NotificationTemplateService } from './notification-template.service';
 
 export interface MailSendResult {
   messageId: string;
@@ -31,6 +32,9 @@ export class NodemailerService implements OnModuleInit {
   constructor(
     @Inject(emailConfig.KEY)
     private readonly cfg: ConfigType<typeof emailConfig>,
+    // Optional so the mailer still resolves where the template table is not wired.
+    @Optional()
+    private readonly notificationTemplates?: NotificationTemplateService,
   ) {}
 
   onModuleInit(): void {
@@ -53,8 +57,7 @@ export class NodemailerService implements OnModuleInit {
     templateAlias: string,
     mergeData: Record<string, unknown>,
   ): Promise<MailSendResult> {
-    const { html, text } = this.renderTemplates(templateAlias, mergeData);
-    const subject = (mergeData['subject'] as string | undefined) ?? SUBJECTS[templateAlias] ?? templateAlias;
+    const { subject, html, text } = await this.renderTemplates(templateAlias, mergeData);
 
     const info = await this.transporter.sendMail({
       from: `"${this.cfg.fromName}" <${this.cfg.from}>`,
@@ -68,21 +71,32 @@ export class NodemailerService implements OnModuleInit {
     return { messageId: info.messageId as string };
   }
 
-  private renderTemplates(
+  /**
+   * A stored NotificationTemplate with the same name overrides the file-based
+   * subject and HTML body. The plain-text body still comes from the file when
+   * one exists, and is omitted for stored-only templates.
+   */
+  private async renderTemplates(
     templateAlias: string,
     mergeData: Record<string, unknown>,
-  ): { html: string; text: string } {
+  ): Promise<{ subject: string; html: string; text?: string }> {
     const vars = { ...mergeData, year: new Date().getFullYear() };
+    const stored = await this.notificationTemplates?.findByName(templateAlias);
 
-    const htmlBodySrc = this.readTemplate(`${templateAlias}.html.hbs`);
-    const textSrc = this.readTemplate(`${templateAlias}.text.hbs`);
-
+    const htmlBodySrc = stored ? stored.htmlBody : this.readTemplate(`${templateAlias}.html.hbs`);
     const htmlBody = Handlebars.compile(htmlBodySrc)(vars);
-    const subject = (mergeData['subject'] as string | undefined) ?? SUBJECTS[templateAlias] ?? templateAlias;
-    const html = this.layout({ ...vars, body: htmlBody, subject });
-    const text = Handlebars.compile(textSrc)(vars);
 
-    return { html, text };
+    const storedSubject = stored ? Handlebars.compile(stored.subject)(vars) : undefined;
+    const subject =
+      (mergeData['subject'] as string | undefined) ?? storedSubject ?? SUBJECTS[templateAlias] ?? templateAlias;
+    const html = this.layout({ ...vars, body: htmlBody, subject });
+
+    const textPath = path.join(TEMPLATES_DIR, `${templateAlias}.text.hbs`);
+    const text = stored && !fs.existsSync(textPath)
+      ? undefined
+      : Handlebars.compile(this.readTemplate(`${templateAlias}.text.hbs`))(vars);
+
+    return { subject, html, text };
   }
 
   private readTemplate(filename: string): string {

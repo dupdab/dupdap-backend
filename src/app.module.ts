@@ -17,6 +17,7 @@ import { MerchantsModule } from './merchants/merchants.module';
 import { GroupsModule } from './groups/groups.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
+import { RecurringPaymentsModule } from './recurring-payments/recurring-payments.module';
 import { QueueModule } from './queues/queue.module';
 import { SettlementsModule } from './settlements/settlements.module';
 import { StellarModule } from './stellar/stellar.module';
@@ -151,6 +152,7 @@ import Redis from 'ioredis';
     GroupsModule,
     NotificationsModule,
     PaymentsModule,
+    RecurringPaymentsModule,
     StellarModule,
     SettlementsModule,
     RetryModule,
