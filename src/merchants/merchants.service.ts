@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -8,6 +8,7 @@ import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { CacheService } from '../cache/cache.service';
 import { AuditLog } from '../audit/entities/audit-log.entity';
+import { EmailService } from '../email/email.service';
 
 /** Maximum allowed API key lifetime in milliseconds (365 days). */
 const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
@@ -23,6 +24,7 @@ export class MerchantsService {
     @InjectRepository(AuditLog)
     private readonly auditLogRepo: Repository<AuditLog>,
     private readonly cache: CacheService,
+    @Optional() private readonly email?: EmailService,
   ) {}
 
   async getActiveMerchantCount(): Promise<number> {
@@ -49,6 +51,60 @@ export class MerchantsService {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     return merchant;
+  }
+
+  async suspend(id: string, reason: string, adminId: string): Promise<Merchant> {
+    const merchant = await this.findOne(id);
+    if (!reason?.trim()) throw new BadRequestException('A suspension reason is required');
+    const before = {
+      suspended: merchant.suspended ?? false,
+      status: merchant.status,
+      suspendedReason: merchant.suspendedReason ?? null,
+    };
+    merchant.suspended = true;
+    merchant.suspendedReason = reason.trim();
+    const saved = await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'MERCHANT_SUSPENDED',
+      resource: `merchant:${id}`,
+      before,
+      after: {
+        suspended: true,
+        status: saved.status,
+        suspendedReason: saved.suspendedReason,
+      },
+    });
+    await this.email?.queue(saved.email, 'merchant-suspended', {
+      subject: 'Merchant account suspended',
+      businessName: saved.businessName,
+      reason: saved.suspendedReason,
+    });
+    return saved;
+  }
+
+  async unsuspend(id: string, adminId: string): Promise<Merchant> {
+    const merchant = await this.findOne(id);
+    const before = {
+      suspended: merchant.suspended ?? false,
+      status: merchant.status,
+      suspendedReason: merchant.suspendedReason ?? null,
+    };
+    merchant.suspended = false;
+    merchant.suspendedReason = null;
+    const saved = await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'MERCHANT_UNSUSPENDED',
+      resource: `merchant:${id}`,
+      before,
+      after: { suspended: false, status: saved.status, suspendedReason: null },
+    });
+    await this.email?.queue(saved.email, 'merchant-unsuspended', {
+      subject: 'Merchant account restored',
+      businessName: saved.businessName,
+    });
+    return saved;
   }
 
   async update(id: string, dto: UpdateMerchantDto): Promise<Merchant> {
@@ -86,9 +142,7 @@ export class MerchantsService {
       businessName: m.businessName ?? null,
       businessType: m.businessType ?? null,
       country: m.country ?? null,
-      bankAccountNumber: m.bankAccountNumber
-        ? `****${String(m.bankAccountNumber).slice(-4)}`
-        : null,
+      bankAccountNumber: m.bankAccountNumber ? `****${String(m.bankAccountNumber).slice(-4)}` : null,
       bankCode: m.bankCode ?? null,
       bankName: m.bankName ?? null,
     };
@@ -109,7 +163,13 @@ export class MerchantsService {
       after: (e as unknown as Record<string, unknown>).after,
       timestamp: (e as unknown as Record<string, unknown>).createdAt,
     }));
-    return { items: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      items: mapped,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async generateApiKey(
@@ -147,11 +207,7 @@ export class MerchantsService {
    * Admin operation: extend the expiry of an existing API key.
    * Resets the 14-day reminder flag and writes an audit log entry.
    */
-  async extendApiKeyExpiry(
-    merchantId: string,
-    newExpiresAt: Date,
-    adminId: string,
-  ): Promise<Merchant> {
+  async extendApiKeyExpiry(merchantId: string, newExpiresAt: Date, adminId: string): Promise<Merchant> {
     const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
     if (newExpiresAt <= new Date()) {
       throw new BadRequestException('newExpiresAt must be in the future');
@@ -186,11 +242,10 @@ export class MerchantsService {
     return this.findOne(id);
   }
 
-  async updateMerchantFee(
-    merchantId: string,
-    customFeeRate: number | null,
-  ): Promise<Merchant> {
-    const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
+  async updateMerchantFee(merchantId: string, customFeeRate: number | null): Promise<Merchant> {
+    const merchant = await this.merchantsRepo.findOne({
+      where: { id: merchantId },
+    });
     if (!merchant) {
       throw new NotFoundException('Merchant not found');
     }
@@ -207,10 +262,7 @@ export class MerchantsService {
     return this.merchantsRepo.save(merchant);
   }
 
-  async updateSettlementPreference(
-    id: string,
-    settlementFrequency: SettlementFrequency,
-  ): Promise<Merchant> {
+  async updateSettlementPreference(id: string, settlementFrequency: SettlementFrequency): Promise<Merchant> {
     const merchant = await this.findOne(id);
     merchant.settlementFrequency = settlementFrequency;
     return this.merchantsRepo.save(merchant);

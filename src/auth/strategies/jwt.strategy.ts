@@ -4,7 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Merchant, MerchantStatus } from '../../merchants/entities/merchant.entity';
+import { Merchant } from '../../merchants/entities/merchant.entity';
 import { CacheService } from '../../cache/cache.service';
 import { AuthService } from '../auth.service';
 
@@ -35,20 +35,24 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     // Cache hit
     if (jti) {
-      const cached = await this.cacheService.get<{ merchantId: string; email: string; role: string }>(
-        `session:${jti}`,
-      );
+      const cached = await this.cacheService.get<{
+        merchantId: string;
+        email: string;
+        role: string;
+      }>(`session:${jti}`);
       if (cached) return { ...cached, jti, exp: payload.exp };
     }
 
     // DB fallback
-    const merchant = await this.merchantsRepo.findOne({ where: { id: payload.sub } });
+    const merchant = await this.merchantsRepo.findOne({
+      where: { id: payload.sub },
+    });
     if (!merchant) throw new UnauthorizedException('Merchant not found');
-    if (merchant.status === MerchantStatus.SUSPENDED) {
-      throw new UnauthorizedException('Account suspended');
-    }
-
-    const result = { merchantId: merchant.id, email: merchant.email, role: merchant.role };
+    const result = {
+      merchantId: merchant.id,
+      email: merchant.email,
+      role: merchant.role,
+    };
 
     // Cache with remaining token TTL
     if (jti && payload.exp) {

@@ -18,10 +18,15 @@ import { AmlModule } from '../aml/aml.module';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
 import { TransactionLimitsService } from './transaction-limits.service';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { BullModule } from '@nestjs/bull';
+import { PaymentImportProcessor, PAYMENT_IMPORT_QUEUE } from './payment-import.queue';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Payment, PaymentEvent]),
+    BullModule.registerQueue({ name: PAYMENT_IMPORT_QUEUE }),
+    EmailModule,
     forwardRef(() => StellarModule),
     CacheModule,
     WebhooksModule,
@@ -32,7 +37,14 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
     forwardRef(() => AmlModule),
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
+  providers: [
+    PaymentsService,
+    IdempotencyInterceptor,
+    PaymentEscrowService,
+    PaymentsSorobanListener,
+    TransactionLimitsService,
+    PaymentImportProcessor,
+  ],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

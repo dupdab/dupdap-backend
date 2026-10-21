@@ -26,6 +26,10 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         throw new UnauthorizedException('Invalid API key');
       }
 
+      if (merchant.suspended || merchant.status === 'suspended') {
+        throw new ForbiddenException('Merchant account is suspended');
+      }
+
       // Check key expiry before allowing the request through
       if (merchant.apiKeyExpiresAt != null && merchant.apiKeyExpiresAt <= new Date()) {
         throw new UnauthorizedException({
@@ -46,10 +50,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       };
 
       // Apply per-merchant sliding window rate limit
-      const result = await this.rateLimitService.checkApiKeyRateLimit(
-        merchant.id,
-        merchant.role,
-      );
+      const result = await this.rateLimitService.checkApiKeyRateLimit(merchant.id, merchant.role);
 
       res.setHeader('X-RateLimit-Limit', result.limit);
       res.setHeader('X-RateLimit-Remaining', result.remaining);
@@ -70,7 +71,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       return true;
     }
 
-    return (await super.canActivate(context)) as boolean;
+    const allowed = (await super.canActivate(context)) as boolean;
+    const user = req.user;
+    if (allowed && user?.merchantId && typeof this.authService.findMerchantById === 'function') {
+      const merchant = await this.authService.findMerchantById(user.merchantId);
+      if (merchant?.suspended || merchant?.status === 'suspended') {
+        throw new ForbiddenException('Merchant account is suspended');
+      }
+    }
+    return allowed;
   }
 
   private enforceApiKeyScopes(context: ExecutionContext, scopes: ApiScope[]): void {

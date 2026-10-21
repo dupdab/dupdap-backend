@@ -31,6 +31,7 @@ export enum PaymentNetwork {
 @Entity('payments')
 @Index(['merchantId', 'status'])
 @Index(['merchantId', 'createdAt'])
+@Index('IDX_payments_stellar_memo', ['stellarMemo'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -46,19 +47,40 @@ export class Payment {
   @Column()
   merchantId: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    transformer: numericColumnTransformer,
+  })
   amountUsd: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 7, nullable: true, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 7,
+    nullable: true,
+    transformer: numericColumnTransformer,
+  })
   amountXlm: string | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+    transformer: numericColumnTransformer,
+  })
   amountUsdc: string | null;
 
   @Column({ nullable: true })
   currency: string;
 
-  @Column({ type: 'enum', enum: PaymentNetwork, default: PaymentNetwork.STELLAR })
+  @Column({
+    type: 'enum',
+    enum: PaymentNetwork,
+    default: PaymentNetwork.STELLAR,
+  })
   network: PaymentNetwork;
 
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
@@ -88,10 +110,22 @@ export class Payment {
   @Column({ nullable: true })
   qrCode: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+    transformer: numericColumnTransformer,
+  })
   feeUsd: string | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+    transformer: numericColumnTransformer,
+  })
   settlementAmountFiat: string | null;
 
   @Column({ nullable: true })
@@ -108,7 +142,13 @@ export class Payment {
   @Column({ nullable: true })
   confirmedAt: Date;
 
-  @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+    transformer: numericColumnTransformer,
+  })
   refundAmountUsd: string | null;
 
   @Column({ nullable: true })

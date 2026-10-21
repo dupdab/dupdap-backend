@@ -25,7 +25,9 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthTokenResponseDto> {
-    const existing = await this.merchantsRepo.findOne({ where: { email: dto.email } });
+    const existing = await this.merchantsRepo.findOne({
+      where: { email: dto.email },
+    });
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(dto.password, 12);
@@ -49,7 +51,9 @@ export class AuthService {
     const emailKey = dto.email.toLowerCase();
     await this.assertNotLockedOut(emailKey);
 
-    const merchant = await this.merchantsRepo.findOne({ where: { email: dto.email } });
+    const merchant = await this.merchantsRepo.findOne({
+      where: { email: dto.email },
+    });
     if (!merchant) {
       await this.recordFailedLogin(emailKey);
       throw new UnauthorizedException('Invalid credentials');
@@ -61,7 +65,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (merchant.status === MerchantStatus.SUSPENDED) {
+    if (merchant.suspended || merchant.status === MerchantStatus.SUSPENDED) {
       throw new UnauthorizedException('Account suspended');
     }
 
@@ -72,7 +76,9 @@ export class AuthService {
   }
 
   async logout(jti: string, ttlSeconds: number): Promise<void> {
-    await this.cacheService.set(`session:blacklist:${jti}`, true, { ttlSeconds });
+    await this.cacheService.set(`session:blacklist:${jti}`, true, {
+      ttlSeconds,
+    });
   }
 
   async isBlacklisted(jti: string): Promise<boolean> {
@@ -88,6 +94,10 @@ export class AuthService {
 
     if (!merchant?.apiKeyHash) return null;
     return (await bcrypt.compare(rawKey, merchant.apiKeyHash)) ? merchant : null;
+  }
+
+  async findMerchantById(id: string): Promise<Merchant | null> {
+    return this.merchantsRepo.findOne({ where: { id } });
   }
 
   private failedAttemptsKey(emailKey: string): string {
@@ -118,7 +128,9 @@ export class AuthService {
       return;
     }
 
-    await this.cacheService.set(attemptsKey, next, { ttlSeconds: LOGIN_LOCKOUT_TTL_SECONDS });
+    await this.cacheService.set(attemptsKey, next, {
+      ttlSeconds: LOGIN_LOCKOUT_TTL_SECONDS,
+    });
   }
 
   private async clearFailedLogin(emailKey: string): Promise<void> {

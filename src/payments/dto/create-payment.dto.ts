@@ -7,6 +7,11 @@ const MAX_AMOUNT_USD = 1_000_000;
 const MAX_METADATA_BYTES = 4096;
 
 export class CreatePaymentDto {
+  @ApiPropertyOptional({ example: 'PAY-payroll-001' })
+  @IsOptional()
+  @IsString()
+  reference?: string;
+
   @ApiProperty({ example: 50.0 })
   @IsNumber()
   @IsPositive()
@@ -33,7 +38,10 @@ export class CreatePaymentDto {
   })
   metadata?: Record<string, any>;
 
-  @ApiPropertyOptional({ example: 30, description: 'Expiry in minutes (default 30, max 1440)' })
+  @ApiPropertyOptional({
+    example: 30,
+    description: 'Expiry in minutes (default 30, max 1440)',
+  })
   @IsOptional()
   @IsNumber()
   @IsPositive()

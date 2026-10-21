@@ -1,4 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  GoneException,
+  Logger,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -93,9 +101,7 @@ export class PaymentsService {
       this.logger.error(
         'XLM/USD rate unavailable (Horizon failure or empty orderbook); refusing to quote a payment with a fallback rate',
       );
-      throw new ServiceUnavailableException(
-        'Unable to fetch a live XLM/USD exchange rate. Please try again shortly.',
-      );
+      throw new ServiceUnavailableException('Unable to fetch a live XLM/USD exchange rate. Please try again shortly.');
     }
     return rate;
   }
@@ -120,7 +126,7 @@ export class PaymentsService {
 
     const payment = this.paymentsRepo.create({
       id: uuidv4(),
-      reference: `PAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      reference: dto.reference || `PAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       merchantId,
       amountUsd: String(dto.amountUsd),
       amountXlm: amountXlm.toFixed(7),
@@ -158,11 +164,10 @@ export class PaymentsService {
    * ledger-based expiry. Throws PaymentExpiredError (→ 410) if the payment
    * window has passed, regardless of NestJS state.
    */
-  async confirmPayment(
-    paymentId: string,
-    customerAddress: string,
-  ): Promise<Payment> {
-    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+  async confirmPayment(paymentId: string, customerAddress: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({
+      where: { id: paymentId },
+    });
     if (!payment) throw new NotFoundException('Payment not found');
 
     // Contract enforces expiry — this throws PaymentExpiredError if expired.
@@ -184,7 +189,14 @@ export class PaymentsService {
     payment.customerWalletAddress = customerAddress;
     payment.confirmedAt = new Date();
     const saved = await this.paymentsRepo.save(payment);
-    await this.recordEvent(paymentId, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { customerAddress });
+    await this.recordEvent(
+      paymentId,
+      PaymentEventType.CONFIRMED,
+      PaymentStatus.PENDING,
+      PaymentStatus.CONFIRMED,
+      undefined,
+      { customerAddress },
+    );
 
     // Invalidate merchant analytics caches since funnel and comparison data may have changed.
     this.analytics.clearCacheForMerchant(payment.merchantId);
@@ -192,8 +204,16 @@ export class PaymentsService {
     return saved;
   }
 
-  async applySorobanPaymentConfirmed(event: { paymentReference: string; txHash?: string; amount?: number; asset?: string; from?: string }): Promise<void> {
-    const payment = await this.paymentsRepo.findOne({ where: { id: event.paymentReference } });
+  async applySorobanPaymentConfirmed(event: {
+    paymentReference: string;
+    txHash?: string;
+    amount?: number;
+    asset?: string;
+    from?: string;
+  }): Promise<void> {
+    const payment = await this.paymentsRepo.findOne({
+      where: { id: event.paymentReference },
+    });
     if (!payment) {
       this.logger.warn(`Soroban payment confirmed for unknown payment ${event.paymentReference}`);
       return;
@@ -208,7 +228,14 @@ export class PaymentsService {
     if (event.txHash) payment.txHash = event.txHash;
     if (event.from) payment.customerWalletAddress = event.from;
     await this.paymentsRepo.save(payment);
-    await this.recordEvent(payment.id, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { txHash: event.txHash });
+    await this.recordEvent(
+      payment.id,
+      PaymentEventType.CONFIRMED,
+      PaymentStatus.PENDING,
+      PaymentStatus.CONFIRMED,
+      undefined,
+      { txHash: event.txHash },
+    );
 
     this.analytics.clearCacheForMerchant(payment.merchantId);
   }
@@ -222,10 +249,7 @@ export class PaymentsService {
    *
    * Emits a PaymentCreated event for each entry, matching the contract event log.
    */
-  async createBatch(
-    merchantId: string,
-    dto: BatchCreatePaymentDto,
-  ): Promise<BatchPaymentResultDto> {
+  async createBatch(merchantId: string, dto: BatchCreatePaymentDto): Promise<BatchPaymentResultDto> {
     const { payments: items } = dto;
 
     // Enforce per-merchant rolling 24h transaction limits (#553).
@@ -235,14 +259,10 @@ export class PaymentsService {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (!item.amountUsd || item.amountUsd <= 0) {
-        throw new BadRequestException(
-          `Batch item [${i}]: amountUsd must be greater than 0`,
-        );
+        throw new BadRequestException(`Batch item [${i}]: amountUsd must be greater than 0`);
       }
       if (!item.memo || item.memo.trim().length === 0) {
-        throw new BadRequestException(
-          `Batch item [${i}]: memo must not be empty`,
-        );
+        throw new BadRequestException(`Batch item [${i}]: memo must not be empty`);
       }
     }
 
@@ -293,9 +313,7 @@ export class PaymentsService {
       return manager.save(Payment, records);
     });
 
-    this.logger.log(
-      `Batch created ${saved.length} payments for merchant ${merchantId}`,
-    );
+    this.logger.log(`Batch created ${saved.length} payments for merchant ${merchantId}`);
 
     // Audit log: one immutable CREATED event per payment in the batch.
     await this.eventsRepo.save(
@@ -324,18 +342,11 @@ export class PaymentsService {
     };
   }
 
-  async refund(
-    merchantId: string,
-    paymentId: string,
-    dto: RefundPaymentDto,
-  ): Promise<Payment> {
+  async refund(merchantId: string, paymentId: string, dto: RefundPaymentDto): Promise<Payment> {
     const payment = await this.findOne(merchantId, paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
 
-    if (
-      payment.status !== PaymentStatus.CONFIRMED &&
-      payment.status !== PaymentStatus.PARTIALLY_REFUNDED
-    ) {
+    if (payment.status !== PaymentStatus.CONFIRMED && payment.status !== PaymentStatus.PARTIALLY_REFUNDED) {
       throw new BadRequestException('Only confirmed payments can be refunded');
     }
 
@@ -345,27 +356,25 @@ export class PaymentsService {
 
     const alreadyRefundedUsd = new Big(payment.refundAmountUsd ?? '0');
     const remainingUsd = new Big(payment.amountUsd).minus(alreadyRefundedUsd);
-    const refundAmount =
-      dto.amountUsd !== undefined ? new Big(dto.amountUsd) : remainingUsd;
+    const refundAmount = dto.amountUsd !== undefined ? new Big(dto.amountUsd) : remainingUsd;
 
     if (refundAmount.gt(remainingUsd)) {
-      throw new BadRequestException(
-        `Refund amount exceeds remaining refundable balance of ${remainingUsd.toFixed(6)}`,
-      );
+      throw new BadRequestException(`Refund amount exceeds remaining refundable balance of ${remainingUsd.toFixed(6)}`);
     }
 
     const newRefundedUsd = alreadyRefundedUsd.plus(refundAmount);
     const previousStatus = payment.status;
     payment.refundAmountUsd = newRefundedUsd.toFixed(6);
-    payment.status =
-      newRefundedUsd.gte(new Big(payment.amountUsd))
-        ? PaymentStatus.REFUNDED
-        : PaymentStatus.PARTIALLY_REFUNDED;
+    payment.status = newRefundedUsd.gte(new Big(payment.amountUsd))
+      ? PaymentStatus.REFUNDED
+      : PaymentStatus.PARTIALLY_REFUNDED;
     payment.refundReason = dto.reason;
     payment.refundedAt = new Date();
 
     const saved2 = await this.paymentsRepo.save(payment);
-    await this.recordEvent(payment.id, PaymentEventType.REFUNDED, previousStatus, payment.status, merchantId, { refundAmountUsd: dto.amountUsd });
+    await this.recordEvent(payment.id, PaymentEventType.REFUNDED, previousStatus, payment.status, merchantId, {
+      refundAmountUsd: dto.amountUsd,
+    });
 
     await this.webhooks.dispatch(payment.merchantId, 'payment.refunded', {
       paymentId: payment.id,
@@ -392,13 +401,32 @@ export class PaymentsService {
     merchantId: string,
     page = 1,
     limit = 20,
+    filters: {
+      reference?: string;
+      memo?: string;
+      metadata?: Record<string, string>;
+    } = {},
   ): Promise<PaginatedResponseDto<Payment>> {
     const qb = this.paymentsRepo
       .createQueryBuilder('payment')
       .leftJoin('payment.merchant', 'merchant')
       .addSelect(['merchant.id', 'merchant.businessName'])
-      .where('payment.merchantId = :merchantId', { merchantId })
-      .orderBy('payment.createdAt', 'DESC')
+      .where('payment.merchantId = :merchantId', { merchantId });
+
+    if (filters.reference !== undefined)
+      qb.andWhere('payment.reference = :reference', {
+        reference: filters.reference,
+      });
+    if (filters.memo !== undefined) qb.andWhere('payment.stellarMemo = :memo', { memo: filters.memo });
+
+    for (const [key, value] of Object.entries(filters.metadata ?? {})) {
+      qb.andWhere('payment.metadata ->> :metadataKey = :metadataValue', {
+        metadataKey: key,
+        metadataValue: value,
+      });
+    }
+
+    qb.orderBy('payment.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -414,7 +442,9 @@ export class PaymentsService {
   }
 
   async findOne(id: string, merchantId: string): Promise<Payment> {
-    const payment = await this.paymentsRepo.findOne({ where: { id, merchantId } });
+    const payment = await this.paymentsRepo.findOne({
+      where: { id, merchantId },
+    });
     if (!payment) throw new NotFoundException('Payment not found');
     return payment;
   }
@@ -432,6 +462,10 @@ export class PaymentsService {
       throw new GoneException('Payment QR code has expired');
     }
     return payment;
+  }
+
+  async hasReference(reference: string): Promise<boolean> {
+    return await this.paymentsRepo.exist({ where: { reference } });
   }
 
   async getStats(merchantId: string) {
