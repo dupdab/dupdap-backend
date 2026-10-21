@@ -6,6 +6,7 @@ export const QUEUE_NAMES = {
   settlement: 'settlement',
   webhookDelivery: 'webhook-delivery',
   emailDelivery: 'email-delivery',
+  smsDelivery: 'sms-delivery',
   stellarMonitor: 'stellar-monitor',
   sorobanEventDlq: 'soroban-event-dlq',
 } as const;
@@ -17,7 +18,9 @@ export const DEFAULT_QUEUE_JOB = 'dispatch';
 /** Job names for the webhook / email delivery processors. */
 export const WEBHOOK_DELIVERY_JOB = 'deliver';
 export const EMAIL_DELIVERY_JOB = 'send';
+export const SMS_DELIVERY_JOB = 'send';
 
 /** Aliases kept for call-sites that import the queue name directly. */
 export const WEBHOOK_DELIVERY_QUEUE = QUEUE_NAMES.webhookDelivery;
 export const EMAIL_DELIVERY_QUEUE = QUEUE_NAMES.emailDelivery;
+export const SMS_DELIVERY_QUEUE = QUEUE_NAMES.smsDelivery;

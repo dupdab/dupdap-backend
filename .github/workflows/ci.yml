@@ -11,6 +11,34 @@ jobs:
     name: Lint, test, and migration safety checks
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/test
+      REDIS_URL: redis://localhost:6379
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,11 +57,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Type check
+        run: pnpm tsc --noEmit
+
       - name: Lint
         run: pnpm lint
 
-      - name: Test with coverage
+      - name: Unit tests with coverage
         run: pnpm test:cov:ci
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
 
       - name: Migration safety check
         run: pnpm migration:check

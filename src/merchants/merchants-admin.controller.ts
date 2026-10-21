@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ExtendApiKeyExpiryDto } from './dto/extend-api-key-expiry.dto';
+import { UpdateTransactionLimitsDto } from './dto/update-transaction-limits.dto';
 
 @ApiTags('admin/merchants')
 @ApiBearerAuth()
@@ -32,6 +33,22 @@ export class MerchantsAdminController {
     @Body('customFeeRate') customFeeRate: number | null,
   ): Promise<Merchant> {
     return this.merchantsService.updateMerchantFee(id, customFeeRate);
+  }
+
+  @Patch(':id/limits')
+  @ApiOperation({ summary: 'Update per-transaction and daily USD payment limits for a merchant' })
+  @ApiParam({ name: 'id', description: 'Merchant UUID' })
+  @ApiResponse({ status: 200, type: Merchant, description: 'Updated merchant record' })
+  @ApiResponse({ status: 400, description: 'Validation failed or single limit exceeds daily limit' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Admin only' })
+  @ApiResponse({ status: 404, description: 'Merchant not found' })
+  updateTransactionLimits(
+    @Param('id') id: string,
+    @Body() dto: UpdateTransactionLimitsDto,
+    @Request() req: { user: { merchantId: string } },
+  ): Promise<Merchant> {
+    return this.merchantsService.updateTransactionLimits(id, dto, req.user.merchantId);
   }
 
   /**
