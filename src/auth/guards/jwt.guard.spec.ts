@@ -21,6 +21,7 @@ import { MerchantRole } from '../../merchants/entities/merchant.entity';
 describe('JwtAuthGuard', () => {
   const authService = {
     findMerchantByApiKey: jest.fn(),
+    recordApiKeyUsageFromIp: jest.fn().mockResolvedValue(undefined),
   };
   const rateLimitService = {
     checkApiKeyRateLimit: jest.fn(),

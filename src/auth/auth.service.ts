@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +9,9 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import type { AuthTokenResponseDto } from './dto/auth-token-response.dto';
 import { CacheService } from '../cache/cache.service';
+import { AuditLog } from '../audit/entities/audit-log.entity';
+import { AdminAlertService } from '../alerts/admin-alert.service';
+import { AdminAlertType } from '../alerts/admin-alert.entity';
 
 /** Failed password attempts before a temporary lockout is applied. */
 const LOGIN_MAX_FAILED_ATTEMPTS = 5;
@@ -22,6 +25,8 @@ export class AuthService {
     private merchantsRepo: Repository<Merchant>,
     private jwtService: JwtService,
     private cacheService: CacheService,
+    @Optional() @InjectRepository(AuditLog) private auditLogRepo?: Repository<AuditLog>,
+    @Optional() private readonly adminAlerts?: AdminAlertService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthTokenResponseDto> {
@@ -88,6 +93,29 @@ export class AuthService {
 
     if (!merchant?.apiKeyHash) return null;
     return (await bcrypt.compare(rawKey, merchant.apiKeyHash)) ? merchant : null;
+  }
+
+  async recordApiKeyUsageFromIp(merchant: Merchant, ip: string): Promise<void> {
+    if (!ip || !this.auditLogRepo) return;
+    const resource = `merchant:${merchant.id}:api-key`;
+    const knownIp = await this.auditLogRepo.findOne({
+      where: { resource, action: 'API_KEY_NEW_IP_USAGE', ip },
+    });
+    if (knownIp) return;
+    await this.auditLogRepo.save({
+      actor: merchant.id,
+      action: 'API_KEY_NEW_IP_USAGE',
+      resource,
+      after: { keyPrefix: merchant.apiKeyLastFour, alert: true },
+      ip,
+    });
+    await this.adminAlerts?.raise({
+      type: AdminAlertType.API_KEY_NEW_IP,
+      dedupeKey: `api-key-new-ip:${merchant.id}:${ip}`,
+      message: `Merchant API key used from a new IP address: ${ip}`,
+      metadata: { merchantId: merchant.id, ip, keyPrefix: merchant.apiKeyLastFour },
+      thresholdValue: 1,
+    });
   }
 
   private failedAttemptsKey(emailKey: string): string {

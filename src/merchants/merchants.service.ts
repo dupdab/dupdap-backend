@@ -116,6 +116,7 @@ export class MerchantsService {
     id: string,
     scopes?: ApiScope[],
     expiresAt?: Date,
+    ip?: string,
   ): Promise<{ apiKey: string; expiresAt: Date | null }> {
     if (expiresAt != null) {
       const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
@@ -131,7 +132,10 @@ export class MerchantsService {
     const rawKey = `cpk_${crypto.randomBytes(32).toString('hex')}`;
     const hash = await bcrypt.hash(rawKey, 10);
 
+    const rotating = !!merchant.apiKeyHash;
+    const previousPrefix = merchant.apiKeyLastFour ?? null;
     merchant.apiKey = rawKey.substring(0, 12) + '...';
+    merchant.apiKeyLastFour = rawKey.slice(-4);
     merchant.apiKeyHash = hash;
     merchant.apiKeyLookupHash = crypto.createHash('sha256').update(rawKey).digest('hex');
     merchant.apiKeyScopes = scopes?.length ? scopes : API_KEY_SCOPES;
@@ -140,7 +144,54 @@ export class MerchantsService {
     merchant.apiKeyExpirySentAt = null;
     await this.merchantsRepo.save(merchant);
 
+    await this.auditLogRepo.save({
+      actor: id,
+      action: rotating ? 'API_KEY_ROTATED' : 'API_KEY_CREATED',
+      resource: `merchant:${id}:api-key`,
+      before: rotating ? { keyPrefix: previousPrefix } : null,
+      after: { keyPrefix: rawKey.slice(-4) },
+      ip,
+    });
+
     return { apiKey: rawKey, expiresAt: merchant.apiKeyExpiresAt };
+  }
+
+  async revokeApiKey(merchantId: string, ip?: string): Promise<void> {
+    const merchant = await this.findOne(merchantId);
+    if (!merchant.apiKeyHash) throw new NotFoundException('API key not found');
+    const keyPrefix = merchant.apiKeyLastFour ?? null;
+    merchant.apiKey = null;
+    merchant.apiKeyLastFour = null;
+    merchant.apiKeyHash = null;
+    merchant.apiKeyLookupHash = null;
+    merchant.apiKeyScopes = [];
+    merchant.apiKeyExpiresAt = null;
+    merchant.apiKeyExpirySentAt = null;
+    await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: merchantId,
+      action: 'API_KEY_REVOKED',
+      resource: `merchant:${merchantId}:api-key`,
+      before: { keyPrefix },
+      after: null,
+      ip,
+    });
+  }
+
+  async getApiKeyAudit(merchantId: string, page = 1, limit = 20) {
+    const [items, total] = await this.auditLogRepo.findAndCount({
+      where: { resource: `merchant:${merchantId}:api-key` },
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { items: items.map((entry) => ({
+      actor: entry.actor,
+      action: entry.action,
+      timestamp: entry.createdAt,
+      keyPrefix: entry.after?.keyPrefix ?? entry.before?.keyPrefix ?? null,
+      ipAddress: entry.ip,
+    })), total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   /**

@@ -11,11 +11,14 @@ import { RolesGuard } from './guards/roles.guard';
 import { RateLimitService } from './rate-limit.service';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { CacheModule } from '../cache/cache.module';
+import { AuditLog } from '../audit/entities/audit-log.entity';
+import { AdminAlertModule } from '../alerts/admin-alert.module';
 
 @Global()
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Merchant]),
+    TypeOrmModule.forFeature([Merchant, AuditLog]),
+    AdminAlertModule,
     CacheModule,
     PassportModule,
     JwtModule.registerAsync({

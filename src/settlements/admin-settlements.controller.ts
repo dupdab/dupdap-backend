@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  Body,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
@@ -16,11 +17,21 @@ import { SettlementsService } from './settlements.service';
 import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
 import { Request } from 'express';
 import { Auditable } from '../audit/decorators/auditable.decorator';
+import { UpdateMerchantFeeTiersDto } from './dto/merchant-fee-tier.dto';
 
 @Controller('admin/settlements')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminSettlementsController {
   constructor(private readonly settlementsService: SettlementsService) {}
+
+  @Post('fee-tiers/:merchantId')
+  @Auditable({ action: 'MERCHANT_FEE_TIERS_UPDATED', resource: 'merchant' })
+  setMerchantFeeTiers(
+    @Param('merchantId') merchantId: string,
+    @Body() dto: UpdateMerchantFeeTiersDto,
+  ) {
+    return this.settlementsService.setMerchantFeeTiers(merchantId, dto.tiers);
+  }
 
   @Get()
   async findAll(@Query() query: AdminSettlementsQueryDto) {

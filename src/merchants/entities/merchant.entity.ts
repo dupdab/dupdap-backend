@@ -102,14 +102,18 @@ export class Merchant {
   role: MerchantRole;
 
   @Column({ nullable: true })
-  apiKey: string;
+  apiKey: string | null;
+
+  @Exclude()
+  @Column({ name: 'api_key_last_four', nullable: true, length: 4 })
+  apiKeyLastFour: string | null;
 
   @Column('simple-array', { name: 'api_key_scopes', nullable: true })
   apiKeyScopes?: ApiScope[];
 
   @Exclude()
   @Column({ nullable: true })
-  apiKeyHash: string;
+  apiKeyHash: string | null;
 
   @Exclude()
   @Column({ name: 'api_key_lookup_hash', nullable: true, unique: true })

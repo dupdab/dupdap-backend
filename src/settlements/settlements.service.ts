@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, Inject, forwardRef, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -23,6 +23,8 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+import { MerchantFeeTier } from './entities/merchant-fee-tier.entity';
+import { UpdateMerchantFeeTiersDto } from './dto/merchant-fee-tier.dto';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -83,7 +85,46 @@ export class SettlementsService {
     private settlementQueue: Queue,
     private cronJobService: CronJobService,
     private retryConfig: RetryConfigService,
+    @Optional() @InjectRepository(MerchantFeeTier)
+    private feeTiersRepo?: Repository<MerchantFeeTier>,
   ) {}
+
+  async setMerchantFeeTiers(merchantId: string, tiers: UpdateMerchantFeeTiersDto['tiers']) {
+    const feeTiersRepo = this.feeTiersRepo;
+    if (!feeTiersRepo) throw new BadRequestException('Fee tier storage is unavailable');
+    await this.merchantsService.findOne(merchantId);
+    const sorted = [...tiers].sort((a, b) => a.minimumVolumeUsd - b.minimumVolumeUsd);
+    if (sorted.some((tier, index) => index > 0 && tier.minimumVolumeUsd === sorted[index - 1].minimumVolumeUsd)) {
+      throw new BadRequestException('Volume thresholds must be unique');
+    }
+    return feeTiersRepo.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(MerchantFeeTier);
+      await repository.delete({ merchantId });
+      return repository.save(sorted.map((tier) => repository.create({
+        merchantId,
+        minimumVolumeUsd: String(tier.minimumVolumeUsd),
+        feeRate: String(tier.feeRate),
+      })));
+    });
+  }
+
+  private async resolveFeeRate(merchantId: string, projectedVolume: Big): Promise<Big> {
+    if (!this.feeTiersRepo) return new Big(BATCH_FEE_RATE);
+    let merchantCustomRate: string | null = null;
+    try {
+      const merchant = await this.merchantsService.findOne(merchantId);
+      projectedVolume = projectedVolume.plus(merchant.totalVolumeUsd ?? 0);
+      merchantCustomRate = merchant.customFeeRate;
+    } catch {
+      // The tier lookup still applies with the settlement volume when merchant data is unavailable.
+    }
+    const tiers = await this.feeTiersRepo.find({
+      where: { merchantId },
+      order: { minimumVolumeUsd: 'DESC' },
+    });
+    const tier = tiers.find((item) => projectedVolume.gte(item.minimumVolumeUsd));
+    return new Big(tier?.feeRate ?? merchantCustomRate ?? BATCH_FEE_RATE);
+  }
 
   private invalidateAnalyticsForMerchant(merchantId: string): void {
     this.analytics.clearCacheForMerchant(merchantId);
@@ -138,7 +179,8 @@ export class SettlementsService {
       return;
     }
 
-    const feeUsd = amountUsd.times(BATCH_FEE_RATE);
+    const feeRate = await this.resolveFeeRate(payment.merchantId, amountUsd);
+    const feeUsd = amountUsd.times(feeRate);
     const netUsd = amountUsd.minus(feeUsd);
     const LARGE_SETTLEMENT_THRESHOLD = 10000;
 
@@ -314,7 +356,8 @@ export class SettlementsService {
     }
 
     const totalAmountUsd = payments.reduce((sum, payment) => sum.plus(this.toBig(payment.amountUsd)), new Big(0));
-    const feeAmountUsd = totalAmountUsd.times(BATCH_FEE_RATE);
+    const feeRate = await this.resolveFeeRate(payments[0].merchantId, totalAmountUsd);
+    const feeAmountUsd = totalAmountUsd.times(feeRate);
     const netAmountUsd = totalAmountUsd.minus(feeAmountUsd);
 
     const fiatCurrency = await this.resolveSettlementCurrency(payments[0].merchantId);
@@ -333,7 +376,7 @@ export class SettlementsService {
 
     for (const payment of payments) {
       payment.status = PaymentStatus.SETTLING;
-      payment.feeUsd = this.toBig(payment.amountUsd).times(BATCH_FEE_RATE).toFixed(6);
+      payment.feeUsd = this.toBig(payment.amountUsd).times(feeRate).toFixed(6);
       payment.settlementId = saved.id;
     }
 

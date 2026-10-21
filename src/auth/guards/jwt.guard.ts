@@ -26,6 +26,11 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         throw new UnauthorizedException('Invalid API key');
       }
 
+      await this.authService.recordApiKeyUsageFromIp(
+        merchant,
+        req.ip ?? req.socket?.remoteAddress ?? '',
+      );
+
       // Check key expiry before allowing the request through
       if (merchant.apiKeyExpiresAt != null && merchant.apiKeyExpiresAt <= new Date()) {
         throw new UnauthorizedException({

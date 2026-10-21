@@ -15,10 +15,11 @@ import { StellarModule } from '../stellar/stellar.module';
 import { SettlementsSorobanListener } from './settlements-soroban.listener';
 import { AdminSettlementsController } from './admin-settlements.controller';
 import { RetryModule } from '../retry/retry.module';
+import { MerchantFeeTier } from './entities/merchant-fee-tier.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Settlement, Payment]),
+    TypeOrmModule.forFeature([Settlement, Payment, MerchantFeeTier]),
     AdminAlertModule,
     WebhooksModule,
     CacheModule,

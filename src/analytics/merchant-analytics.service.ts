@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -242,6 +242,9 @@ export class MerchantAnalyticsService {
   ): Promise<PaymentFunnelResponse> {
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate) : new Date();
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+      throw new BadRequestException('Invalid analytics date range');
+    }
     const cacheKey = this.analyticsCacheKey({
       merchantId: 'admin',
       endpoint: 'payment-funnel',

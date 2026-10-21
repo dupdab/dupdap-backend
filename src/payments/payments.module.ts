@@ -18,6 +18,7 @@ import { AmlModule } from '../aml/aml.module';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
 import { TransactionLimitsService } from './transaction-limits.service';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -32,7 +33,14 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
     forwardRef(() => AmlModule),
   ],
   controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
+  providers: [
+    PaymentsService,
+    IdempotencyInterceptor,
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+    PaymentEscrowService,
+    PaymentsSorobanListener,
+    TransactionLimitsService,
+  ],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

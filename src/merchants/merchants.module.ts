@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MerchantsService } from './merchants.service';
-import { MerchantsController } from './merchants.controller';
+import { MerchantApiKeyAuditController, MerchantsController } from './merchants.controller';
 import { MerchantsAdminController } from './merchants-admin.controller';
 import { Merchant } from './entities/merchant.entity';
 import { NotificationPreference } from '../notifications/entities/notification-preference.entity';
@@ -11,7 +11,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Merchant, NotificationPreference, AuditLog]), CacheModule],
-  controllers: [MerchantsController, MerchantsAdminController],
+  controllers: [MerchantsController, MerchantApiKeyAuditController, MerchantsAdminController],
   providers: [MerchantsService, NotificationPrefsService],
   exports: [MerchantsService, NotificationPrefsService],
 })
