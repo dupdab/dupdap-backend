@@ -80,7 +80,10 @@ describe('PaymentsController', () => {
 
   describe('create', () => {
     it('forwards req.user.merchantId and the DTO to service.create', async () => {
-      const dto: CreatePaymentDto = { amountUsd: 25, customerEmail: 'buyer@example.com' };
+      const dto: CreatePaymentDto = {
+        amountUsd: 25,
+        customerEmail: 'buyer@example.com',
+      };
       const created = mockPayment();
       jest.spyOn(service, 'create').mockResolvedValue(created);
 
@@ -91,7 +94,10 @@ describe('PaymentsController', () => {
     });
 
     it('scopes the create to the calling merchant, not a DTO-supplied merchantId', async () => {
-      const dto = { amountUsd: 10, metadata: { orderId: 'o-1' } } as unknown as CreatePaymentDto;
+      const dto = {
+        amountUsd: 10,
+        metadata: { orderId: 'o-1' },
+      } as unknown as CreatePaymentDto;
       jest.spyOn(service, 'create').mockResolvedValue(mockPayment());
 
       await controller.create({ user: { merchantId: 'merchant-a' } } as any, dto);
@@ -118,13 +124,20 @@ describe('PaymentsController', () => {
 
   describe('findAll', () => {
     it('forwards merchantId plus page/limit to service.findAll', async () => {
-      const pagination: PaginationDto = Object.assign(new PaginationDto(), { page: 3, limit: 50 });
+      const pagination: PaginationDto = Object.assign(new PaginationDto(), {
+        page: 3,
+        limit: 50,
+      });
       const page = { items: [], total: 0, page: 3, limit: 50, totalPages: 0 };
       jest.spyOn(service, 'findAll').mockResolvedValue(page as any);
 
       const result = await controller.findAll(REQ as any, pagination);
 
-      expect(service.findAll).toHaveBeenCalledWith('m1', 3, 50);
+      expect(service.findAll).toHaveBeenCalledWith('m1', 3, 50, {
+        reference: undefined,
+        memo: undefined,
+        metadata: {},
+      });
       expect(result).toBe(page);
     });
 
@@ -134,7 +147,28 @@ describe('PaymentsController', () => {
 
       await controller.findAll(REQ as any, pagination);
 
-      expect(service.findAll).toHaveBeenCalledWith('m1', 1, 20);
+      expect(service.findAll).toHaveBeenCalledWith('m1', 1, 20, {
+        reference: undefined,
+        memo: undefined,
+        metadata: {},
+      });
+    });
+
+    it('forwards exact reference, memo, and bracketed metadata filters', async () => {
+      const query = Object.assign(new PaginationDto(), {
+        reference: 'PAY-123',
+        memo: 'ABC123',
+        'metadata[orderId]': '123',
+      });
+      jest.spyOn(service, 'findAll').mockResolvedValue({} as any);
+
+      await controller.findAll(REQ as any, query);
+
+      expect(service.findAll).toHaveBeenCalledWith('m1', 1, 20, {
+        reference: 'PAY-123',
+        memo: 'ABC123',
+        metadata: { orderId: '123' },
+      });
     });
   });
 
@@ -170,10 +204,16 @@ describe('PaymentsController', () => {
 
   describe('refund', () => {
     it('should call service.refund', async () => {
-      const dto: RefundPaymentDto = { reason: 'Test refund', amountUsd: 50 } as RefundPaymentDto;
+      const dto: RefundPaymentDto = {
+        reason: 'Test refund',
+        amountUsd: 50,
+      } as RefundPaymentDto;
       const paymentId = 'p1';
 
-      jest.spyOn(service, 'refund').mockResolvedValue({ id: paymentId, status: PaymentStatus.REFUNDED } as any);
+      jest.spyOn(service, 'refund').mockResolvedValue({
+        id: paymentId,
+        status: PaymentStatus.REFUNDED,
+      } as any);
 
       const result = await controller.refund(REQ as any, paymentId, dto);
 
@@ -244,5 +284,3 @@ describe('PublicPaymentController', () => {
     });
   });
 });
-
-

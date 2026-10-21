@@ -18,6 +18,7 @@ import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
+import { MetricsService } from '../prometheus/metrics.service';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -47,6 +48,8 @@ export class PaymentsService {
     private dataSource: DataSource,
     @Optional()
     private txLimits?: TransactionLimitsService,
+    @Optional()
+    private readonly metrics?: MetricsService,
   ) {}
 
   /**
@@ -184,6 +187,11 @@ export class PaymentsService {
     payment.customerWalletAddress = customerAddress;
     payment.confirmedAt = new Date();
     const saved = await this.paymentsRepo.save(payment);
+    if (payment.createdAt && this.metrics) {
+      this.metrics.paymentConfirmationDurationSeconds.observe(
+        Math.max(0, (saved.confirmedAt.getTime() - payment.createdAt.getTime()) / 1000),
+      );
+    }
     await this.recordEvent(paymentId, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { customerAddress });
 
     // Invalidate merchant analytics caches since funnel and comparison data may have changed.
@@ -207,7 +215,12 @@ export class PaymentsService {
     payment.confirmedAt = new Date();
     if (event.txHash) payment.txHash = event.txHash;
     if (event.from) payment.customerWalletAddress = event.from;
-    await this.paymentsRepo.save(payment);
+    const saved = await this.paymentsRepo.save(payment);
+    if (payment.createdAt && this.metrics) {
+      this.metrics.paymentConfirmationDurationSeconds.observe(
+        Math.max(0, (saved.confirmedAt.getTime() - payment.createdAt.getTime()) / 1000),
+      );
+    }
     await this.recordEvent(payment.id, PaymentEventType.CONFIRMED, PaymentStatus.PENDING, PaymentStatus.CONFIRMED, undefined, { txHash: event.txHash });
 
     this.analytics.clearCacheForMerchant(payment.merchantId);

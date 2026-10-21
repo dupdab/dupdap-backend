@@ -1,4 +1,4 @@
-import { IsNumber, IsPositive, IsString, IsOptional, IsEmail, IsObject, Max } from 'class-validator';
+import { IsNumber, IsPositive, IsString, IsOptional, IsEmail, IsIP, IsObject, Max } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MaxJsonSize } from '../../common/decorators/max-json-size.decorator';
@@ -7,6 +7,11 @@ const MAX_AMOUNT_USD = 1_000_000;
 const MAX_METADATA_BYTES = 4096;
 
 export class CreatePaymentDto {
+  @ApiPropertyOptional({ example: 'PAY-payroll-001' })
+  @IsOptional()
+  @IsString()
+  reference?: string;
+
   @ApiProperty({ example: 50.0 })
   @IsNumber()
   @IsPositive()
@@ -25,6 +30,11 @@ export class CreatePaymentDto {
   @Transform(({ value }) => value?.trim())
   customerEmail?: string;
 
+  @ApiPropertyOptional({ example: '203.0.113.7', description: "The customer's IP address, used for country lookup" })
+  @IsOptional()
+  @IsIP()
+  customerIp?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsObject()
@@ -33,7 +43,10 @@ export class CreatePaymentDto {
   })
   metadata?: Record<string, any>;
 
-  @ApiPropertyOptional({ example: 30, description: 'Expiry in minutes (default 30, max 1440)' })
+  @ApiPropertyOptional({
+    example: 30,
+    description: 'Expiry in minutes (default 30, max 1440)',
+  })
   @IsOptional()
   @IsNumber()
   @IsPositive()

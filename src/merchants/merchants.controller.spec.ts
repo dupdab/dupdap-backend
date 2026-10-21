@@ -39,7 +39,7 @@ describe('MerchantsController', () => {
 
   it('getProfile delegates to merchantsService with the authenticated merchant id', async () => {
     const req = { user: { merchantId: 'merchant-1' } } as any;
-    merchantsService.getProfile.mockResolvedValue({ id: 'merchant-1' });
+    merchantsService.getProfile.mockResolvedValue({ id: 'merchant-1' } as any);
 
     await expect(controller.getProfile(req)).resolves.toEqual({ id: 'merchant-1' });
     expect(merchantsService.getProfile).toHaveBeenCalledWith('merchant-1');
@@ -56,12 +56,12 @@ describe('MerchantsController', () => {
   });
 
   it('generateApiKey delegates to merchantsService with the authenticated merchant id', async () => {
-    const req = { user: { merchantId: 'merchant-1' } } as any;
+    const req = { user: { merchantId: 'merchant-1' }, ip: '192.0.2.10' } as any;
     const dto = { scopes: ['payments:read'] } as any;
-    merchantsService.generateApiKey.mockResolvedValue({ apiKey: 'cpk_test' });
+    merchantsService.generateApiKey.mockResolvedValue({ apiKey: 'cpk_test', expiresAt: null });
 
-    await expect(controller.generateApiKey(req, dto)).resolves.toEqual({ apiKey: 'cpk_test' });
-    expect(merchantsService.generateApiKey).toHaveBeenCalledWith('merchant-1', ['payments:read']);
+    await expect(controller.generateApiKey(req, dto)).resolves.toEqual({ apiKey: 'cpk_test', expiresAt: null });
+    expect(merchantsService.generateApiKey).toHaveBeenCalledWith('merchant-1', ['payments:read'], undefined, '192.0.2.10');
   });
 
   it('getNotificationPrefs delegates with the authenticated merchant id', async () => {

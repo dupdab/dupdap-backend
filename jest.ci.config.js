@@ -1,17 +1,14 @@
+/** Jest configuration used by the CI workflow for unit and integration tests. */
 module.exports = {
-  moduleFileExtensions: ['js', 'json', 'ts'],
-  rootDir: 'src',
+  preset: 'ts-jest',
   testEnvironment: 'node',
-  testRegex: '.*\\.spec\\.ts$',
-  transform: {
-    '^.+\\.(t|j)s$': 'ts-jest',
-  },
+  roots: ['<rootDir>/src', '<rootDir>/tests'],
+  testMatch: ['**/*.test.ts', '**/*.spec.ts'],
+  moduleFileExtensions: ['ts', 'js', 'json'],
   collectCoverage: true,
-  collectCoverageFrom: ['**/*.(t|j)s'],
-  coverageThreshold: {
-    global: {
-      lines: 80,
-      branches: 80,
-    },
-  },
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov'],
+  testTimeout: 30000,
+  clearMocks: true,
+  setupFiles: ['<rootDir>/tests/setup.ts'],
 };

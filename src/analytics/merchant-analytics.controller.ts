@@ -10,7 +10,7 @@ import {
   MerchantAnalyticsResponse,
   PaymentFunnelResponse,
   TopMerchantsResponse,
-} from './interfaces/merchant-analytics.interface';
+} from './merchant-analytics.service';
 
 @Controller('analytics')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -22,20 +22,24 @@ export class MerchantAnalyticsController {
 
   @Get('merchants')
   getMerchantAnalytics(): Promise<MerchantAnalyticsResponse> {
-    return this.merchantAnalyticsService.getMerchantAnalytics();
+    return this.merchantAnalyticsService.getMetrics();
   }
 
   @Get('top-merchants')
   getTopMerchants(
     @Query() query: TopMerchantsQueryDto,
   ): Promise<TopMerchantsResponse> {
-    return this.merchantAnalyticsService.getTopMerchants(query);
+    return this.merchantAnalyticsService.getTopMerchants(query.limit, query.period);
   }
 
-  @Get('funnel')
+  @Get('admin/funnel')
   getPaymentFunnel(
     @Query() query: PaymentFunnelQueryDto,
   ): Promise<PaymentFunnelResponse> {
-    return this.merchantAnalyticsService.getPaymentFunnel(query);
+    return this.merchantAnalyticsService.getPaymentFunnel(
+      query.startDate,
+      query.endDate,
+      query.network,
+    );
   }
 }

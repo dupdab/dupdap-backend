@@ -14,6 +14,7 @@ export enum AdminAlertType {
   BACKUP_FAILURE = 'backup_failure',
   DB_POOL_EXHAUSTED = 'db_pool_exhausted',
   TRANSACTION_LIMIT = 'transaction_limit',
+  API_KEY_NEW_IP = 'api_key_new_ip',
 }
 
 export enum AdminAlertStatus {

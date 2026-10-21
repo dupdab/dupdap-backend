@@ -8,6 +8,8 @@ export class MetricsService {
   readonly paymentSettledTotal: Counter<string>;
   readonly settlementFailedTotal: Counter<string>;
   readonly settlementDurationSeconds: Histogram<string>;
+  readonly paymentConfirmationDurationSeconds: Histogram<string>;
+  readonly webhookDeliveryDurationSeconds: Histogram<string>;
 
   readonly httpRequestsTotal: Counter<string>;
   readonly httpRequestDurationMs: Histogram<string>;
@@ -39,6 +41,18 @@ export class MetricsService {
       help: 'Time spent processing settlements in seconds',
       labelNames: ['type'],
       buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+    });
+
+    this.paymentConfirmationDurationSeconds = new Histogram({
+      name: 'payment_confirmation_duration_seconds',
+      help: 'Time from payment creation to confirmation in seconds',
+      buckets: [0.1, 0.5, 1, 5, 30],
+    });
+
+    this.webhookDeliveryDurationSeconds = new Histogram({
+      name: 'webhook_delivery_duration_seconds',
+      help: 'Time spent delivering a webhook attempt in seconds',
+      labelNames: ['event', 'status'],
     });
 
     this.httpRequestsTotal = new Counter({

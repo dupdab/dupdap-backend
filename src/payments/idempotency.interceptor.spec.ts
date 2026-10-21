@@ -6,9 +6,9 @@ describe('IdempotencyInterceptor', () => {
   let interceptor: IdempotencyInterceptor;
   let cacheService: Partial<CacheService>;
 
-  const buildContext = (idempotencyKey?: string) => {
+  const buildContext = (requestId?: string) => {
     const response = { statusCode: 201 };
-    const request = { headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : {} };
+    const request = { method: 'POST', url: '/payments', body: {}, headers: requestId ? { 'x-request-id': requestId } : {} };
     return {
       switchToHttp: () => ({
         getRequest: () => request,
@@ -25,21 +25,21 @@ describe('IdempotencyInterceptor', () => {
     interceptor = new IdempotencyInterceptor(cacheService as CacheService);
   });
 
-  it('passes ttlSeconds (not ttl) through to CacheService.set so the configured TTL actually applies', async () => {
+  it('stores a request response for five minutes under its request ID', async () => {
     const context = buildContext('key-123');
     const next = { handle: () => of({ ok: true }) };
 
     const result$ = await interceptor.intercept(context, next as any);
-    await new Promise((resolve) => result$.subscribe({ complete: resolve, next: resolve }));
+    await new Promise<void>((resolve) => result$.subscribe({ complete: () => resolve(), next: () => resolve() }));
 
     expect(cacheService.set).toHaveBeenCalledWith(
-      'idempotency:payment:key-123',
-      expect.objectContaining({ status: 201, body: { ok: true } }),
-      { ttlSeconds: 86_400 },
+      'request-dedup:key-123',
+      expect.objectContaining({ hash: expect.any(String), status: 201, body: { ok: true } }),
+      { ttlSeconds: 300 },
     );
   });
 
-  it('skips caching when no idempotency key is present', async () => {
+  it('skips caching when no request ID is present', async () => {
     const context = buildContext();
     const next = { handle: jest.fn().mockReturnValue(of({ ok: true })) };
 

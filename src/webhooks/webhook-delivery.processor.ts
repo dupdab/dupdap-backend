@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { Job, Queue } from "bull";
 import { Repository } from "typeorm";
@@ -15,6 +15,7 @@ import { Webhook } from "./entities/webhook.entity";
 import { WebhookDeliveryLog } from "./entities/webhook-delivery-log.entity";
 import { Merchant } from "../merchants/entities/merchant.entity";
 import { WebhookFailureAlertService } from "./webhook-failure-alert.service";
+import { MetricsService } from '../prometheus/metrics.service';
 
 interface WebhookDeliveryJobData {
   webhookId: string;
@@ -45,11 +46,13 @@ export class WebhookDeliveryProcessor {
     private readonly queueConfig: QueueConfigService,
     private readonly config: ConfigService,
     private readonly failureAlertService: WebhookFailureAlertService,
+    @Optional() private readonly metrics?: MetricsService,
   ) {}
 
   @Process(WEBHOOK_DELIVERY_JOB)
   async process(job: Job<WebhookDeliveryJobData>): Promise<void> {
     const data = job.data;
+    const startedAt = Date.now();
     const requestBody = data.body;
     const signature = this.sign(requestBody, data.secret);
     const headers: Record<string, string> = {
@@ -66,10 +69,16 @@ export class WebhookDeliveryProcessor {
         headers,
         timeout: 15000,
       });
+      this.metrics?.webhookDeliveryDurationSeconds.observe(
+        { event: data.event, status: 'success' }, (Date.now() - startedAt) / 1000,
+      );
 
       await this.logDelivery(data, "success", response.status, undefined, 0);
       await this.markWebhookSuccess(data.webhookId);
     } catch (error) {
+      this.metrics?.webhookDeliveryDurationSeconds.observe(
+        { event: data.event, status: 'failure' }, (Date.now() - startedAt) / 1000,
+      );
       const errorMessage = error?.response?.data
         ? JSON.stringify(error.response.data)
         : (error?.message ?? "Unknown error");
@@ -79,22 +88,18 @@ export class WebhookDeliveryProcessor {
       const retryIndex = attemptNumber - 1;
       const nextDelay = retrySchedule[retryIndex] ?? 0;
 
-      // Honour the merchant's payment retry policy (#551). Falls back to the
-      // global webhook schedule when the merchant has no custom policy.
+      // A merchant webhook policy overrides the global webhook retry settings.
       let merchant: Merchant | null = null;
       try {
         merchant = await this.merchantRepo.findOne({ where: { id: data.merchantId } });
       } catch {
         merchant = null;
       }
-      const maxAttempts =
-        merchant && merchant.paymentRetryMaxAttempts > 0
-          ? merchant.paymentRetryMaxAttempts
-          : retrySchedule.length;
-      const retryDelay =
-        merchant && merchant.paymentRetryDelayMs > 0
-          ? Number(merchant.paymentRetryDelayMs)
-          : nextDelay;
+      const merchantRetry = merchant?.webhookRetryConfig;
+      const maxAttempts = merchantRetry?.maxAttempts ?? this.queueConfig.webhookMaxRetries;
+      const retryDelay = merchantRetry
+        ? merchantRetry.retryDelays[Math.min(retryIndex, merchantRetry.retryDelays.length - 1)]
+        : nextDelay;
 
       await this.logDelivery(
         data,

@@ -1,13 +1,16 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import Big from 'big.js';
 import { Merchant, MerchantStatus, SettlementFrequency } from './entities/merchant.entity';
 import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
+import { UpdateTransactionLimitsDto } from './dto/update-transaction-limits.dto';
 import { CacheService } from '../cache/cache.service';
 import { AuditLog } from '../audit/entities/audit-log.entity';
+import { EmailService } from '../email/email.service';
 
 /** Maximum allowed API key lifetime in milliseconds (365 days). */
 const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
@@ -23,6 +26,7 @@ export class MerchantsService {
     @InjectRepository(AuditLog)
     private readonly auditLogRepo: Repository<AuditLog>,
     private readonly cache: CacheService,
+    @Optional() private readonly email?: EmailService,
   ) {}
 
   async getActiveMerchantCount(): Promise<number> {
@@ -49,6 +53,60 @@ export class MerchantsService {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     return merchant;
+  }
+
+  async suspend(id: string, reason: string, adminId: string): Promise<Merchant> {
+    const merchant = await this.findOne(id);
+    if (!reason?.trim()) throw new BadRequestException('A suspension reason is required');
+    const before = {
+      suspended: merchant.suspended ?? false,
+      status: merchant.status,
+      suspendedReason: merchant.suspendedReason ?? null,
+    };
+    merchant.suspended = true;
+    merchant.suspendedReason = reason.trim();
+    const saved = await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'MERCHANT_SUSPENDED',
+      resource: `merchant:${id}`,
+      before,
+      after: {
+        suspended: true,
+        status: saved.status,
+        suspendedReason: saved.suspendedReason,
+      },
+    });
+    await this.email?.queue(saved.email, 'merchant-suspended', {
+      subject: 'Merchant account suspended',
+      businessName: saved.businessName,
+      reason: saved.suspendedReason,
+    });
+    return saved;
+  }
+
+  async unsuspend(id: string, adminId: string): Promise<Merchant> {
+    const merchant = await this.findOne(id);
+    const before = {
+      suspended: merchant.suspended ?? false,
+      status: merchant.status,
+      suspendedReason: merchant.suspendedReason ?? null,
+    };
+    merchant.suspended = false;
+    merchant.suspendedReason = null;
+    const saved = await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'MERCHANT_UNSUSPENDED',
+      resource: `merchant:${id}`,
+      before,
+      after: { suspended: false, status: saved.status, suspendedReason: null },
+    });
+    await this.email?.queue(saved.email, 'merchant-unsuspended', {
+      subject: 'Merchant account restored',
+      businessName: saved.businessName,
+    });
+    return saved;
   }
 
   async update(id: string, dto: UpdateMerchantDto): Promise<Merchant> {
@@ -86,9 +144,7 @@ export class MerchantsService {
       businessName: m.businessName ?? null,
       businessType: m.businessType ?? null,
       country: m.country ?? null,
-      bankAccountNumber: m.bankAccountNumber
-        ? `****${String(m.bankAccountNumber).slice(-4)}`
-        : null,
+      bankAccountNumber: m.bankAccountNumber ? `****${String(m.bankAccountNumber).slice(-4)}` : null,
       bankCode: m.bankCode ?? null,
       bankName: m.bankName ?? null,
     };
@@ -109,13 +165,20 @@ export class MerchantsService {
       after: (e as unknown as Record<string, unknown>).after,
       timestamp: (e as unknown as Record<string, unknown>).createdAt,
     }));
-    return { items: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      items: mapped,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async generateApiKey(
     id: string,
     scopes?: ApiScope[],
     expiresAt?: Date,
+    ip?: string,
   ): Promise<{ apiKey: string; expiresAt: Date | null }> {
     if (expiresAt != null) {
       const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
@@ -131,7 +194,10 @@ export class MerchantsService {
     const rawKey = `cpk_${crypto.randomBytes(32).toString('hex')}`;
     const hash = await bcrypt.hash(rawKey, 10);
 
+    const rotating = !!merchant.apiKeyHash;
+    const previousPrefix = merchant.apiKeyLastFour ?? null;
     merchant.apiKey = rawKey.substring(0, 12) + '...';
+    merchant.apiKeyLastFour = rawKey.slice(-4);
     merchant.apiKeyHash = hash;
     merchant.apiKeyLookupHash = crypto.createHash('sha256').update(rawKey).digest('hex');
     merchant.apiKeyScopes = scopes?.length ? scopes : API_KEY_SCOPES;
@@ -140,18 +206,61 @@ export class MerchantsService {
     merchant.apiKeyExpirySentAt = null;
     await this.merchantsRepo.save(merchant);
 
+    await this.auditLogRepo.save({
+      actor: id,
+      action: rotating ? 'API_KEY_ROTATED' : 'API_KEY_CREATED',
+      resource: `merchant:${id}:api-key`,
+      before: rotating ? { keyPrefix: previousPrefix } : null,
+      after: { keyPrefix: rawKey.slice(-4) },
+      ip,
+    });
+
     return { apiKey: rawKey, expiresAt: merchant.apiKeyExpiresAt };
+  }
+
+  async revokeApiKey(merchantId: string, ip?: string): Promise<void> {
+    const merchant = await this.findOne(merchantId);
+    if (!merchant.apiKeyHash) throw new NotFoundException('API key not found');
+    const keyPrefix = merchant.apiKeyLastFour ?? null;
+    merchant.apiKey = null;
+    merchant.apiKeyLastFour = null;
+    merchant.apiKeyHash = null;
+    merchant.apiKeyLookupHash = null;
+    merchant.apiKeyScopes = [];
+    merchant.apiKeyExpiresAt = null;
+    merchant.apiKeyExpirySentAt = null;
+    await this.merchantsRepo.save(merchant);
+    await this.auditLogRepo.save({
+      actor: merchantId,
+      action: 'API_KEY_REVOKED',
+      resource: `merchant:${merchantId}:api-key`,
+      before: { keyPrefix },
+      after: null,
+      ip,
+    });
+  }
+
+  async getApiKeyAudit(merchantId: string, page = 1, limit = 20) {
+    const [items, total] = await this.auditLogRepo.findAndCount({
+      where: { resource: `merchant:${merchantId}:api-key` },
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { items: items.map((entry) => ({
+      actor: entry.actor,
+      action: entry.action,
+      timestamp: entry.createdAt,
+      keyPrefix: entry.after?.keyPrefix ?? entry.before?.keyPrefix ?? null,
+      ipAddress: entry.ip,
+    })), total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   /**
    * Admin operation: extend the expiry of an existing API key.
    * Resets the 14-day reminder flag and writes an audit log entry.
    */
-  async extendApiKeyExpiry(
-    merchantId: string,
-    newExpiresAt: Date,
-    adminId: string,
-  ): Promise<Merchant> {
+  async extendApiKeyExpiry(merchantId: string, newExpiresAt: Date, adminId: string): Promise<Merchant> {
     const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
     if (newExpiresAt <= new Date()) {
       throw new BadRequestException('newExpiresAt must be in the future');
@@ -186,11 +295,10 @@ export class MerchantsService {
     return this.findOne(id);
   }
 
-  async updateMerchantFee(
-    merchantId: string,
-    customFeeRate: number | null,
-  ): Promise<Merchant> {
-    const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
+  async updateMerchantFee(merchantId: string, customFeeRate: number | null): Promise<Merchant> {
+    const merchant = await this.merchantsRepo.findOne({
+      where: { id: merchantId },
+    });
     if (!merchant) {
       throw new NotFoundException('Merchant not found');
     }
@@ -201,16 +309,55 @@ export class MerchantsService {
     return updated;
   }
 
+  /**
+   * Admin operation: update a merchant's per-transaction and daily USD limits (#500).
+   * Writes an audit log entry with the previous and new values.
+   */
+  async updateTransactionLimits(
+    merchantId: string,
+    dto: UpdateTransactionLimitsDto,
+    adminId: string,
+  ): Promise<Merchant> {
+    const merchant = await this.findOne(merchantId);
+    const previous = {
+      singleTransactionLimitUsd: merchant.singleTransactionLimitUsd,
+      dailyLimitUsd: merchant.dailyLimitUsd,
+    };
+
+    if (dto.singleTransactionLimitUsd !== undefined) {
+      merchant.singleTransactionLimitUsd = String(dto.singleTransactionLimitUsd);
+    }
+    if (dto.dailyLimitUsd !== undefined) {
+      merchant.dailyLimitUsd = String(dto.dailyLimitUsd);
+    }
+    if (new Big(merchant.singleTransactionLimitUsd).gt(merchant.dailyLimitUsd)) {
+      throw new BadRequestException('singleTransactionLimitUsd must not exceed dailyLimitUsd');
+    }
+
+    const updated = await this.merchantsRepo.save(merchant);
+
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'merchant_transaction_limits_updated',
+      resourceType: 'merchant',
+      resourceId: merchantId,
+      details: {
+        previous,
+        singleTransactionLimitUsd: updated.singleTransactionLimitUsd,
+        dailyLimitUsd: updated.dailyLimitUsd,
+      },
+    });
+
+    return updated;
+  }
+
   async verifyMerchant(id: string): Promise<Merchant> {
     const merchant = await this.findOne(id);
     merchant.status = MerchantStatus.ACTIVE;
     return this.merchantsRepo.save(merchant);
   }
 
-  async updateSettlementPreference(
-    id: string,
-    settlementFrequency: SettlementFrequency,
-  ): Promise<Merchant> {
+  async updateSettlementPreference(id: string, settlementFrequency: SettlementFrequency): Promise<Merchant> {
     const merchant = await this.findOne(id);
     merchant.settlementFrequency = settlementFrequency;
     return this.merchantsRepo.save(merchant);

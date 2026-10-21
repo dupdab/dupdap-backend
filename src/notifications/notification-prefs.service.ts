@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Merchant } from '../merchants/entities/merchant.entity';
 import {
   NotificationChannel,
   NotificationEventType,
@@ -16,15 +17,24 @@ import {
 const ALL_CHANNELS = Object.values(NotificationChannel);
 const ALL_EVENTS = Object.values(NotificationEventType);
 
+/** SMS costs money per message, so it is opt-in; every other channel is on by default. */
+const defaultEnabled = (channel: NotificationChannel): boolean =>
+  channel !== NotificationChannel.SMS;
+
 @Injectable()
 export class NotificationPrefsService {
   constructor(
     @InjectRepository(NotificationPreference)
     private readonly prefsRepo: Repository<NotificationPreference>,
+    @InjectRepository(Merchant)
+    private readonly merchantRepo: Repository<Merchant>,
   ) {}
 
   async getPrefs(merchantId: string): Promise<NotificationPrefsResponseDto> {
-    const stored = await this.prefsRepo.find({ where: { merchantId } });
+    const [stored, merchant] = await Promise.all([
+      this.prefsRepo.find({ where: { merchantId } }),
+      this.merchantRepo.findOne({ where: { id: merchantId }, select: ['id', 'smsPhoneNumber'] }),
+    ]);
 
     // Build a full matrix, filling in defaults for any missing rows
     const preferences: NotificationPrefResponseItemDto[] = [];
@@ -40,14 +50,14 @@ export class NotificationPrefsService {
         preferences.push({
           channel,
           eventType,
-          // in_app is always enabled; fall back to true for unsaved rows
-          enabled: isInApp ? true : (existing?.enabled ?? true),
+          // in_app is always enabled; unsaved rows fall back to the channel default
+          enabled: isInApp ? true : (existing?.enabled ?? defaultEnabled(channel)),
           ...(isInApp ? { readonly: true } : {}),
         });
       }
     }
 
-    return { preferences };
+    return { preferences, phoneNumber: merchant?.smsPhoneNumber ?? null };
   }
 
   async updatePrefs(
@@ -60,6 +70,26 @@ export class NotificationPrefsService {
           'in_app notifications cannot be disabled',
         );
       }
+    }
+
+    // Validate before writing anything so a rejected request leaves no partial state
+    const enablesSms = dto.preferences.some(
+      (item) => item.channel === NotificationChannel.SMS && item.enabled,
+    );
+    if (enablesSms) {
+      const phoneNumber =
+        dto.phoneNumber ??
+        (await this.merchantRepo.findOne({ where: { id: merchantId }, select: ['id', 'smsPhoneNumber'] }))
+          ?.smsPhoneNumber;
+      if (!phoneNumber) {
+        throw new BadRequestException(
+          'A phoneNumber is required before enabling sms notifications',
+        );
+      }
+    }
+
+    if (dto.phoneNumber !== undefined) {
+      await this.merchantRepo.update(merchantId, { smsPhoneNumber: dto.phoneNumber });
     }
 
     // Upsert each preference using the unique constraint (merchantId, channel, eventType)
@@ -99,7 +129,7 @@ export class NotificationPrefsService {
       where: { merchantId, channel, eventType },
     });
 
-    // Default to enabled if no preference row exists yet
-    return pref?.enabled ?? true;
+    // Fall back to the channel default if no preference row exists yet
+    return pref?.enabled ?? defaultEnabled(channel);
   }
 }

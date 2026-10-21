@@ -1,0 +1,5 @@
+Your payment import is complete.
+Created: {{createdCount}}
+Rows needing attention: {{errorCount}}
+{{#each results}}Row {{row}}: {{#if status}}{{status}} {{reference}}{{else}}{{reason}}{{/if}}
+{{/each}}

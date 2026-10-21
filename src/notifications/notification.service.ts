@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { IsNull, LessThan, Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InAppNotification } from './entities/in-app-notification.entity';
 import { CronJobService } from '../cron/cron-job.service';
@@ -18,7 +18,7 @@ export class NotificationService {
   }
 
   async getUnreadCount(merchantId: string): Promise<number> {
-    return this.repo.count({ where: { merchantId, read: false } });
+    return this.repo.count({ where: { merchantId, readAt: IsNull() } });
   }
 
   async listForUser(
@@ -49,12 +49,14 @@ export class NotificationService {
   async markRead(merchantId: string, id: string): Promise<void> {
     const notification = await this.repo.findOne({ where: { id, merchantId } });
     if (!notification) throw new NotFoundException('Notification not found');
-    notification.read = true;
-    await this.repo.save(notification);
+    if (!notification.readAt) {
+      notification.readAt = new Date();
+      await this.repo.save(notification);
+    }
   }
 
   async markAllRead(merchantId: string): Promise<void> {
-    await this.repo.update({ merchantId, read: false }, { read: true });
+    await this.repo.update({ merchantId, readAt: IsNull() }, { readAt: new Date() });
   }
 
   /** Auto-purge notifications older than 30 days — runs daily at midnight */
