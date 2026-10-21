@@ -27,11 +27,12 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { Auditable } from '../audit/decorators/auditable.decorator';
+import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 
 @ApiTags('admin')
 @ApiBearerAuth()
-@UseGuards(IpAllowlistGuard, JwtAuthGuard, RolesGuard)
-@Roles(MerchantRole.ADMIN)
+@UseGuards(IpAllowlistGuard, JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
+@Roles(MerchantRole.ADMIN, MerchantRole.SUPERADMIN)
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -59,7 +60,7 @@ export class AdminController {
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.updateMerchantStatus(id, status, req.user?.id);
+    return this.adminService.updateMerchantStatus(id, status, req.user?.id ?? (req.user as any)?.merchantId);
   }
 
   @Patch('merchants/bulk/status')
@@ -70,7 +71,7 @@ export class AdminController {
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id);
+    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id ?? (req.user as any)?.merchantId);
   }
 
   @Get('stats')
@@ -95,7 +96,7 @@ export class AdminController {
     return this.adminService.updateGlobalFee(
       dto.feeType,
       dto.newRate,
-      req.user.id,
+      req.user.id ?? (req.user as any)?.merchantId ?? 'system',
       dto.reason,
     );
   }
@@ -145,7 +146,6 @@ export class AdminController {
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
 
   @Post('users')
-  @Auditable({ action: 'ADMIN_CREATED', resource: 'admin' })
   @ApiOperation({ summary: 'Create a new admin user (SUPERADMIN only)' })
   createAdmin(
     @Body() dto: { email: string; password: string; businessName: string },
@@ -156,18 +156,27 @@ export class AdminController {
       dto.password,
       dto.businessName,
       req.user.role,
-      req.user?.id,
+      req.user?.id ?? (req.user as any)?.merchantId,
     );
   }
 
   @Delete('users/:id')
-  @Auditable({ action: 'ADMIN_DELETED', resource: 'admin' })
   @ApiOperation({ summary: 'Delete an admin user (SUPERADMIN only)' })
   deleteAdmin(
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: MerchantRole } },
   ) {
-    return this.adminService.deleteAdmin(id, req.user.role, req.user?.id);
+    return this.adminService.deleteAdmin(id, req.user.role, req.user?.id ?? (req.user as any)?.merchantId);
+  }
+
+  @Patch('users/:id/role')
+  @ApiOperation({ summary: 'Update an admin user role (SUPERADMIN only)' })
+  updateAdminRole(
+    @Param('id') id: string,
+    @Body('role') role: MerchantRole,
+    @Req() req: Request & { user: { id: string; merchantId: string; role: MerchantRole } },
+  ) {
+    return this.adminService.updateAdminRole(id, role, req.user.role, req.user.id ?? req.user.merchantId);
   }
 
   @Post('users/:id/2fa/setup')
@@ -204,7 +213,7 @@ export class AdminController {
     @Body('enabled') enabled: boolean,
     @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id);
+    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? (req.user as any)?.merchantId);
   }
 
   @Post('merchants/:id/sandbox/reset')
@@ -214,7 +223,7 @@ export class AdminController {
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.resetSandboxData(id, req.user?.id);
+    return this.adminService.resetSandboxData(id, req.user?.id ?? (req.user as any)?.merchantId);
   }
 
   // ── Audit Log Viewer ───────────────────────────────────────────────────────
@@ -273,7 +282,7 @@ export class AdminController {
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string } },
   ) {
-    return this.adminService.restoreRecord(entity, id, req.user?.id);
+    return this.adminService.restoreRecord(entity, id, req.user?.id ?? (req.user as any)?.merchantId);
   }
 
   @Delete(':entity/:id')

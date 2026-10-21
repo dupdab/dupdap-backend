@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { CacheService } from '../cache/cache.service';
+import { authenticator } from 'otplib';
 
 jest.mock('bcrypt');
 jest.mock('@nestjs/typeorm', () => ({
@@ -24,6 +25,7 @@ describe('AuthService', () => {
 
   const mockJwtService = {
     sign: jest.fn().mockReturnValue('signed-jwt-token'),
+    verify: jest.fn(),
   };
 
   const mockCacheService = {
@@ -35,6 +37,7 @@ describe('AuthService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockJwtService.sign.mockReturnValue('signed-jwt-token');
+    mockJwtService.verify.mockReset();
     mockCacheService.set.mockResolvedValue(undefined);
     mockCacheService.del.mockResolvedValue(undefined);
     mockCacheService.get.mockResolvedValue(undefined);
@@ -122,6 +125,25 @@ describe('AuthService', () => {
       expect(bcrypt.compare).toHaveBeenCalledWith(dto.password, merchant.passwordHash);
       expect(result).toEqual({ accessToken: 'signed-jwt-token', merchant });
       expect(mockCacheService.del).toHaveBeenCalledWith('auth:failed:merchant@example.com');
+    });
+
+    it('returns a short-lived 2FA challenge instead of a session for enabled admins', async () => {
+      const admin = { id: 'a1', email: dto.email, role: 'admin', passwordHash: 'hashed-password', status: MerchantStatus.ACTIVE, totpEnabled: true };
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(admin);
+      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
+      const result = await service.login(dto as any);
+      expect(mockJwtService.sign).toHaveBeenCalledWith(expect.objectContaining({ sub: 'a1', admin2faPending: true }), { expiresIn: '5m' });
+      expect(result.accessToken).toBe('signed-jwt-token');
+    });
+
+    it('verifies a login challenge and returns a verified admin session', async () => {
+      const admin = { id: 'a1', email: dto.email, role: 'admin', totpSecret: authenticator.generateSecret(), totpEnabled: true };
+      mockJwtService.verify.mockReturnValue({ sub: 'a1', admin2faPending: true });
+      mockMerchantsRepo.findOne.mockResolvedValueOnce(admin);
+      const result = await service.verifyAdminTwoFactor('challenge', authenticator.generate(admin.totpSecret));
+      expect(result.accessToken).toBe('signed-jwt-token');
+      expect(mockJwtService.sign).toHaveBeenCalledWith(expect.objectContaining({ sub: 'a1', admin2fa: true, jti: expect.any(String) }));
+      expect(mockMerchantsRepo.save).not.toHaveBeenCalled();
     });
 
     it('strips totpSecret from the login merchant when ClassSerializerInterceptor serializes it', async () => {

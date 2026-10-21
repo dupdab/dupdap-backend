@@ -11,6 +11,7 @@ import { RolesGuard } from './guards/roles.guard';
 import { RateLimitService } from './rate-limit.service';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { CacheModule } from '../cache/cache.module';
+import { AdminTwoFactorGuard } from './guards/admin-two-factor.guard';
 
 @Global()
 @Module({
@@ -28,7 +29,7 @@ import { CacheModule } from '../cache/cache.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [RateLimitService, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
-  exports: [RateLimitService, AuthService, JwtAuthGuard, RolesGuard],
+  providers: [RateLimitService, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, AdminTwoFactorGuard],
+  exports: [RateLimitService, AuthService, JwtAuthGuard, RolesGuard, AdminTwoFactorGuard],
 })
 export class AuthModule {}

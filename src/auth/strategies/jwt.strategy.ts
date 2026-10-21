@@ -38,7 +38,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       const cached = await this.cacheService.get<{ merchantId: string; email: string; role: string }>(
         `session:${jti}`,
       );
-      if (cached) return { ...cached, jti, exp: payload.exp };
+      if (cached && !['admin', 'superadmin'].includes(cached.role)) {
+        return { ...cached, admin2fa: payload.admin2fa === true, admin2faPending: payload.admin2faPending === true, jti, exp: payload.exp };
+      }
     }
 
     // DB fallback
@@ -58,6 +60,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
-    return { ...result, jti, exp: payload.exp };
+    return { ...result, admin2fa: payload.admin2fa === true, admin2faPending: payload.admin2faPending === true, jti, exp: payload.exp };
   }
 }

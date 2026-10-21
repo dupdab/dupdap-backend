@@ -5,10 +5,11 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
+import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 import { AdminAlert } from './admin-alert.entity';
 import { AdminAlertService } from './admin-alert.service';
 
-@UseGuards(IpAllowlistGuard, JwtAuthGuard, RolesGuard)
+@UseGuards(IpAllowlistGuard, JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN)
 @Controller('admin/alerts')
 export class AdminAlertController {

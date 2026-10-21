@@ -15,10 +15,12 @@ import { StellarModule } from '../stellar/stellar.module';
 import { SettlementsSorobanListener } from './settlements-soroban.listener';
 import { AdminSettlementsController } from './admin-settlements.controller';
 import { RetryModule } from '../retry/retry.module';
+import { MerchantSettlementExportController } from './merchant-settlement-export.controller';
+import { SettlementExport } from './entities/settlement-export.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Settlement, Payment]),
+    TypeOrmModule.forFeature([Settlement, Payment, SettlementExport]),
     AdminAlertModule,
     WebhooksModule,
     CacheModule,
@@ -28,7 +30,7 @@ import { RetryModule } from '../retry/retry.module';
     QueueModule,
     RetryModule,
   ],
-  controllers: [SettlementsController, PartnerCallbackController, AdminSettlementsController],
+  controllers: [SettlementsController, PartnerCallbackController, AdminSettlementsController, MerchantSettlementExportController],
   providers: [SettlementsService, PartnerSignatureGuard, SettlementsSorobanListener],
   exports: [SettlementsService],
 })

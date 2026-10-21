@@ -7,11 +7,11 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { Settlement } from '../settlements/entities/settlement.entity';
 import { FeeConfig, FeeType } from '../fee-config/entities/fee-config.entity';
 import { FeeHistory, FeeChangeType } from '../fee-config/entities/fee-history.entity';
-import { AuditLog } from './entities/audit-log.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 import { FilterService } from '../common/filter.service';
 import { CacheService } from '../cache/cache.service';
 import { StellarMonitorService } from '../stellar/stellar-monitor.service';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,7 @@ const mockRepository = () => ({
   save: jest.fn(),
   create: jest.fn((x) => x),
   remove: jest.fn(),
+  softRemove: jest.fn(),
   delete: jest.fn(),
   softDelete: jest.fn(),
   restore: jest.fn(),
@@ -321,6 +322,19 @@ describe('AdminService', () => {
       await service.deleteAdmin('a1', MerchantRole.SUPERADMIN, 'admin-1');
 
       expectAuditLog({ action: 'ADMIN_DELETED', resource: 'admin:a1' });
+      expect(merchantsRepo.softRemove).toHaveBeenCalled();
+    });
+
+    it('prevents an ADMIN from escalating a role', async () => {
+      await expect(service.updateAdminRole('target', MerchantRole.SUPERADMIN, MerchantRole.ADMIN, 'admin-1'))
+        .rejects.toBeInstanceOf(ForbiddenException);
+      expect(merchantsRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects assigning a merchant role through admin role management', async () => {
+      await expect(service.updateAdminRole('target', MerchantRole.MERCHANT, MerchantRole.SUPERADMIN, 'root'))
+        .rejects.toThrow('Role must be ADMIN or SUPERADMIN');
+      expect(merchantsRepo.findOne).not.toHaveBeenCalled();
     });
 
     it('toggleSandboxMode writes an audit log', async () => {

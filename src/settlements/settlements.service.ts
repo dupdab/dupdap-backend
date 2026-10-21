@@ -1,10 +1,11 @@
-import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Inject, forwardRef, BadRequestException, GoneException, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { QUEUE_NAMES, DEFAULT_QUEUE_JOB } from '../queues/queue.constants';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
+import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import Big from 'big.js';
@@ -23,6 +24,8 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+import { SettlementExport } from './entities/settlement-export.entity';
+import { parseIsoDate } from '../common/date-range.util';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -83,6 +86,9 @@ export class SettlementsService {
     private settlementQueue: Queue,
     private cronJobService: CronJobService,
     private retryConfig: RetryConfigService,
+    @Optional()
+    @InjectRepository(SettlementExport)
+    private settlementExportRepo: Repository<SettlementExport> = null as any,
   ) {}
 
   private invalidateAnalyticsForMerchant(merchantId: string): void {
@@ -505,26 +511,108 @@ export class SettlementsService {
   /**
    * CSV export of a merchant's settlements including the fee breakdown (#554).
    */
-  async exportCsvForMerchant(merchantId: string): Promise<string> {
-    const settlements = await this.findForMerchant(merchantId);
+  async exportCsvForMerchant(merchantId: string, dateFrom?: string, dateTo?: string): Promise<string> {
+    const qb = this.settlementsRepo.createQueryBuilder('settlement')
+      .where('settlement.merchantId = :merchantId', { merchantId });
+    if (dateFrom) qb.andWhere('settlement.createdAt >= :dateFrom', { dateFrom: parseIsoDate(dateFrom) });
+    if (dateTo) qb.andWhere('settlement.createdAt < :dateTo', { dateTo: new Date(parseIsoDate(dateTo).getTime() + 86_400_000) });
+    const settlements = await qb.orderBy('settlement.createdAt', 'DESC').getMany();
     const header =
-      'settlement_id,merchant_id,gross_amount_usd,fee_rate,fee_amount_usd,net_amount_usd,tier_applied,fiat_currency,status,created_at';
+      'settlement_id,date,gross_amount,fee,net_amount,bank_reference';
     const lines = settlements.map((settlement) => {
       const breakdown = this.toFeeBreakdown(merchantId, settlement);
+      const csv = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
       return [
         breakdown.settlementId,
-        breakdown.merchantId,
+        settlement.createdAt?.toISOString() ?? '',
         breakdown.grossAmount,
-        breakdown.feeRate,
         breakdown.feeAmount,
         breakdown.netAmount,
-        breakdown.tierApplied,
-        breakdown.fiatCurrency ?? '',
-        settlement.status,
-        settlement.createdAt?.toISOString() ?? '',
-      ].join(',');
+        settlement.bankReference ?? '',
+      ].map(csv).join(',');
     });
     return [header, ...lines].join('\n');
+  }
+
+  async requestMerchantCsvExport(merchantId: string, dateFrom?: string, dateTo?: string, deliveryBaseUrl = '') {
+    const start = dateFrom ? parseIsoDate(dateFrom) : undefined;
+    const end = dateTo ? new Date(parseIsoDate(dateTo).getTime() + 86_400_000) : undefined;
+    if (start && end && start >= end) throw new BadRequestException('from must be before or equal to to');
+    const countQb = this.settlementsRepo.createQueryBuilder('settlement')
+      .where('settlement.merchantId = :merchantId', { merchantId });
+    if (start) countQb.andWhere('settlement.createdAt >= :start', { start });
+    if (end) countQb.andWhere('settlement.createdAt < :end', { end });
+    const count = await countQb.getCount();
+    if (count <= 5000) return { status: 'ready', csv: await this.exportCsvForMerchant(merchantId, dateFrom, dateTo) };
+
+    const merchant = await this.merchantsService.findOne(merchantId);
+    if (!merchant?.email) throw new NotFoundException('Merchant not found');
+    const record = await this.settlementExportRepo.save(this.settlementExportRepo.create({
+      merchantId, recipientEmail: merchant.email, deliveryBaseUrl: deliveryBaseUrl.replace(/\/$/, ''), dateFrom: dateFrom ?? null, dateTo: dateTo ?? null,
+      status: 'queued', fileName: null, fileData: null, downloadToken: null, expiresAt: null,
+    }));
+    await this.settlementQueue.add('export', { settlementExportId: record.id });
+    return { exportId: record.id, status: 'queued', message: 'Settlement export queued; a download link will be emailed when ready' };
+  }
+
+  async generateCsvExport(exportId: string): Promise<void> {
+    const record = await this.settlementExportRepo.findOne({ where: { id: exportId } });
+    if (!record) return;
+    record.status = 'processing';
+    await this.settlementExportRepo.save(record);
+    const fileData = Buffer.from(await this.exportCsvForMerchant(record.merchantId, record.dateFrom ?? undefined, record.dateTo ?? undefined));
+    const token = randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    record.fileData = fileData;
+    record.fileName = `settlements-${record.id}.csv`;
+    record.downloadToken = token;
+    record.expiresAt = expiresAt;
+    record.status = 'ready';
+    await this.settlementExportRepo.save(record);
+    const merchant = await this.merchantsService.findOne(record.merchantId);
+    await this.emailService.queue(record.recipientEmail, 'analytics-report-ready', {
+      merchantName: merchant?.businessName ?? 'Merchant',
+      reportName: record.fileName,
+      downloadUrl: `${record.deliveryBaseUrl}/export/download/${token}`,
+      expiresAt: expiresAt.toISOString(),
+    }, record.merchantId);
+  }
+
+  async getCsvExportByToken(token: string): Promise<SettlementExport> {
+    const record = await this.settlementExportRepo.findOne({ where: { downloadToken: token } });
+    if (!record || record.status !== 'ready' || !record.fileData) throw new NotFoundException('Settlement export not found');
+    if (record.expiresAt && record.expiresAt.getTime() < Date.now()) throw new GoneException('Download link expired');
+    return record;
+  }
+
+  async getReceiptPdf(merchantId: string, settlementId: string): Promise<Buffer> {
+    const settlement = await this.findOneForMerchant(merchantId, settlementId);
+    const safe = (value: string) => value.replace(/[^\x20-\x7E]/g, '?').replace(/[()\\]/g, '\\$&');
+    const lines = [
+      `Settlement receipt ${settlement.id}`,
+      `Date: ${settlement.completedAt?.toISOString() ?? settlement.createdAt?.toISOString() ?? ''}`,
+      `Gross amount: ${settlement.totalAmountUsd}`,
+      `Fee: ${settlement.feeAmountUsd}`,
+      `Net amount: ${settlement.netAmountUsd}`,
+      `Bank reference: ${settlement.bankReference ?? ''}`,
+    ];
+    const content = lines.map((line, index) => `BT /F1 ${index ? 12 : 18} Tf 48 ${740 - index * 28} Td (${safe(line)}) Tj ET`).join('\n');
+    const objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+    ];
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [];
+    objects.forEach((object, index) => {
+      offsets.push(Buffer.byteLength(pdf, 'latin1'));
+      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    });
+    const xref = Buffer.byteLength(pdf, 'latin1');
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    return Buffer.from(pdf, 'latin1');
   }
 
   async findForAdmin(query: AdminSettlementsQueryDto): Promise<PaginatedResponseDto<Settlement>> {

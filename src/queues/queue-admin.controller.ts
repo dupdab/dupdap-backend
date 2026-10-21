@@ -8,10 +8,11 @@ import { QueueMetricsService } from './queue-metrics.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from './queue.constants';
+import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 
 @ApiTags('admin/queues')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN)
 @Controller('admin/queues')
 export class QueueAdminController {

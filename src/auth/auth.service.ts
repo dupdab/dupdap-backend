@@ -9,6 +9,8 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import type { AuthTokenResponseDto } from './dto/auth-token-response.dto';
 import { CacheService } from '../cache/cache.service';
+import { authenticator } from 'otplib';
+import * as QRCode from 'qrcode';
 
 /** Failed password attempts before a temporary lockout is applied. */
 const LOGIN_MAX_FAILED_ATTEMPTS = 5;
@@ -68,7 +70,72 @@ export class AuthService {
     await this.clearFailedLogin(emailKey);
 
     const token = this.signToken(merchant.id, merchant.email, merchant.role);
+    if (['admin', 'superadmin'].includes(merchant.role) && merchant.totpEnabled) {
+      return {
+        accessToken: this.jwtService.sign(
+          { sub: merchant.id, email: merchant.email, role: merchant.role, admin2faPending: true },
+          { expiresIn: '5m' },
+        ),
+        merchant,
+      };
+    }
     return { accessToken: token, merchant };
+  }
+
+  async enableAdminTwoFactor(merchantId: string) {
+    const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
+    if (!merchant || !['admin', 'superadmin'].includes(merchant.role)) {
+      throw new UnauthorizedException('Admin account not found');
+    }
+    const secret = authenticator.generateSecret();
+    merchant.totpSecret = secret;
+    merchant.totpEnabled = false;
+    await this.merchantsRepo.save(merchant);
+    const otpauthUri = authenticator.keyuri(merchant.email, 'DupDub', secret);
+    return { secret, otpauthUri, qrCode: await QRCode.toDataURL(otpauthUri) };
+  }
+
+  async verifyAdminTwoFactor(token: string, code: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(token);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired 2FA session');
+    }
+    const merchant = await this.merchantsRepo.findOne({ where: { id: payload.sub } });
+    if (
+      !merchant ||
+      !['admin', 'superadmin'].includes(merchant.role) ||
+      !merchant.totpSecret ||
+      !authenticator.verify({ secret: merchant.totpSecret, token: code })
+    ) {
+      throw new UnauthorizedException('Invalid two-factor code');
+    }
+    if (payload.admin2faPending) {
+      return {
+        accessToken: this.jwtService.sign({
+          sub: merchant.id,
+          email: merchant.email,
+          role: merchant.role,
+          admin2fa: true,
+          jti: randomUUID(),
+        }),
+        merchant,
+      };
+    }
+    merchant.totpEnabled = true;
+    await this.merchantsRepo.save(merchant);
+    return {
+      enabled: true,
+      accessToken: this.jwtService.sign({
+        sub: merchant.id,
+        email: merchant.email,
+        role: merchant.role,
+        admin2fa: true,
+        jti: randomUUID(),
+      }),
+      merchant,
+    };
   }
 
   async logout(jti: string, ttlSeconds: number): Promise<void> {

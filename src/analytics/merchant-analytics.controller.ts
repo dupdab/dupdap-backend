@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { MerchantRole } from '../merchants/enums/merchant-role.enum';
+import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { MerchantAnalyticsService } from './merchant-analytics.service';
 import { TopMerchantsQueryDto } from './dto/top-merchants-query.dto';
 import { PaymentFunnelQueryDto } from './dto/payment-funnel-query.dto';

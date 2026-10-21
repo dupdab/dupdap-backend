@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -58,14 +59,13 @@ export class AdminService {
     resourceId?: string | null;
     details?: Record<string, any> | null;
   }): Promise<void> {
-    // Map admin-shaped fields onto the migrated audit_logs schema
-    // (actor, action, resource, before, after, ip) — see CreateAuditLogTable.
     const log = this.auditLogRepo.create({
       actor: entry.actor ?? 'system',
       action: entry.action,
-      resourceType: entry.resourceType,
-      resourceId: entry.resourceId ?? undefined,
-      details: entry.details ?? null,
+      resource: entry.resourceId ? `${entry.resourceType}:${entry.resourceId}` : entry.resourceType,
+      before: null,
+      after: entry.details ?? null,
+      ip: undefined,
     });
     await this.auditLogRepo.save(log);
   }
@@ -303,6 +303,9 @@ export class AdminService {
     if (actorRole !== MerchantRole.SUPERADMIN) {
       throw new ForbiddenException('Only SUPERADMIN can create admin users');
     }
+    if (await this.merchantsRepo.findOne({ where: { email } })) {
+      throw new ConflictException('Email already registered');
+    }
     const passwordHash = await bcrypt.hash(password, 10);
     const merchant = this.merchantsRepo.create({
       email,
@@ -312,7 +315,6 @@ export class AdminService {
       status: MerchantStatus.ACTIVE,
     });
     const saved = await this.merchantsRepo.save(merchant);
-    console.log(`[AdminService] Admin user created: ${saved.id} (${email})`);
     await this.writeAuditLog({
       actor: actorId,
       action: 'ADMIN_CREATED',
@@ -332,7 +334,7 @@ export class AdminService {
     if (merchant.role !== MerchantRole.ADMIN) {
       throw new BadRequestException('Target user is not an ADMIN');
     }
-    await this.merchantsRepo.remove(merchant);
+    await this.merchantsRepo.softRemove(merchant);
     await this.writeAuditLog({
       actor: actorId,
       action: 'ADMIN_DELETED',
@@ -341,6 +343,19 @@ export class AdminService {
       details: { email: merchant.email },
     });
     return { deleted: true, id };
+  }
+
+  async updateAdminRole(id: string, role: MerchantRole, actorRole: MerchantRole, actorId = 'system') {
+    if (actorRole !== MerchantRole.SUPERADMIN) throw new ForbiddenException('Only SUPERADMIN can update admin roles');
+    if (![MerchantRole.ADMIN, MerchantRole.SUPERADMIN].includes(role)) throw new BadRequestException('Role must be ADMIN or SUPERADMIN');
+    const merchant = await this.merchantsRepo.findOne({ where: { id } });
+    if (!merchant) throw new NotFoundException('Admin user not found');
+    if (![MerchantRole.ADMIN, MerchantRole.SUPERADMIN].includes(merchant.role)) throw new BadRequestException('Target user is not an admin');
+    const previousRole = merchant.role;
+    merchant.role = role;
+    const updated = await this.merchantsRepo.save(merchant);
+    await this.writeAuditLog({ actor: actorId, action: 'ADMIN_ROLE_UPDATED', resourceType: 'admin', resourceId: id, details: { previousRole, role } });
+    return this.sanitize(updated);
   }
 
   async setupAdminTotp(id: string) {

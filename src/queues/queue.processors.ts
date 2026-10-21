@@ -83,6 +83,11 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
       await (this.cacheService as any).redis.del(`lock:${lockKey}`);
     }
   }
+
+  @Process('export')
+  async handleExport(job: Job<{ settlementExportId: string }>): Promise<void> {
+    await this.settlementsService.generateCsvExport(job.data.settlementExportId);
+  }
 }
 
 @Processor(QUEUE_NAMES.stellarMonitor)

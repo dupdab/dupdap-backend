@@ -8,6 +8,8 @@ import {
 
 export enum AnalyticsExportFormat {
   PDF = 'pdf',
+  CSV = 'csv',
+  JSON = 'json',
 }
 
 export enum AnalyticsExportScope {

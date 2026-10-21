@@ -16,9 +16,10 @@ import { SettlementsService } from './settlements.service';
 import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
 import { Request } from 'express';
 import { Auditable } from '../audit/decorators/auditable.decorator';
+import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 
 @Controller('admin/settlements')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(JwtAuthGuard, AdminTwoFactorGuard, AdminGuard)
 export class AdminSettlementsController {
   constructor(private readonly settlementsService: SettlementsService) {}
 

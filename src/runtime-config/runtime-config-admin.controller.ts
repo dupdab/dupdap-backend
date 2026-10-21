@@ -13,10 +13,12 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Request } from 'express';
+import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 
 @ApiTags('admin / config')
 @ApiBearerAuth()
-@UseGuards(RolesGuard)
+@UseGuards(JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
 @Roles(MerchantRole.SUPERADMIN)
 @Controller('admin/config')
 export class RuntimeConfigController {
