@@ -34,7 +34,7 @@ class ListQueryDto {
 @ApiBearerAuth('bearer')
 @ApiSecurity('api-key')
 @UseGuards(JwtAuthGuard)
-@Controller('notifications')
+@Controller('merchant/notifications')
 export class NotificationsController {
   constructor(private readonly service: NotificationService) {}
 
@@ -60,7 +60,7 @@ export class NotificationsController {
       }),
     ]);
     res.setHeader('X-Unread-Count', String(unread));
-    return result;
+    return { ...result, unreadCount: unread };
   }
 
   @Get('unread-count')

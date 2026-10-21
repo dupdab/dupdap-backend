@@ -1,0 +1,28 @@
+# Prometheus alerting rules for the DupDap backend.
+# Load via `rule_files:` in prometheus.yml, or import into Grafana managed alerting.
+groups:
+  - name: dupdap-payments
+    rules:
+      - alert: PaymentConfirmationP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(payment_confirmation_duration_seconds_bucket[10m]))) > 30
+        for: 10m
+        labels:
+          severity: critical
+          service: dupdap-backend
+        annotations:
+          summary: Payment confirmation p95 above 30s
+          description: The p95 payment confirmation time has been above 30 seconds for 10 minutes (current value {{ $value | humanizeDuration }}).
+
+  - name: dupdap-queues
+    rules:
+      - alert: QueueDepthHigh
+        expr: |
+          queue_depth > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: dupdap-backend
+        annotations:
+          summary: Queue "{{ $labels.queue }}" depth above 1000
+          description: The "{{ $labels.queue }}" queue has had more than 1000 waiting jobs for 5 minutes (current depth {{ $value }}).

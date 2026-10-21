@@ -18,6 +18,7 @@ import { AmlModule } from '../aml/aml.module';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
 import { TransactionLimitsService } from './transaction-limits.service';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { GeoipModule } from '../geoip/geoip.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
     ConfigModule,
     AdminAlertModule,
     forwardRef(() => AmlModule),
+    GeoipModule,
   ],
   controllers: [PaymentsController, PublicPaymentController],
   providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],

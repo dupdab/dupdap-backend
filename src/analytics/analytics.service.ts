@@ -199,37 +199,53 @@ export class AnalyticsService {
     );
   }
 
-  async getFunnel(merchantId: string, compareWith?: 'previous', range?: AnalyticsRangeInput) {
-    const window = resolveAnalyticsWindow(range ?? {});
+  async getFunnel(merchantId?: string, compareWith?: 'previous', from?: string, to?: string, range?: AnalyticsRangeInput) {
+    const resolvedRange = range ?? (from || to
+      ? {
+          start: from ? parseIsoDate(from) : undefined,
+          end: to ? addUtcDays(parseIsoDate(to), 1) : undefined,
+        }
+      : undefined);
+    const window = resolveAnalyticsWindow(resolvedRange ?? {});
     const cacheKey = this.analyticsCacheKey({
-      merchantId,
+      merchantId: merchantId ?? 'platform',
       endpoint: 'funnel',
-      dateRange: `${compareWith ?? 'none'}:${this.describeWindow(window)}`,
+      dateRange: `${compareWith ?? 'none'}:${from ?? ''}:${to ?? ''}`,
     });
     return this.getCachedData(cacheKey, async () => {
       const fetchCounts = async (start?: Date, end?: Date) => {
         const qb = this.paymentsRepo
           .createQueryBuilder('payment')
           .select('payment.status', 'status')
-          .addSelect('COUNT(*)', 'count')
-          .where('payment.merchantId = :merchantId', { merchantId });
+          .addSelect('COUNT(*)', 'count');
+        if (merchantId) qb.where('payment.merchantId = :merchantId', { merchantId });
         if (start) qb.andWhere('payment.createdAt >= :start', { start });
         if (end) qb.andWhere('payment.createdAt < :end', { end });
         const stats = await qb.groupBy('payment.status').getRawMany();
 
         const counts = { total: 0, pending: 0, confirmed: 0, settling: 0, settled: 0, failed: 0, expired: 0 };
         stats.forEach((s) => { counts[s.status] = parseInt(s.count); counts.total += parseInt(s.count); });
+        const stagePercentage = (count: number) =>
+          counts.total > 0 ? Number(((count / counts.total) * 100).toFixed(2)) : 0;
         return {
           counts,
           percentages: {
             conversionRate: counts.total > 0 ? (counts.settled / counts.total) * 100 : 0,
             abandonmentRate: counts.total > 0 ? ((counts.expired + counts.failed) / counts.total) * 100 : 0,
+            stages: {
+              pending: stagePercentage(counts.pending),
+              confirmed: stagePercentage(counts.confirmed),
+              settling: stagePercentage(counts.settling),
+              settled: stagePercentage(counts.settled),
+              failed: stagePercentage(counts.failed),
+              expired: stagePercentage(counts.expired),
+            },
           },
         };
       };
 
       if (compareWith !== 'previous') {
-        return window ? fetchCounts(window.start, window.endExclusive) : fetchCounts();
+        return window ? fetchCounts(window.start, window.endExclusive) : fetchCounts(range?.start, range?.end);
       }
 
       const periods = window ? this.resolveWindowPeriods('daily', window) : undefined;

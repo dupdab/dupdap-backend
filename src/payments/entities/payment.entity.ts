@@ -82,6 +82,18 @@ export class Payment {
   @Column({ nullable: true })
   customerEmail: string;
 
+  /** Customer IP supplied by the merchant at creation; source of countryCode. */
+  @Column({ nullable: true })
+  customerIp: string;
+
+  /** ISO 3166-1 alpha-2 country resolved from customerIp via MaxMind GeoIP2. */
+  @Column({ type: 'varchar', length: 2, nullable: true })
+  countryCode: string | null;
+
+  /** True when countryCode is in the BLOCKED_COUNTRIES config list. */
+  @Column({ default: false })
+  geoFlagged: boolean;
+
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, any>;
 

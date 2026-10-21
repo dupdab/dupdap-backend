@@ -78,15 +78,27 @@ Retrieves payment conversion funnel analytics showing the percentage of payments
 
 #### Query Parameters
 
-- `startDate` (optional): Start date for analysis (ISO 8601 format, default: 30 days ago)
-- `endDate` (optional): End date for analysis (ISO 8601 format, default: current date)
-- `network` (optional): Filter by payment network (`stellar`)
-- `period` (optional): Grouping period (`day`, `week`, `month`)
+- `merchantId` (optional): Merchant to inspect. Merchants may only pass their own ID; admins may pass any ID (default: caller's merchant)
+- `from` (optional): Start date, inclusive (`YYYY-MM-DD`)
+- `to` (optional): End date, inclusive (`YYYY-MM-DD`)
+- `compareWith` (optional): `previous` to include the prior-day comparison
+
+Each funnel stage in `percentages.stages` is that status's count as a percentage of all payments in the window.
 
 #### Example Request
 
 ```bash
-GET /api/v1/analytics/funnel?startDate=2026-03-01&endDate=2026-04-01&network=stellar
+GET /api/v1/analytics/funnel?merchantId=<id>&from=2026-03-01&to=2026-04-01
+```
+
+#### Admin Platform-wide Funnel
+
+`GET /api/v1/analytics/admin/funnel` (admin only) returns the cumulative stage funnel across all merchants. Parameters: `startDate`, `endDate` (ISO 8601), `network` (`stellar`).
+
+#### Example Admin Request
+
+```bash
+GET /api/v1/analytics/admin/funnel?startDate=2026-03-01&endDate=2026-04-01&network=stellar
 ```
 
 #### Response Format

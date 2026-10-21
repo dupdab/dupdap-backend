@@ -7,18 +7,21 @@ import { EmailService, EMAIL_QUEUE } from './email.service';
 import { EmailProcessor } from './email.processor';
 import { NodemailerService } from './nodemailer.service';
 import { EmailAdminController } from './email-admin.controller';
+import { NotificationTemplate, NotificationTemplateVersion } from './entities/notification-template.entity';
+import { NotificationTemplateService } from './notification-template.service';
+import { NotificationTemplateAdminController } from './notification-template-admin.controller';
 import { emailConfig } from '../config/email.config';
 import { RetryModule } from '../retry/retry.module';
 
 @Module({
   imports: [
     ConfigModule.forFeature(emailConfig),
-    TypeOrmModule.forFeature([EmailLog]),
+    TypeOrmModule.forFeature([EmailLog, NotificationTemplate, NotificationTemplateVersion]),
     BullModule.registerQueue({ name: EMAIL_QUEUE }),
     RetryModule,
   ],
-  providers: [EmailService, EmailProcessor, NodemailerService],
-  controllers: [EmailAdminController],
+  providers: [EmailService, EmailProcessor, NodemailerService, NotificationTemplateService],
+  controllers: [EmailAdminController, NotificationTemplateAdminController],
   exports: [EmailService],
 })
 export class EmailModule {}

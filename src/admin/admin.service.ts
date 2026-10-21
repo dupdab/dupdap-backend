@@ -291,6 +291,28 @@ export class AdminService {
     }));
   }
 
+  /** Payment count and USD volume per customer country, for the admin heatmap (#501). */
+  async getPaymentsByCountry() {
+    const rows = await this.paymentsRepo
+      .createQueryBuilder('payment')
+      .select('payment.countryCode', 'countryCode')
+      .addSelect('COUNT(payment.id)', 'paymentCount')
+      .addSelect('COUNT(payment.id) FILTER (WHERE payment.geoFlagged)', 'flaggedCount')
+      .addSelect('COALESCE(SUM(payment.amountUsd), 0)', 'volumeUsd')
+      .where('payment.countryCode IS NOT NULL')
+      .groupBy('payment.countryCode')
+      .getRawMany();
+
+    return rows
+      .map(r => ({
+        countryCode: r.countryCode,
+        paymentCount: parseInt(r.paymentCount, 10),
+        flaggedCount: parseInt(r.flaggedCount, 10),
+        volumeUsd: parseFloat(r.volumeUsd),
+      }))
+      .sort((a, b) => b.paymentCount - a.paymentCount);
+  }
+
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
 
   async createAdmin(
