@@ -13,6 +13,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
 import { QUEUE_NAMES } from '../queues/queue.constants';
 import { EmailModule } from '../email/email.module';
 import { MerchantsModule } from '../merchants/merchants.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { CacheModule } from '../cache/cache.module';
 import { RetryModule } from '../retry/retry.module';
 
@@ -24,6 +25,7 @@ import { RetryModule } from '../retry/retry.module';
     WebhooksModule,
     EmailModule,
     MerchantsModule,
+    NotificationsModule,
     CacheModule,
     BullModule.registerQueue({ name: QUEUE_NAMES.stellarMonitor }),
     RetryModule,

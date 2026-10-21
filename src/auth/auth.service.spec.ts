@@ -5,6 +5,8 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { CacheService } from '../cache/cache.service';
+import { EmailService } from '../email/email.service';
+import { AuditService } from '../audit/audit.service';
 
 jest.mock('bcrypt');
 jest.mock('@nestjs/typeorm', () => ({
@@ -43,6 +45,8 @@ describe('AuthService', () => {
       mockMerchantsRepo as any,
       mockJwtService as unknown as JwtService,
       mockCacheService as unknown as CacheService,
+      { queue: jest.fn() } as unknown as EmailService,
+      { log: jest.fn() } as unknown as AuditService,
     );
   });
 
@@ -69,7 +73,11 @@ describe('AuthService', () => {
 
       expect(bcrypt.hash).toHaveBeenCalledWith(dto.password, 12);
       expect(mockMerchantsRepo.save).toHaveBeenCalledWith(created);
-      expect(result).toEqual({ accessToken: 'signed-jwt-token', merchant: saved });
+      expect(result).toEqual({
+        accessToken: 'signed-jwt-token',
+        merchant: saved,
+        recoveryCodes: expect.any(Array),
+      });
     });
 
     it('throws ConflictException when the email is already registered', async () => {

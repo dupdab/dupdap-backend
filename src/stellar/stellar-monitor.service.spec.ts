@@ -24,6 +24,7 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { EmailService } from '../email/email.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { QUEUE_NAMES } from '../queues/queue.constants';
 
@@ -141,6 +142,7 @@ describe('StellarMonitorService', () => {
         { provide: EmailService, useValue: makeMockEmail() },
         { provide: AdminAlertService, useValue: adminAlerts },
         { provide: NotificationPrefsService, useValue: makeMockNotificationPrefs() },
+        { provide: NotificationsService, useValue: { enqueueEmail: jest.fn(), enqueueSms: jest.fn() } },
         { provide: ConfigService, useValue: makeMockConfigService() },
         { provide: getQueueToken(QUEUE_NAMES.stellarMonitor), useValue: makeMockQueue() },
       ],

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 
 export class AuthTokenResponseDto {
@@ -11,4 +11,13 @@ export class AuthTokenResponseDto {
     description: 'Merchant profile (password/key hashes and totpSecret stripped via @Exclude)',
   })
   merchant!: Merchant;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'One-time recovery codes. Returned only on registration; they cannot be shown again.',
+  })
+  recoveryCodes?: string[];
+
+  @ApiProperty({ description: 'Number of unread in-app notifications for the merchant' })
+  unreadNotificationCount!: number;
 }

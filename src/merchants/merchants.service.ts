@@ -3,9 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import Big from 'big.js';
 import { Merchant, MerchantStatus, SettlementFrequency } from './entities/merchant.entity';
 import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
+import { UpdateTransactionLimitsDto } from './dto/update-transaction-limits.dto';
 import { CacheService } from '../cache/cache.service';
 import { AuditLog } from '../audit/entities/audit-log.entity';
 
@@ -198,6 +200,48 @@ export class MerchantsService {
     merchant.customFeeRate = customFeeRate != null ? String(customFeeRate) : null;
     const updated = await this.merchantsRepo.save(merchant);
     await this.cache.del(this.activeMerchantCountCacheKey);
+    return updated;
+  }
+
+  /**
+   * Admin operation: update a merchant's per-transaction and daily USD limits (#500).
+   * Writes an audit log entry with the previous and new values.
+   */
+  async updateTransactionLimits(
+    merchantId: string,
+    dto: UpdateTransactionLimitsDto,
+    adminId: string,
+  ): Promise<Merchant> {
+    const merchant = await this.findOne(merchantId);
+    const previous = {
+      singleTransactionLimitUsd: merchant.singleTransactionLimitUsd,
+      dailyLimitUsd: merchant.dailyLimitUsd,
+    };
+
+    if (dto.singleTransactionLimitUsd !== undefined) {
+      merchant.singleTransactionLimitUsd = String(dto.singleTransactionLimitUsd);
+    }
+    if (dto.dailyLimitUsd !== undefined) {
+      merchant.dailyLimitUsd = String(dto.dailyLimitUsd);
+    }
+    if (new Big(merchant.singleTransactionLimitUsd).gt(merchant.dailyLimitUsd)) {
+      throw new BadRequestException('singleTransactionLimitUsd must not exceed dailyLimitUsd');
+    }
+
+    const updated = await this.merchantsRepo.save(merchant);
+
+    await this.auditLogRepo.save({
+      actor: adminId,
+      action: 'merchant_transaction_limits_updated',
+      resourceType: 'merchant',
+      resourceId: merchantId,
+      details: {
+        previous,
+        singleTransactionLimitUsd: updated.singleTransactionLimitUsd,
+        dailyLimitUsd: updated.dailyLimitUsd,
+      },
+    });
+
     return updated;
   }
 

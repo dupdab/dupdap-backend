@@ -15,6 +15,7 @@ import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { RetryConfigService } from '../retry/retry-config.service';
 
@@ -38,6 +39,7 @@ export class StellarMonitorService implements OnModuleInit {
     private emailService: EmailService,
     private config: ConfigService,
     private notificationPrefs: NotificationPrefsService,
+    private notifications: NotificationsService,
     private sorobanMonitor: SorobanMonitorService,
     @InjectQueue(QUEUE_NAMES.stellarMonitor) private monitorQueue: Queue,
     private retryConfig: RetryConfigService,
@@ -186,6 +188,7 @@ export class StellarMonitorService implements OnModuleInit {
       // Run side-effects outside the lock to keep the critical section tight.
       // We capture `locked` in closure — payment is already persisted above.
       await this.queuePaymentConfirmedEmail(locked, asset);
+      await this.queuePaymentConfirmedSms(locked);
 
       await this.webhooks.dispatch(locked.merchantId, 'payment.confirmed', {
         paymentId: locked.id,
@@ -237,6 +240,25 @@ export class StellarMonitorService implements OnModuleInit {
       },
       merchant.id,
     );
+  }
+
+  private async queuePaymentConfirmedSms(
+    payment: Payment & { merchant?: Merchant },
+  ): Promise<void> {
+    const merchant = payment.merchant;
+    if (!merchant?.smsPhoneNumber) return;
+
+    const smsEnabled = await this.notificationPrefs.isEnabled(
+      merchant.id,
+      NotificationChannel.SMS,
+      NotificationEventType.PAYMENT_CONFIRMED,
+    );
+    if (!smsEnabled) return;
+
+    await this.notifications.enqueueSms({
+      to: merchant.smsPhoneNumber,
+      body: `DupDub: payment ${payment.reference} confirmed for $${Number(payment.amountUsd).toFixed(2)} USD.`,
+    });
   }
 
   private buildExplorerUrl(txHash?: string): string {

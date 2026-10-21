@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, Optional, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -18,6 +18,25 @@ import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
+import { GeoipService } from '../geoip/geoip.service';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 422 response for a payment that breaches a merchant's amount limits (#500). */
+const limitExceeded = (message: string) =>
+  new UnprocessableEntityException({
+    statusCode: 422,
+    error: 'Unprocessable Entity',
+    message,
+    code: 'LIMIT_EXCEEDED',
+  });
+
+// Format: PAY-[timestamp-base36]-[8-char unique suffix from a UUID v4].
+// The suffix is URL-safe hex, and the `reference` column is UNIQUE at the DB level.
+function generatePaymentReference(timestamp: number = Date.now()): string {
+  const suffix = uuidv4().replace(/-/g, '').substring(0, 8).toUpperCase();
+  return `PAY-${timestamp.toString(36).toUpperCase()}-${suffix}`;
+}
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -47,6 +66,8 @@ export class PaymentsService {
     private dataSource: DataSource,
     @Optional()
     private txLimits?: TransactionLimitsService,
+    @Optional()
+    private geoip?: GeoipService,
   ) {}
 
   /**
@@ -100,18 +121,56 @@ export class PaymentsService {
     return rate;
   }
 
+  /**
+   * Rejects with 422 LIMIT_EXCEEDED if any amount exceeds the merchant's
+   * single-transaction limit, or if the batch total plus payments created in the
+   * last 24h exceeds the merchant's daily limit (#500).
+   */
+  private async assertWithinAmountLimits(merchantId: string, amountsUsd: Big[]): Promise<void> {
+    const merchant = await this.merchants.findOne(merchantId);
+
+    if (amountsUsd.some((amount) => amount.gt(merchant.singleTransactionLimitUsd))) {
+      throw limitExceeded(
+        `Payment amount exceeds the single transaction limit of ${merchant.singleTransactionLimitUsd} USD`,
+      );
+    }
+
+    const { total } = await this.paymentsRepo
+      .createQueryBuilder('payment')
+      .select('COALESCE(SUM(payment.amountUsd), 0)', 'total')
+      .where('payment.merchantId = :merchantId', { merchantId })
+      .andWhere('payment.createdAt >= :since', { since: new Date(Date.now() - DAY_MS) })
+      .andWhere('payment.status NOT IN (:...excluded)', {
+        excluded: [PaymentStatus.FAILED, PaymentStatus.EXPIRED],
+      })
+      .getRawOne<{ total: string }>();
+
+    const requestedUsd = amountsUsd.reduce((sum, amount) => sum.plus(amount), new Big(0));
+    if (new Big(total).plus(requestedUsd).gt(merchant.dailyLimitUsd)) {
+      throw limitExceeded(
+        `Payment would exceed the daily limit of ${merchant.dailyLimitUsd} USD`,
+      );
+    }
+  }
+
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
     // Enforce per-merchant rolling 24h transaction limits (#553).
     await this.txLimits?.checkAndIncrement(merchantId);
 
+    const amountUsd = new Big(dto.amountUsd);
+    await this.assertWithinAmountLimits(merchantId, [amountUsd]);
+
     const xlmRate = await this.resolveXlmRate();
-    const amountXlm = new Big(dto.amountUsd).div(xlmRate);
+    const amountXlm = amountUsd.div(xlmRate);
 
     const memo = this.stellar.generateMemo();
     const depositAddress = this.stellar.getDepositAddress();
 
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + (dto.expiryMinutes ?? 30));
+
+    const countryCode = this.geoip?.lookupCountry(dto.customerIp) ?? null;
+    const geoFlagged = this.geoip?.isBlockedCountry(countryCode) ?? false;
 
     // Bake expiry into the QR payload so the frontend can render a visual
     // countdown/expiry indicator without an extra clock source (#545).
@@ -120,12 +179,15 @@ export class PaymentsService {
 
     const payment = this.paymentsRepo.create({
       id: uuidv4(),
-      reference: `PAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      reference: generatePaymentReference(),
       merchantId,
       amountUsd: String(dto.amountUsd),
       amountXlm: amountXlm.toFixed(7),
       description: dto.description,
       customerEmail: dto.customerEmail,
+      customerIp: dto.customerIp,
+      countryCode,
+      geoFlagged,
       metadata: dto.metadata,
       stellarDepositAddress: depositAddress,
       stellarMemo: memo,
@@ -150,6 +212,9 @@ export class PaymentsService {
     saved.expiryLedger = contractPayment.expiryLedger;
     const final = await this.paymentsRepo.save(saved);
     await this.recordEvent(final.id, PaymentEventType.CREATED, null, PaymentStatus.PENDING, merchantId);
+    if (geoFlagged) {
+      this.logger.warn(`Payment ${final.id} flagged: customer country ${countryCode} is in BLOCKED_COUNTRIES`);
+    }
     return final;
   }
 
@@ -246,6 +311,11 @@ export class PaymentsService {
       }
     }
 
+    await this.assertWithinAmountLimits(
+      merchantId,
+      items.map((item) => new Big(item.amountUsd)),
+    );
+
     // ── Build all payment records in memory ───────────────────────────────────
     const xlmRate = await this.resolveXlmRate();
     const depositAddress = this.stellar.getDepositAddress();
@@ -264,7 +334,7 @@ export class PaymentsService {
 
       const record = this.paymentsRepo.create({
         id: uuidv4(),
-        reference: `PAY-${now}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        reference: generatePaymentReference(now),
         merchantId,
         amountUsd: String(item.amountUsd),
         amountXlm: amountXlm.toFixed(7),
@@ -332,6 +402,10 @@ export class PaymentsService {
     const payment = await this.findOne(merchantId, paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
 
+    if (payment.status === PaymentStatus.HELD) {
+      throw new BadRequestException('Payment is on hold pending review and cannot be refunded');
+    }
+
     if (
       payment.status !== PaymentStatus.CONFIRMED &&
       payment.status !== PaymentStatus.PARTIALLY_REFUNDED
@@ -379,6 +453,65 @@ export class PaymentsService {
     this.analytics.clearCacheForMerchant(payment.merchantId);
 
     return saved2;
+  }
+
+  /**
+   * Admin: place escrowed funds on HOLD for fraud review. HELD is excluded
+   * from both refunds and settlement (both only pick up CONFIRMED /
+   * PARTIALLY_REFUNDED payments), so it pauses both paths.
+   */
+  async hold(paymentId: string, reason: string, actorId?: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    if (
+      payment.status !== PaymentStatus.CONFIRMED &&
+      payment.status !== PaymentStatus.PARTIALLY_REFUNDED
+    ) {
+      throw new BadRequestException('Only confirmed payments can be placed on hold');
+    }
+
+    const previousStatus = payment.status;
+    payment.status = PaymentStatus.HELD;
+    const saved = await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.HELD, previousStatus, PaymentStatus.HELD, actorId, { reason });
+
+    await this.webhooks.dispatch(payment.merchantId, 'payment.held', {
+      paymentId: payment.id,
+      reference: payment.reference,
+      reason,
+    });
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    return saved;
+  }
+
+  /**
+   * Admin: lift a HOLD and restore the status the payment had before it was
+   * held, so it becomes eligible for refund or settlement again.
+   */
+  async release(paymentId: string, actorId?: string): Promise<Payment> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    if (payment.status !== PaymentStatus.HELD) {
+      throw new BadRequestException('Only held payments can be released');
+    }
+
+    const holdEvent = await this.eventsRepo.findOne({
+      where: { paymentId, eventType: PaymentEventType.HELD },
+      order: { timestamp: 'DESC' },
+    });
+    const restoredStatus = holdEvent?.previousStatus ?? PaymentStatus.CONFIRMED;
+
+    payment.status = restoredStatus;
+    const saved = await this.paymentsRepo.save(payment);
+    await this.recordEvent(payment.id, PaymentEventType.RELEASED, PaymentStatus.HELD, restoredStatus, actorId);
+
+    this.analytics.clearCacheForMerchant(payment.merchantId);
+
+    return saved;
   }
 
   /**

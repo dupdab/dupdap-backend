@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 
 @Entity('in_app_notifications')
-@Index(['merchantId', 'read'])
+@Index(['merchantId', 'readAt'])
 @Index(['merchantId', 'createdAt'])
 export class InAppNotification {
   @PrimaryGeneratedColumn('uuid')
@@ -23,8 +23,8 @@ export class InAppNotification {
   @Column({ type: 'text' })
   message: string;
 
-  @Column({ default: false })
-  read: boolean;
+  @Column({ type: 'timestamptz', nullable: true })
+  readAt: Date | null;
 
   @CreateDateColumn()
   createdAt: Date;
