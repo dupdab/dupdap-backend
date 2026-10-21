@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { CacheService } from '../cache/cache.service';
-import { AdminAlertService } from '../admin/admin-alert.service';
+import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { StellarTxQueueService } from './stellar-tx-queue.service';
 
@@ -11,18 +11,8 @@ export interface XlmUsdRate {
   isFallback: boolean;
 }
 
-export class SorobanRpcException extends Error {
-  constructor(
-    message: string,
-    public readonly sorobanCode?: string,
-    public readonly statusCode: number = HttpStatus.BAD_GATEWAY,
-    public readonly rpcMethod?: string,
-    public readonly rpcParams?: unknown,
-  ) {
-    super(message);
-    this.name = 'SorobanRpcException';
-  }
-}
+export { SorobanRpcException } from './soroban-rpc.exception';
+import { SorobanRpcException } from './soroban-rpc.exception';
 
 @Injectable()
 export class StellarService implements OnModuleInit {
@@ -48,9 +38,7 @@ export class StellarService implements OnModuleInit {
     const network = this.config.get('STELLAR_NETWORK', 'TESTNET');
     const horizonUrl = this.config.get(
       'STELLAR_HORIZON_URL',
-      network === 'PUBLIC'
-        ? 'https://horizon.stellar.org'
-        : 'https://horizon-testnet.stellar.org',
+      network === 'PUBLIC' ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org',
     );
 
     this.server = new StellarSdk.Horizon.Server(horizonUrl);
@@ -58,9 +46,7 @@ export class StellarService implements OnModuleInit {
       this.config.get('SOROBAN_RPC_URL', 'https://soroban-testnet.stellar.org'),
     );
     this.networkPassphrase =
-      network === 'PUBLIC'
-        ? StellarSdk.Networks.PUBLIC
-        : StellarSdk.Networks.TESTNET;
+      network === 'PUBLIC' ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET;
 
     const secret = this.config.get('STELLAR_ACCOUNT_SECRET');
     if (secret) {
@@ -96,11 +82,9 @@ export class StellarService implements OnModuleInit {
           const bestAsk = orderbook.asks[0];
           if (bestAsk) {
             const rate = parseFloat(bestAsk.price);
-            await this.cacheService.set(
-              this.lastKnownGoodRateKey,
-              rate,
-              { ttlSeconds: 24 * 60 * 60 },
-            );
+            await this.cacheService.set(this.lastKnownGoodRateKey, rate, {
+              ttlSeconds: 24 * 60 * 60,
+            });
             return { rate, isFallback: false };
           }
 
@@ -120,9 +104,7 @@ export class StellarService implements OnModuleInit {
   private async resolveFallbackRate(reason: string): Promise<XlmUsdRate> {
     this.logger.warn(`Failed to fetch XLM/USD rate (${reason}), using fallback`);
 
-    const lastKnownGood = await this.cacheService.get<number>(
-      this.lastKnownGoodRateKey,
-    );
+    const lastKnownGood = await this.cacheService.get<number>(this.lastKnownGoodRateKey);
 
     if (typeof lastKnownGood === 'number' && lastKnownGood > 0) {
       await this.adminAlertService.raise({
@@ -150,11 +132,7 @@ export class StellarService implements OnModuleInit {
     accountId: string,
     cursor?: string,
   ): Promise<StellarSdk.Horizon.ServerApi.TransactionRecord[]> {
-    const builder = this.server
-      .transactions()
-      .forAccount(accountId)
-      .order('asc')
-      .limit(200);
+    const builder = this.server.transactions().forAccount(accountId).order('asc').limit(200);
 
     if (cursor) builder.cursor(cursor);
 
@@ -185,9 +163,7 @@ export class StellarService implements OnModuleInit {
       const ops = await tx.operations();
       for (const op of ops.records as any[]) {
         if (op.type === 'payment') {
-          const isUsdc =
-            op.asset_code === 'USDC' &&
-            op.asset_issuer === this.usdcAsset.getIssuer();
+          const isUsdc = op.asset_code === 'USDC' && op.asset_issuer === this.usdcAsset.getIssuer();
           const isXlm = op.asset_type === 'native';
 
           if (isUsdc || isXlm) {
@@ -221,9 +197,7 @@ export class StellarService implements OnModuleInit {
    * Returns the ScVal enum variant expected by the Soroban contract.
    */
   buildAssetTypeScVal(assetType: 'XLM' | 'USDC'): StellarSdk.xdr.ScVal {
-    return StellarSdk.xdr.ScVal.scvVec([
-      StellarSdk.xdr.ScVal.scvSymbol(assetType),
-    ]);
+    return StellarSdk.xdr.ScVal.scvVec([StellarSdk.xdr.ScVal.scvSymbol(assetType)]);
   }
 
   getServer(): StellarSdk.Horizon.Server {
@@ -231,10 +205,7 @@ export class StellarService implements OnModuleInit {
   }
 
   async getBalance(stellarAccountId: string): Promise<any[]> {
-    const account = await this.server
-      .accounts()
-      .accountId(stellarAccountId)
-      .call();
+    const account = await this.server.accounts().accountId(stellarAccountId).call();
     return account.balances as any[];
   }
 
@@ -265,12 +236,7 @@ export class StellarService implements OnModuleInit {
         fee: StellarSdk.BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
-        .addOperation(
-          contract.call(
-            fn,
-            ...args.map((arg) => StellarSdk.nativeToScVal(arg)),
-          ),
-        )
+        .addOperation(contract.call(fn, ...args.map((arg) => StellarSdk.nativeToScVal(arg))))
         .setTimeout(30)
         .build();
 
@@ -285,9 +251,7 @@ export class StellarService implements OnModuleInit {
         );
       }
 
-      const preparedTx = StellarSdk.rpc
-        .assembleTransaction(tx, simulated)
-        .build();
+      const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simulated).build();
       preparedTx.sign(this.keypair);
 
       const submitted = await this.sorobanRpcServer.sendTransaction(preparedTx);

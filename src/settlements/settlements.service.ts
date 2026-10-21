@@ -1,10 +1,17 @@
-import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { QUEUE_NAMES, DEFAULT_QUEUE_JOB } from '../queues/queue.constants';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
+import { EntityManager, Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import Big from 'big.js';
@@ -18,7 +25,10 @@ import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
 import { EmailService } from '../email/email.service';
 import { MerchantsService } from '../merchants/merchants.service';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
-import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
+import {
+  NotificationChannel,
+  NotificationEventType,
+} from '../notifications/entities/notification-preference.entity';
 import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
@@ -115,7 +125,9 @@ export class SettlementsService {
     return DEFAULT_SETTLEMENT_CURRENCY;
   }
 
-  async initiateSettlement(payment: Payment): Promise<void> {
+  async initiateSettlement(payment: Payment, manager?: EntityManager): Promise<void> {
+    const settlementsRepo = manager?.getRepository(Settlement) ?? this.settlementsRepo;
+    const paymentsRepo = manager?.getRepository(Payment) ?? this.paymentsRepo;
     // Respect merchant settlement preference: DAILY/WEEKLY merchants are
     // batched by the scheduled cron jobs below; only INSTANT settles here.
     try {
@@ -144,22 +156,24 @@ export class SettlementsService {
 
     const fiatCurrency = await this.resolveSettlementCurrency(payment.merchantId);
 
-    const settlement = this.settlementsRepo.create({
+    const settlement = settlementsRepo.create({
       merchantId: payment.merchantId,
       totalAmountUsd: amountUsd.toFixed(6),
       feeAmountUsd: feeUsd.toFixed(6),
       netAmountUsd: netUsd.toFixed(6),
       fiatCurrency,
-      status: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      status: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD)
+        ? SettlementStatus.PENDING_APPROVAL
+        : SettlementStatus.PROCESSING,
       requiresApproval: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD),
     });
 
-    const saved = await this.settlementsRepo.save(settlement);
+    const saved = await settlementsRepo.save(settlement);
 
     payment.status = PaymentStatus.SETTLING;
     payment.feeUsd = feeUsd.toFixed(6);
     payment.settlementId = saved.id;
-    await this.paymentsRepo.save(payment);
+    await paymentsRepo.save(payment);
 
     await this.webhooks.dispatch(payment.merchantId, 'payment.settling', {
       paymentId: payment.id,
@@ -188,11 +202,15 @@ export class SettlementsService {
 
   private async enqueueSettlement(settlementId: string): Promise<void> {
     const settlementRetry = this.retryConfig.settlement;
-    await this.settlementQueue.add(DEFAULT_QUEUE_JOB, { settlementId }, {
-      attempts: settlementRetry.maxAttempts + 1,
-      backoff: { type: 'fixed', delay: settlementRetry.delaysMs[0] ?? 60_000 },
-      removeOnFail: false,
-    });
+    await this.settlementQueue.add(
+      DEFAULT_QUEUE_JOB,
+      { settlementId },
+      {
+        attempts: settlementRetry.maxAttempts + 1,
+        backoff: { type: 'fixed', delay: settlementRetry.delaysMs[0] ?? 60_000 },
+        removeOnFail: false,
+      },
+    );
   }
 
   @Cron('0 */15 * * * *')
@@ -313,7 +331,10 @@ export class SettlementsService {
       return;
     }
 
-    const totalAmountUsd = payments.reduce((sum, payment) => sum.plus(this.toBig(payment.amountUsd)), new Big(0));
+    const totalAmountUsd = payments.reduce(
+      (sum, payment) => sum.plus(this.toBig(payment.amountUsd)),
+      new Big(0),
+    );
     const feeAmountUsd = totalAmountUsd.times(BATCH_FEE_RATE);
     const netAmountUsd = totalAmountUsd.minus(feeAmountUsd);
 
@@ -325,7 +346,9 @@ export class SettlementsService {
       feeAmountUsd: feeAmountUsd.toFixed(6),
       netAmountUsd: netAmountUsd.toFixed(6),
       fiatCurrency,
-      status: netAmountUsd.gte(10000) ? SettlementStatus.PENDING_APPROVAL : SettlementStatus.PROCESSING,
+      status: netAmountUsd.gte(10000)
+        ? SettlementStatus.PENDING_APPROVAL
+        : SettlementStatus.PROCESSING,
       requiresApproval: netAmountUsd.gte(10000),
     });
 
@@ -403,6 +426,7 @@ export class SettlementsService {
       settlement.status = SettlementStatus.COMPLETED;
       settlement.completedAt = new Date();
       await this.settlementsRepo.save(settlement);
+      await this.paymentsRepo.update({ settlementId: settlement.id, status: PaymentStatus.SETTLING }, { status: PaymentStatus.SETTLED });
       this.invalidateAnalyticsForMerchant(settlement.merchantId);
       await this.webhooks.dispatch(settlement.merchantId, 'settlement.completed', {
         settlementId: settlement.id,
@@ -431,7 +455,9 @@ export class SettlementsService {
     }
 
     if (settlement.status !== SettlementStatus.PENDING_APPROVAL) {
-      throw new Error(`Settlement ${settlementId} is not awaiting approval`);
+      throw new BadRequestException(
+        'This settlement is not awaiting approval. Refresh its status before taking action.',
+      );
     }
 
     settlement.status = SettlementStatus.PROCESSING;
@@ -443,7 +469,11 @@ export class SettlementsService {
     return saved;
   }
 
-  async rejectSettlement(settlementId: string, adminId: string, reason: string): Promise<Settlement> {
+  async rejectSettlement(
+    settlementId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<Settlement> {
     const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
     if (!settlement) {
       throw new NotFoundException(`Settlement ${settlementId} not found`);

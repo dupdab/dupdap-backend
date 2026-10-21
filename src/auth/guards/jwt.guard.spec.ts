@@ -112,6 +112,7 @@ describe('JwtAuthGuard', () => {
       });
       await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).rejects.toThrow(ForbiddenException);
       expect(rateLimitService.checkApiKeyRateLimit).not.toHaveBeenCalled();
+
     });
 
     it('returns false and writes a 429 body when the rate limit is exceeded', async () => {
@@ -134,7 +135,13 @@ describe('JwtAuthGuard', () => {
 
       expect(allowed).toBe(false);
       expect(res.status).toHaveBeenCalledWith(429);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 429, retryAfter: 30 }));
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 429,
+          errorCode: 'RATE_LIMIT_EXCEEDED',
+          retryAfter: 30,
+        }),
+      );
       expect(headers['Retry-After']).toBe('30');
     });
 
@@ -154,7 +161,9 @@ describe('JwtAuthGuard', () => {
       });
       reflector.getAllAndOverride.mockReturnValueOnce(['payments:write']);
 
-      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).rejects.toThrow(ForbiddenException);
+      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('allows when all required scopes are present', async () => {
@@ -173,7 +182,9 @@ describe('JwtAuthGuard', () => {
       });
       reflector.getAllAndOverride.mockReturnValueOnce(['payments:read']);
 
-      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(true);
+      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(
+        true,
+      );
     });
   });
 
@@ -201,7 +212,9 @@ describe('JwtAuthGuard', () => {
       });
       reflector.getAllAndOverride.mockReturnValueOnce(undefined);
 
-      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(true);
+      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(
+        true,
+      );
     });
 
     it('allows a valid key whose expiry is in the future', async () => {
@@ -221,7 +234,9 @@ describe('JwtAuthGuard', () => {
       });
       reflector.getAllAndOverride.mockReturnValueOnce(undefined);
 
-      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(true);
+      await expect(guard.canActivate(makeCtx({ headers: { 'x-api-key': 'key' } }))).resolves.toBe(
+        true,
+      );
     });
 
     it('throws UnauthorizedException with API_KEY_EXPIRED when key is expired', async () => {

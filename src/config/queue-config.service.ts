@@ -40,6 +40,11 @@ export class QueueConfigService {
     return Number(this.configService.get<number>("EMAIL_RETRY_COUNT", 1));
   }
 
+  /** Global cap on outbound SMS per minute, to bound Twilio spend. */
+  get smsRateLimitPerMinute(): number {
+    return Number(this.configService.get<number>("SMS_RATE_LIMIT_PER_MINUTE", 30));
+  }
+
   get settlementRetryDelays(): number[] {
     return this.parseCsvToMillis(
       this.configService.get<string>(

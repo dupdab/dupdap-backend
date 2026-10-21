@@ -77,7 +77,7 @@ export class AdminService {
       order: { createdAt: 'DESC' },
       withDeleted: true,
     });
-    return { merchants: merchants.map(m => this.sanitize(m)), total };
+    return { merchants: merchants.map((m) => this.sanitize(m)), total };
   }
 
   async findOneMerchant(id: string) {
@@ -106,7 +106,7 @@ export class AdminService {
   async bulkUpdateMerchantStatus(ids: string[], status: MerchantStatus, actorId = 'system') {
     const results = {
       success: [] as string[],
-      failed: [] as { id: string; error: string }[],
+      failed: [] as { id: string; error: string; errorCode: string }[],
     };
 
     for (const id of ids) {
@@ -114,7 +114,11 @@ export class AdminService {
         await this.updateMerchantStatus(id, status, actorId);
         results.success.push(id);
       } catch (error) {
-        results.failed.push({ id, error: error.message });
+        results.failed.push({
+          id,
+          error: 'Could not update this merchant. Check the identifier and retry later.',
+          errorCode: 'MERCHANT_UPDATE_FAILED',
+        });
       }
     }
 
@@ -165,7 +169,10 @@ export class AdminService {
           this.settlementsRepo
             .createQueryBuilder('settlement')
             .select('COUNT(*)', 'count')
-            .addSelect('COALESCE(SUM(settlement.totalAmountUsd), 0)::numeric(18,6)::text', 'valueUsd')
+            .addSelect(
+              'COALESCE(SUM(settlement.totalAmountUsd), 0)::numeric(18,6)::text',
+              'valueUsd',
+            )
             .where('settlement.status IN (:...statuses)', { statuses: pendingStatuses })
             .getRawOne<{ count: string; valueUsd: string }>(),
           Promise.resolve(this.stellarMonitor.getLastRunStatus()),
@@ -283,12 +290,34 @@ export class AdminService {
     const comparator = sortFn[sortBy] ?? sortFn['volume'];
     rows.sort(comparator);
 
-    return rows.map(r => ({
+    return rows.map((r) => ({
       countryCode: r.countryCode,
       merchantCount: parseInt(r.merchantCount, 10),
       paymentCount: parseInt(r.paymentCount, 10),
       volumeUsd: parseFloat(r.volumeUsd),
     }));
+  }
+
+  /** Payment count and USD volume per customer country, for the admin heatmap (#501). */
+  async getPaymentsByCountry() {
+    const rows = await this.paymentsRepo
+      .createQueryBuilder('payment')
+      .select('payment.countryCode', 'countryCode')
+      .addSelect('COUNT(payment.id)', 'paymentCount')
+      .addSelect('COUNT(payment.id) FILTER (WHERE payment.geoFlagged)', 'flaggedCount')
+      .addSelect('COALESCE(SUM(payment.amountUsd), 0)', 'volumeUsd')
+      .where('payment.countryCode IS NOT NULL')
+      .groupBy('payment.countryCode')
+      .getRawMany();
+
+    return rows
+      .map(r => ({
+        countryCode: r.countryCode,
+        paymentCount: parseInt(r.paymentCount, 10),
+        flaggedCount: parseInt(r.flaggedCount, 10),
+        volumeUsd: parseFloat(r.volumeUsd),
+      }))
+      .sort((a, b) => b.paymentCount - a.paymentCount);
   }
 
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
@@ -442,13 +471,13 @@ export class AdminService {
 
   private toCsv(data: AuditLog[]): string {
     const columns = ['id', 'actor', 'action', 'resource', 'before', 'after', 'ip', 'createdAt'];
-    const headerLine = columns.map(c => this.csvField(c)).join(',');
+    const headerLine = columns.map((c) => this.csvField(c)).join(',');
 
     if (data.length === 0) return headerLine + '\n';
 
-    const rows = data.map(row =>
+    const rows = data.map((row) =>
       columns
-        .map(col => {
+        .map((col) => {
           const val = (row as unknown as Record<string, unknown>)[col];
           return this.csvField(val);
         })
@@ -466,8 +495,7 @@ export class AdminService {
   private csvField(val: unknown): string {
     if (val === null || val === undefined) return '""';
 
-    let str =
-      typeof val === 'object' ? JSON.stringify(val) : String(val);
+    let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
 
     if (/^[=+\-@\t\r]/.test(str)) {
       str = `'${str}`;
@@ -499,14 +527,18 @@ export class AdminService {
 
   private base32Decode(str: string): Buffer {
     const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = 0, val = 0;
+    let bits = 0,
+      val = 0;
     const out: number[] = [];
     for (const c of str.toUpperCase().replace(/=+$/, '')) {
       const idx = alpha.indexOf(c);
       if (idx < 0) continue;
       val = (val << 5) | idx;
       bits += 5;
-      if (bits >= 8) { out.push((val >>> (bits - 8)) & 0xff); bits -= 8; }
+      if (bits >= 8) {
+        out.push((val >>> (bits - 8)) & 0xff);
+        bits -= 8;
+      }
     }
     return Buffer.from(out);
   }
@@ -516,9 +548,17 @@ export class AdminService {
     const buf = Buffer.alloc(8);
     buf.writeUInt32BE(0, 0);
     buf.writeUInt32BE(counter >>> 0, 4);
-    const hmac = require('crypto').createHmac('sha1', this.base32Decode(secret)).update(buf).digest();
+    const hmac = require('crypto')
+      .createHmac('sha1', this.base32Decode(secret))
+      .update(buf)
+      .digest();
     const offset = hmac[19] & 0xf;
-    const code = ((hmac[offset] & 0x7f) << 24 | hmac[offset + 1] << 16 | hmac[offset + 2] << 8 | hmac[offset + 3]) % 1_000_000;
+    const code =
+      (((hmac[offset] & 0x7f) << 24) |
+        (hmac[offset + 1] << 16) |
+        (hmac[offset + 2] << 8) |
+        hmac[offset + 3]) %
+      1_000_000;
     return String(code).padStart(6, '0');
   }
 
@@ -531,8 +571,7 @@ export class AdminService {
     return [-1, 0, 1].some((w) => {
       const expectedBuf = Buffer.from(this.totpCode(secret, t + w * 30));
       return (
-        expectedBuf.length === tokenBuf.length &&
-        crypto.timingSafeEqual(expectedBuf, tokenBuf)
+        expectedBuf.length === tokenBuf.length && crypto.timingSafeEqual(expectedBuf, tokenBuf)
       );
     });
   }
@@ -621,12 +660,16 @@ export class AdminService {
       .leftJoinAndSelect('payment.merchant', 'merchant')
       .orderBy('payment.createdAt', 'DESC');
 
-    if (query.merchantId) qb.andWhere('payment.merchantId = :merchantId', { merchantId: query.merchantId });
+    if (query.merchantId)
+      qb.andWhere('payment.merchantId = :merchantId', { merchantId: query.merchantId });
     if (query.status) qb.andWhere('payment.status = :status', { status: query.status });
     if (query.network) qb.andWhere('payment.network = :network', { network: query.network });
-    if (query.dateFrom) qb.andWhere('payment.createdAt >= :dateFrom', { dateFrom: new Date(query.dateFrom) });
-    if (query.dateTo) qb.andWhere('payment.createdAt <= :dateTo', { dateTo: new Date(query.dateTo) });
-    if (query.minAmount) qb.andWhere('payment.amountUsd >= :minAmount', { minAmount: parseFloat(query.minAmount) });
+    if (query.dateFrom)
+      qb.andWhere('payment.createdAt >= :dateFrom', { dateFrom: new Date(query.dateFrom) });
+    if (query.dateTo)
+      qb.andWhere('payment.createdAt <= :dateTo', { dateTo: new Date(query.dateTo) });
+    if (query.minAmount)
+      qb.andWhere('payment.amountUsd >= :minAmount', { minAmount: parseFloat(query.minAmount) });
 
     const [items, total] = await qb
       .skip((query.page - 1) * query.limit)
@@ -641,10 +684,21 @@ export class AdminService {
         : null,
     }));
 
-    return { data, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+    return {
+      data,
+      total,
+      page: query.page,
+      limit: query.limit,
+      pages: Math.ceil(total / query.limit),
+    };
   }
 
-  async flushCache(): Promise<{ flushed: true; deletedKeys: number; patterns: string[]; flushedAt: string }> {
+  async flushCache(): Promise<{
+    flushed: true;
+    deletedKeys: number;
+    patterns: string[];
+    flushedAt: string;
+  }> {
     const patterns = ['analytics:*', 'exchange-rate:*', 'exchange_rate:*', 'rates:*'];
     const deletedByPattern = await Promise.all(patterns.map((p) => this.cache.delPattern(p)));
     await this.cache.del(this.platformFeeCacheKey);
@@ -686,7 +740,9 @@ export class AdminService {
   async getFailedAuthReport(from: Date, to: Date) {
     return this.auditLogRepo
       .createQueryBuilder('log')
-      .where('log.action IN (:...actions)', { actions: ['LOGIN_FAILED', 'AUTH_FAILED', 'TOTP_FAILED', 'INVALID_TOKEN'] })
+      .where('log.action IN (:...actions)', {
+        actions: ['LOGIN_FAILED', 'AUTH_FAILED', 'TOTP_FAILED', 'INVALID_TOKEN'],
+      })
       .andWhere('log.createdAt BETWEEN :from AND :to', { from, to })
       .orderBy('log.createdAt', 'DESC')
       .getMany();
@@ -695,7 +751,9 @@ export class AdminService {
   async getDataRetentionReport(from: Date, to: Date) {
     return this.auditLogRepo
       .createQueryBuilder('log')
-      .where('log.action IN (:...actions)', { actions: ['RECORD_DELETED', 'RECORD_HARD_DELETED', 'RECORD_RESTORED', 'DATA_PURGED'] })
+      .where('log.action IN (:...actions)', {
+        actions: ['RECORD_DELETED', 'RECORD_HARD_DELETED', 'RECORD_RESTORED', 'DATA_PURGED'],
+      })
       .andWhere('log.createdAt BETWEEN :from AND :to', { from, to })
       .orderBy('log.createdAt', 'DESC')
       .getMany();
@@ -717,7 +775,9 @@ export class AdminService {
         'merchant.email',
       ])
       .where('payment.createdAt BETWEEN :from AND :to', { from, to })
-      .andWhere('payment.status IN (:...statuses)', { statuses: ['completed', 'settled', 'failed'] })
+      .andWhere('payment.status IN (:...statuses)', {
+        statuses: ['completed', 'settled', 'failed'],
+      })
       .orderBy('payment.createdAt', 'DESC')
       .getMany();
   }
@@ -816,10 +876,7 @@ export class AdminService {
         'COALESCE(SUM(p.amountUsd) FILTER (WHERE p.status = :settled), 0)::numeric(18,6)::text',
         'totalVolume',
       )
-      .addSelect(
-        'COUNT(*) FILTER (WHERE p.status = :settled)',
-        'paymentCount',
-      )
+      .addSelect('COUNT(*) FILTER (WHERE p.status = :settled)', 'paymentCount')
       .addSelect(
         // Total of non-pending payments considered for success-rate denominator
         'COUNT(*) FILTER (WHERE p.status NOT IN (:...excludedStatuses))',
@@ -868,9 +925,7 @@ export class AdminService {
           ? this.normalizeDecimal6(parseFloat(totalVolume) / paymentCount)
           : '0.000000';
       const successRate =
-        eligibleCount > 0
-          ? parseFloat(((paymentCount / eligibleCount) * 100).toFixed(2))
-          : 0;
+        eligibleCount > 0 ? parseFloat(((paymentCount / eligibleCount) * 100).toFixed(2)) : 0;
 
       return {
         merchantId: row.merchantId,
@@ -885,9 +940,7 @@ export class AdminService {
 
     const lastRow = pageRows[pageRows.length - 1];
     const nextCursor =
-      hasMore && lastRow
-        ? this.encodeCursor(lastRow.merchantId, lastRow.totalVolume)
-        : null;
+      hasMore && lastRow ? this.encodeCursor(lastRow.merchantId, lastRow.totalVolume) : null;
 
     return {
       data,

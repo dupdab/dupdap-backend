@@ -1,4 +1,11 @@
-import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ForbiddenException,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SorobanService } from '../soroban/soroban.service';
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -38,13 +45,16 @@ export interface PaymentExpiredEvent {
   };
 }
 
-export class PaymentExpiredError extends Error {
+export class PaymentExpiredError extends BadRequestException {
   paymentId: string;
   expiryLedger: number;
   currentLedger: number;
 
   constructor(paymentId: string, expiryLedger: number, currentLedger: number) {
-    super(`Payment ${paymentId} expired at ledger ${expiryLedger}; current ledger is ${currentLedger}`);
+    super({
+      errorCode: 'PAYMENT_EXPIRED',
+      message: 'This payment has expired. Create a new payment to continue.',
+    });
     this.name = 'PaymentExpiredError';
     this.paymentId = paymentId;
     this.expiryLedger = expiryLedger;
@@ -60,7 +70,10 @@ export class PaymentExpiredError extends Error {
  */
 export class ContractPausedError extends ForbiddenException {
   constructor() {
-    super('ContractPaused: all state-changing operations are currently halted');
+    super({
+      errorCode: 'ESCROW_PAUSED',
+      message: 'Escrow payments are temporarily paused. Try again later.',
+    });
   }
 }
 
@@ -68,9 +81,12 @@ export class ContractPausedError extends ForbiddenException {
  * Thrown when a reentrant call is detected.
  * Maps to HTTP 409 if surfaced through a controller.
  */
-export class ReentrantCallError extends Error {
+export class ReentrantCallError extends ConflictException {
   constructor() {
-    super('ReentrantCall: escrow operation already in progress');
+    super({
+      errorCode: 'ESCROW_OPERATION_IN_PROGRESS',
+      message: 'An escrow operation is already in progress. Check its status before retrying.',
+    });
     this.name = 'ReentrantCallError';
   }
 }
@@ -349,7 +365,11 @@ export class PaymentEscrowService {
 
   private requirePayment(id: string): ContractPayment {
     const payment = this.payments.get(id);
-    if (!payment) throw new Error(`Payment ${id} not found in contract storage`);
+    if (!payment)
+      throw new NotFoundException({
+        errorCode: 'PAYMENT_NOT_FOUND',
+        message: 'Payment not found. Check the payment identifier and try again.',
+      });
     return payment;
   }
 }

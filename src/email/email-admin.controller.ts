@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NodemailerService, MailSendResult } from './nodemailer.service';
@@ -11,10 +13,12 @@ import { Roles } from '../auth/decorators/roles.decorator';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN)
+@ApiErrors()
 @Controller({ path: 'admin/email', version: '1' })
 export class EmailAdminController {
   constructor(private readonly mailer: NodemailerService) {}
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('test')
   @ApiOperation({ summary: 'Send a test email immediately (admin only)' })
   async testSend(

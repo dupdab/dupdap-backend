@@ -1,0 +1,134 @@
+{
+  "uid": "dupdap-merchant",
+  "title": "DupDap Merchant Overview",
+  "tags": ["dupdap", "merchant"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Payments by status",
+      "description": "Requires the payment_status_total counter (see infra/grafana/README.md, 'Metrics not yet exported').",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(payment_status_total[5m])) * 60",
+          "legendFormat": "{{ status }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Payment confirmation p50 / p95",
+      "description": "Requires the payment_confirmation_duration_seconds histogram (see infra/grafana/README.md, 'Metrics not yet exported').",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(payment_confirmation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(payment_confirmation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Webhook deliveries / min by outcome",
+      "description": "Requires the webhook_deliveries_total counter (see infra/grafana/README.md, 'Metrics not yet exported').",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(webhook_deliveries_total[5m])) * 60",
+          "legendFormat": "{{ status }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Webhook delivery success rate",
+      "description": "Share of webhook deliveries with status=\"delivered\" over the last 15m.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(webhook_deliveries_total{status=\"delivered\"}[15m])) / sum(rate(webhook_deliveries_total[15m]))",
+          "legendFormat": "success"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 5,
+      "title": "Settlement time p50 / p95 by type",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, type) (rate(settlement_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{ type }}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, type) (rate(settlement_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{ type }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "Payments settled vs failed settlements / min",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (type) (rate(payment_settled_total[5m])) * 60",
+          "legendFormat": "settled {{ type }}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (type) (rate(settlement_failed_total[5m])) * 60",
+          "legendFormat": "failed {{ type }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    }
+  ]
+}
