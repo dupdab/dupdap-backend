@@ -15,6 +15,7 @@ export enum NotificationChannel {
   EMAIL = 'email',
   PUSH = 'push',
   IN_APP = 'in_app',
+  SMS = 'sms',
 }
 
 export enum NotificationEventType {

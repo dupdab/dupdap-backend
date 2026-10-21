@@ -42,6 +42,28 @@ export class WebhooksService {
     }
   }
 
+  /**
+   * Sends a signed `webhook.test` event to every active webhook of the merchant,
+   * regardless of the events each webhook subscribes to, so merchants can check
+   * their endpoint and signature verification without triggering a real payment.
+   */
+  async sendTest(merchantId: string): Promise<{ enqueued: number }> {
+    const hooks = await this.webhooksRepo.find({ where: { merchantId, isActive: true } });
+
+    const body = JSON.stringify({
+      event: 'webhook.test',
+      data: { message: 'DupDub webhook test' },
+      timestamp: new Date().toISOString(),
+    });
+
+    for (const hook of hooks) {
+      await this.webhookDelivery.enqueueDelivery(hook, 'webhook.test', body);
+    }
+
+    this.logger.log(`Webhook test enqueued for merchant ${merchantId}: ${hooks.length} endpoints`);
+    return { enqueued: hooks.length };
+  }
+
   async create(merchantId: string, url: string, events: string[], secret?: string) {
     await this.assertPublicUrl(url);
 

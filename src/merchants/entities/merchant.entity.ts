@@ -74,6 +74,10 @@ export class Merchant {
   @Column({ nullable: true })
   country: string;
 
+  /** E.164 destination for SMS notifications; SMS is only sent when set. */
+  @Column({ name: 'sms_phone_number', type: 'varchar', nullable: true })
+  smsPhoneNumber: string | null;
+
   /**
    * Fiat currency this merchant's settlements are denominated in.
    * Derived from `country` when not explicitly set.
@@ -151,6 +155,32 @@ export class Merchant {
   @Column({ name: 'payment_retry_delay_ms', type: 'int', default: 300000 })
   paymentRetryDelayMs: number;
 
+  /**
+   * Per-merchant payment amount limits in USD (#500). Payment creation is
+   * rejected with 422 LIMIT_EXCEEDED when a single payment exceeds
+   * `singleTransactionLimitUsd`, or when the rolling 24h total exceeds `dailyLimitUsd`.
+   * Defaults: $10,000 per transaction, $100,000 per day.
+   */
+  @Column({
+    name: 'single_transaction_limit_usd',
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    default: 10000,
+    transformer: numericColumnTransformer,
+  })
+  singleTransactionLimitUsd: string;
+
+  @Column({
+    name: 'daily_limit_usd',
+    type: 'decimal',
+    precision: 18,
+    scale: 6,
+    default: 100000,
+    transformer: numericColumnTransformer,
+  })
+  dailyLimitUsd: string;
+
   @Column({ default: false })
   sandboxMode: boolean;
 
@@ -160,6 +190,11 @@ export class Merchant {
 
   @Column({ default: false })
   totpEnabled: boolean;
+
+  /** SHA-256 hashes of the one-time recovery codes issued at registration. Each code is removed once used. */
+  @Exclude()
+  @Column('simple-array', { name: 'recovery_code_hashes', nullable: true })
+  recoveryCodeHashes?: string[] | null;
 
   @Column({ nullable: true, type: 'text' })
   allowedIps: string | null;

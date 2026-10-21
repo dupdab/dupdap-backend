@@ -1,19 +1,33 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { randomUUID, createHash } from 'crypto';
+import { randomBytes, randomUUID, createHash } from 'crypto';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import type { AuthTokenResponseDto } from './dto/auth-token-response.dto';
 import { CacheService } from '../cache/cache.service';
+import { EmailService } from '../email/email.service';
+import { AuditService } from '../audit/audit.service';
+import { NotificationService } from '../notifications/notification.service';
 
 /** Failed password attempts before a temporary lockout is applied. */
 const LOGIN_MAX_FAILED_ATTEMPTS = 5;
 /** Lockout / failed-attempt counter window (15 minutes). */
 const LOGIN_LOCKOUT_TTL_SECONDS = 15 * 60;
+/** Password reset links are valid for 1 hour. */
+const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
+/** Number of one-time recovery codes issued at registration. */
+const RECOVERY_CODE_COUNT = 8;
 
 @Injectable()
 export class AuthService {
@@ -22,6 +36,9 @@ export class AuthService {
     private merchantsRepo: Repository<Merchant>,
     private jwtService: JwtService,
     private cacheService: CacheService,
+    private emailService: EmailService,
+    private auditService: AuditService,
+    private notificationService: NotificationService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthTokenResponseDto> {
@@ -29,6 +46,9 @@ export class AuthService {
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(dto.password, 12);
+    const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () =>
+      randomBytes(8).toString('hex'),
+    );
 
     const merchant = this.merchantsRepo.create({
       email: dto.email,
@@ -37,12 +57,65 @@ export class AuthService {
       businessType: dto.businessType,
       country: dto.country,
       status: MerchantStatus.ACTIVE,
+      recoveryCodeHashes: recoveryCodes.map((code) => this.hashToken(code)),
     });
 
     const saved = await this.merchantsRepo.save(merchant);
     const token = this.signToken(saved.id, saved.email, saved.role);
 
-    return { accessToken: token, merchant: saved };
+    const unreadNotificationCount = await this.notificationService.getUnreadCount(saved.id);
+
+    return { accessToken: token, merchant: saved, recoveryCodes, unreadNotificationCount };
+  }
+
+  /**
+   * Emails a single-use reset link. Always resolves the same way whether or not
+   * the email belongs to a merchant, so the endpoint cannot be used to enumerate accounts.
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<void> {
+    const merchant = await this.merchantsRepo.findOne({ where: { email: dto.email } });
+    if (!merchant) return;
+
+    const token = randomBytes(32).toString('hex');
+    await this.cacheService.set(this.resetTokenKey(this.hashToken(token)), merchant.id, {
+      ttlSeconds: PASSWORD_RESET_TTL_SECONDS,
+    });
+
+    await this.emailService.queue(
+      merchant.email,
+      'password-reset',
+      {
+        subject: 'Reset your DupDub password',
+        merchantName: merchant.businessName,
+        resetUrl: `https://app.dupdub.xyz/reset-password?token=${token}`,
+        expiresInMinutes: PASSWORD_RESET_TTL_SECONDS / 60,
+      },
+      merchant.id,
+    );
+  }
+
+  /**
+   * Sets a new password using either an emailed reset token or an unused recovery code.
+   * Both credentials are single-use.
+   */
+  async resetPassword(dto: ResetPasswordDto, ip?: string): Promise<void> {
+    const usedRecoveryCode = !dto.token;
+    const merchant = dto.token
+      ? await this.consumeResetToken(dto.token)
+      : await this.consumeRecoveryCode(dto.email, dto.recoveryCode);
+    if (!merchant) throw new BadRequestException('Invalid or expired recovery credentials');
+
+    merchant.passwordHash = await bcrypt.hash(dto.password, 12);
+    await this.merchantsRepo.save(merchant);
+    await this.clearFailedLogin(merchant.email.toLowerCase());
+
+    await this.auditService.log({
+      actor: merchant.id,
+      action: 'PASSWORD_RESET',
+      resource: `merchant:${merchant.id}`,
+      after: { method: usedRecoveryCode ? 'recovery_code' : 'email_token' },
+      ip,
+    });
   }
 
   async login(dto: LoginDto): Promise<AuthTokenResponseDto> {
@@ -68,7 +141,9 @@ export class AuthService {
     await this.clearFailedLogin(emailKey);
 
     const token = this.signToken(merchant.id, merchant.email, merchant.role);
-    return { accessToken: token, merchant };
+    const unreadNotificationCount = await this.notificationService.getUnreadCount(merchant.id);
+
+    return { accessToken: token, merchant, unreadNotificationCount };
   }
 
   async logout(jti: string, ttlSeconds: number): Promise<void> {
@@ -123,6 +198,35 @@ export class AuthService {
 
   private async clearFailedLogin(emailKey: string): Promise<void> {
     await this.cacheService.del(this.failedAttemptsKey(emailKey));
+  }
+
+  private resetTokenKey(tokenHash: string): string {
+    return `auth:reset:${tokenHash}`;
+  }
+
+  private hashToken(raw: string): string {
+    return createHash('sha256').update(raw).digest('hex');
+  }
+
+  private async consumeResetToken(token: string): Promise<Merchant | null> {
+    const key = this.resetTokenKey(this.hashToken(token));
+    const merchantId = await this.cacheService.get<string>(key);
+    if (!merchantId) return null;
+
+    await this.cacheService.del(key);
+    return this.merchantsRepo.findOne({ where: { id: merchantId } });
+  }
+
+  private async consumeRecoveryCode(email?: string, code?: string): Promise<Merchant | null> {
+    if (!email || !code) return null;
+
+    const merchant = await this.merchantsRepo.findOne({ where: { email } });
+    const codeHash = this.hashToken(code);
+    const hashes = merchant?.recoveryCodeHashes ?? [];
+    if (!merchant || !hashes.includes(codeHash)) return null;
+
+    merchant.recoveryCodeHashes = hashes.filter((hash) => hash !== codeHash);
+    return merchant;
   }
 
   private signToken(sub: string, email: string, role?: string): string {

@@ -123,6 +123,12 @@ export class AdminController {
     return this.adminService.getGeographicDistribution(sortBy);
   }
 
+  @Get('analytics/payments-by-country')
+  @ApiOperation({ summary: 'Get payment count and volume per customer country (heatmap data)' })
+  getPaymentsByCountry() {
+    return this.adminService.getPaymentsByCountry();
+  }
+
   @Get('analytics/live')
   @ApiOperation({ summary: 'Get real-time dashboard counters (max age: 60s)' })
   getLiveAnalytics() {

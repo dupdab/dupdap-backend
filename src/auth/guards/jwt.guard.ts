@@ -1,4 +1,9 @@
-import { ExecutionContext, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import {
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Reflector } from '@nestjs/core';
 import { AuthService } from '../auth.service';
@@ -33,6 +38,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
           error: 'Unauthorized',
           message: 'API key has expired. Please generate a new key.',
           code: 'API_KEY_EXPIRED',
+          errorCode: 'API_KEY_EXPIRED',
         });
       }
 
@@ -46,10 +52,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       };
 
       // Apply per-merchant sliding window rate limit
-      const result = await this.rateLimitService.checkApiKeyRateLimit(
-        merchant.id,
-        merchant.role,
-      );
+      const result = await this.rateLimitService.checkApiKeyRateLimit(merchant.id, merchant.role);
 
       res.setHeader('X-RateLimit-Limit', result.limit);
       res.setHeader('X-RateLimit-Remaining', result.remaining);
@@ -60,6 +63,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         res.status(429).json({
           statusCode: 429,
           error: 'Too Many Requests',
+          errorCode: 'RATE_LIMIT_EXCEEDED',
           message: `API key rate limit exceeded. Limit: ${result.limit} requests/hour.`,
           retryAfter: result.retryAfter,
         });
