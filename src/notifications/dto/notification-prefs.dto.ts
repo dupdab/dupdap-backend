@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsEnum,
   IsOptional,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { NotificationChannel, NotificationEventType } from '../entities/notification-preference.entity';
@@ -29,6 +30,11 @@ export class UpdateNotificationPrefsDto {
   @ValidateNested({ each: true })
   @Type(() => NotificationPrefItemDto)
   preferences: NotificationPrefItemDto[];
+
+  @ApiPropertyOptional({ description: 'SMS destination in E.164 format (e.g. +14155550123). Required before enabling sms.' })
+  @IsOptional()
+  @Matches(/^\+[1-9]\d{1,14}$/, { message: 'phoneNumber must be in E.164 format' })
+  phoneNumber?: string;
 }
 
 export class NotificationPrefResponseItemDto {
@@ -48,4 +54,7 @@ export class NotificationPrefResponseItemDto {
 export class NotificationPrefsResponseDto {
   @ApiProperty({ type: [NotificationPrefResponseItemDto] })
   preferences: NotificationPrefResponseItemDto[];
+
+  @ApiPropertyOptional({ nullable: true, description: 'SMS destination in E.164 format, or null when unset' })
+  phoneNumber: string | null;
 }

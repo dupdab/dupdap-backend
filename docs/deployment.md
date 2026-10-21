@@ -49,3 +49,10 @@
 - Steps: generate new secret in vault → deploy with dual-read (accept old + new) where supported → switch writers to new secret → revoke old secret → verify Sentry/auth/webhook error rates unchanged.
 - Never commit secrets; verify `git diff` contains no secret values before pushing the release.
 - Covered secrets: `ADMIN_ALERT_SLACK_WEBHOOK_URL`, `ZEPTOMAIL_API_KEY`, `STELLAR_ACCOUNT_SECRET`, `DB_PASSWORD`, `REDIS_PASSWORD`, API keys, webhook secrets, partner keys.
+
+## Backup and restore (disaster recovery)
+
+Backups are written to S3 by the scheduled backup job. Restore procedures, RTO/RPO targets, tested-restore timings, and the quarterly drill schedule are documented in `src/backup/RECOVERY_DRILL.md`. Follow that runbook for any disaster-recovery restore; this section only summarizes the deploy-time expectations.
+
+- [ ] Confirm the most recent S3 backup is within the RPO target before declaring a deploy complete.
+- [ ] After any restore, re-run the smoke tests above and verify `/health/ready` before resuming traffic.

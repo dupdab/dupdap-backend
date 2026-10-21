@@ -32,7 +32,7 @@ export class MerchantAnalyticsController {
     return this.merchantAnalyticsService.getTopMerchants(query.limit, query.period);
   }
 
-  @Get('funnel')
+  @Get('admin/funnel')
   getPaymentFunnel(
     @Query() query: PaymentFunnelQueryDto,
   ): Promise<PaymentFunnelResponse> {

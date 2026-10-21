@@ -6,20 +6,28 @@ import { NotificationsService } from './notifications.service';
 import { NotificationService } from './notification.service';
 import { NotificationsController } from './notifications.controller';
 import { EmailProcessor } from './email.processor';
+import { SmsProcessor } from './sms.processor';
 import { EmailDeliveryLog } from './entities/email-delivery-log.entity';
 import { NotificationPreference } from './entities/notification-preference.entity';
 import { InAppNotification } from './entities/in-app-notification.entity';
 import { QueueConfigService } from '../config/queue-config.service';
-import { EMAIL_DELIVERY_QUEUE } from '../queues/queue.constants';
+import { EMAIL_DELIVERY_QUEUE, SMS_DELIVERY_QUEUE } from '../queues/queue.constants';
 
 @Module({
   imports: [
     ConfigModule,
     TypeOrmModule.forFeature([EmailDeliveryLog, NotificationPreference, InAppNotification]),
     BullModule.registerQueue({ name: EMAIL_DELIVERY_QUEUE }),
+    BullModule.registerQueueAsync({
+      name: SMS_DELIVERY_QUEUE,
+      inject: [QueueConfigService],
+      useFactory: (queueConfig: QueueConfigService) => ({
+        limiter: { max: queueConfig.smsRateLimitPerMinute, duration: 60_000 },
+      }),
+    }),
   ],
   controllers: [NotificationsController],
-  providers: [NotificationsService, NotificationService, EmailProcessor, QueueConfigService],
+  providers: [NotificationsService, NotificationService, EmailProcessor, SmsProcessor, QueueConfigService],
   exports: [NotificationsService, NotificationService],
 })
 export class NotificationsModule {}

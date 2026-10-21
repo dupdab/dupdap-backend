@@ -44,7 +44,9 @@ export class HealthController {
   }
 
   @Get('ready')
-  @ApiOperation({ summary: 'Kubernetes readiness probe — DB, Redis, and Stellar must be reachable' })
+  @ApiOperation({
+    summary: 'Kubernetes readiness probe — DB, Redis, and Stellar must be reachable',
+  })
   async ready() {
     const [db, redis, stellar] = await Promise.allSettled([
       this.db.pingCheck('database'),
@@ -55,9 +57,7 @@ export class HealthController {
       ),
     ]);
     const failed =
-      db.status === 'rejected' ||
-      redis.status === 'rejected' ||
-      stellar.status === 'rejected';
+      db.status === 'rejected' || redis.status === 'rejected' || stellar.status === 'rejected';
     if (failed) {
       throw new HttpException(
         {
@@ -74,17 +74,14 @@ export class HealthController {
     }
     return { status: 'ready' };
   }
-    }
-    return { status: 'ready' };
-  }
 
   @Get('admin')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(MerchantRole.ADMIN)
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Admin health check - comprehensive system status',
-    description: 'Returns detailed health status of all system components for admin visibility'
+    description: 'Returns detailed health status of all system components for admin visibility',
   })
   @ApiResponse({
     status: 200,
@@ -101,41 +98,41 @@ export class HealthController {
               type: 'object',
               properties: {
                 status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
-                latency: { type: 'number', description: 'Response time in milliseconds' }
-              }
+                latency: { type: 'number', description: 'Response time in milliseconds' },
+              },
             },
             stellar: {
               type: 'object',
               properties: {
                 status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
-                latency: { type: 'number', description: 'Response time in milliseconds' }
-              }
+                latency: { type: 'number', description: 'Response time in milliseconds' },
+              },
             },
             partnerApi: {
               type: 'object',
               properties: {
                 status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
-                latency: { type: 'number', description: 'Response time in milliseconds' }
-              }
+                latency: { type: 'number', description: 'Response time in milliseconds' },
+              },
             },
             redis: {
               type: 'object',
               properties: {
                 status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
-                latency: { type: 'number', description: 'Response time in milliseconds' }
-              }
+                latency: { type: 'number', description: 'Response time in milliseconds' },
+              },
             },
             queue: {
               type: 'object',
               properties: {
                 status: { type: 'string', enum: ['ok', 'degraded', 'down'] },
-                latency: { type: 'number', description: 'Response time in milliseconds' }
-              }
-            }
-          }
-        }
-      }
-    }
+                latency: { type: 'number', description: 'Response time in milliseconds' },
+              },
+            },
+          },
+        },
+      },
+    },
   })
   @ApiResponse({
     status: 503,
@@ -144,10 +141,10 @@ export class HealthController {
   async adminHealth() {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    
+
     // Define critical components that cause 503 if down
     const criticalComponents = ['database', 'stellar'];
-    
+
     // Run all health checks in parallel for performance
     const healthChecks = await Promise.allSettled([
       this.checkDatabase(),
@@ -166,10 +163,8 @@ export class HealthController {
     };
 
     // Determine overall system status
-    const componentStatuses = Object.values(components).map(c => c.status);
-    const hasCriticalDown = criticalComponents.some(
-      comp => components[comp].status === 'down'
-    );
+    const componentStatuses = Object.values(components).map((c) => c.status);
+    const hasCriticalDown = criticalComponents.some((comp) => components[comp].status === 'down');
     const hasAnyDown = componentStatuses.includes('down');
     const hasAnyDegraded = componentStatuses.includes('degraded');
 
@@ -305,9 +300,10 @@ export class HealthController {
     }
   }
 
-  private getResultFromSettled(
-    result: PromiseSettledResult<{ status: string; latency: number }>
-  ): { status: string; latency: number } {
+  private getResultFromSettled(result: PromiseSettledResult<{ status: string; latency: number }>): {
+    status: string;
+    latency: number;
+  } {
     if (result.status === 'fulfilled') {
       return result.value;
     }

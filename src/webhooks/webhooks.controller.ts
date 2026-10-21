@@ -63,6 +63,17 @@ export class WebhooksController {
     return this.webhooksService.replay(req.user.merchantId, dto);
   }
 
+  @Post('test')
+  @Scopes('webhooks:manage')
+  @ApiOperation({ summary: 'Send a signed test event to all active webhooks' })
+  @ApiOkResponse({ description: 'Test deliveries enqueued' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  @ApiForbiddenResponse({ description: 'API key missing webhooks:manage scope' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  test(@Request() req: { user: { merchantId: string } }) {
+    return this.webhooksService.sendTest(req.user.merchantId);
+  }
+
   @Delete(':id')
   @Scopes('webhooks:manage')
   @ApiOperation({ summary: 'Delete webhook' })
