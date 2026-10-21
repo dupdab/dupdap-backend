@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse, ApiBearerAuth as AdminBearer } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import { Controller, Get, Post, Param, Query, UseGuards, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -37,6 +39,8 @@ interface PaginatedHistoryDto {
 
 @ApiTags('admin.crons')
 @UseGuards(AdminGuard)
+@ApiErrors()
+@AdminBearer('bearer')
 @Controller({ path: 'admin/crons', version: '1' })
 export class CronAdminController {
   constructor(
@@ -45,6 +49,7 @@ export class CronAdminController {
     private jobRegistry: CronJobRegistry,
   ) {}
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get()
   @ApiOperation({ summary: 'List cron jobs status' })
   async listJobs(): Promise<JobStatusDto[]> {
@@ -72,6 +77,7 @@ export class CronAdminController {
     return statuses;
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get(':jobName/history')
   @ApiOperation({ summary: 'Job history' })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -109,6 +115,7 @@ export class CronAdminController {
     };
   }
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':jobName/trigger')
   @ApiOperation({ summary: 'Manual trigger' })
   async triggerJob(@Param('jobName') jobName: string) {

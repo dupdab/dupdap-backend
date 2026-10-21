@@ -1,3 +1,6 @@
+import { MerchantMember } from '../merchants/entities/merchant-member.entity';
+import { TeamService } from '../merchants/team.service';
+import { TeamController } from '../merchants/team.controller';
 import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -15,7 +18,7 @@ import { CacheModule } from '../cache/cache.module';
 @Global()
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Merchant]),
+    TypeOrmModule.forFeature([Merchant, MerchantMember]),
     CacheModule,
     PassportModule,
     JwtModule.registerAsync({
@@ -27,8 +30,8 @@ import { CacheModule } from '../cache/cache.module';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AuthController],
-  providers: [RateLimitService, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
-  exports: [RateLimitService, AuthService, JwtAuthGuard, RolesGuard],
+  controllers: [AuthController, TeamController],
+  providers: [TeamService, RateLimitService, AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
+  exports: [TeamService, RateLimitService, AuthService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

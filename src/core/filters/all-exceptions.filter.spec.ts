@@ -32,7 +32,7 @@ describe('AllExceptionsFilter (SorobanRpcException)', () => {
     const host = {
       switchToHttp: () => ({
         getRequest: () => ({ url: '/test', method: 'POST' }),
-        getResponse: () => ({ status }),
+        getResponse: () => ({ status, setHeader: jest.fn() }),
       }),
     } as never;
 

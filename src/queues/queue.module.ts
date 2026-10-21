@@ -15,6 +15,7 @@ import { CacheModule } from '../cache/cache.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Settlement } from '../settlements/entities/settlement.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { QueueMetric } from './queue-metric.entity';
 
 @Module({
   imports: [
@@ -28,7 +29,7 @@ import { Payment } from '../payments/entities/payment.entity';
     forwardRef(() => SettlementsModule),
     AdminAlertModule,
     CacheModule,
-    TypeOrmModule.forFeature([Settlement, Payment]),
+    TypeOrmModule.forFeature([Settlement, Payment, QueueMetric]),
   ],
   controllers: [QueueAdminController],
   providers: [

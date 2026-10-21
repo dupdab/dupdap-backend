@@ -1,4 +1,6 @@
 import { Injectable, NestMiddleware, HttpStatus, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { getCorrelationId } from '../common/correlation-id.context';
 import type { NextFunction, Request, Response } from 'express';
 
 const TLS_MINIMUM = /^TLSv1\.(2|3)$/i;
@@ -6,6 +8,12 @@ const TLS_MINIMUM = /^TLSv1\.(2|3)$/i;
 @Injectable()
 export class TlsEnforcementMiddleware implements NestMiddleware {
   private readonly logger = new Logger(TlsEnforcementMiddleware.name);
+
+  private sendError(res: Response, statusCode: number, error: string, message: string): void {
+    const requestId = getCorrelationId() ?? randomUUID();
+    res.setHeader('X-Request-ID', requestId);
+    res.status(statusCode).json({ statusCode, error, message, requestId });
+  }
 
   use(req: Request, res: Response, next: NextFunction): void {
     const forwardedProto =
@@ -16,10 +24,7 @@ export class TlsEnforcementMiddleware implements NestMiddleware {
       this.logger.warn(
         `Rejected non-secure request: ${req.method} ${req.originalUrl} from ${req.ip}`,
       );
-      res.status(HttpStatus.UPGRADE_REQUIRED).json({
-        statusCode: HttpStatus.UPGRADE_REQUIRED,
-        message: 'HTTPS is required for all requests.',
-      });
+      this.sendError(res, HttpStatus.UPGRADE_REQUIRED, 'Upgrade Required', 'HTTPS is required for all requests.');
       return;
     }
 
@@ -29,10 +34,7 @@ export class TlsEnforcementMiddleware implements NestMiddleware {
       this.logger.warn(
         `Rejected weak TLS protocol: ${tlsProtocol} for ${req.method} ${req.originalUrl}`,
       );
-      res.status(HttpStatus.FORBIDDEN).json({
-        statusCode: HttpStatus.FORBIDDEN,
-        message: 'TLS 1.2 or higher is required.',
-      });
+      this.sendError(res, HttpStatus.FORBIDDEN, 'Forbidden', 'TLS 1.2 or higher is required.');
       return;
     }
 

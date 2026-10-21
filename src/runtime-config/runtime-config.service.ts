@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { RuntimeConfig } from './runtime-config.entity';
+import { RuntimeConfig } from './entities/runtime-config.entity';
 import { CacheService } from '../cache/cache.service';
 
 @Injectable()

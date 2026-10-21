@@ -1,18 +1,21 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { MerchantRole } from '../merchants/enums/merchant-role.enum';
+import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { QueueMetricsService } from './queue-metrics.service';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { QUEUE_NAMES } from './queue.constants';
 
 @ApiTags('admin/queues')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN)
+@ApiErrors()
 @Controller('admin/queues')
 export class QueueAdminController {
   constructor(
@@ -24,11 +27,15 @@ export class QueueAdminController {
     @InjectQueue(QUEUE_NAMES.sorobanEventDlq) private readonly sorobanEventDlqQueue: Queue,
   ) {}
 
+  @AdminOperation({ summary: 'Get metrics' })
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('metrics')
   async getMetrics() {
     return this.queueMetricsService.getMetrics();
   }
 
+  @AdminOperation({ summary: 'Get :name/failed' })
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get(':name/failed')
   async getFailedJobs(@Param('name') name: string) {
     const queue = this.getQueue(name);
@@ -45,6 +52,8 @@ export class QueueAdminController {
     };
   }
 
+  @AdminOperation({ summary: 'Post :name/failed/:id/retry' })
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':name/failed/:id/retry')
   async retryFailedJob(@Param('name') name: string, @Param('id') id: string) {
     const queue = this.getQueue(name);

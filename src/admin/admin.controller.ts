@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import {
   Controller,
   Get,
@@ -32,6 +34,7 @@ import { Auditable } from '../audit/decorators/auditable.decorator';
 @ApiBearerAuth()
 @UseGuards(IpAllowlistGuard, JwtAuthGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN)
+@ApiErrors()
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -39,18 +42,21 @@ export class AdminController {
     private readonly ratesService: RatesService,
   ) {}
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('merchants')
   @ApiOperation({ summary: 'List all merchants' })
   findAllMerchants(@Query('page') page = 1, @Query('limit') limit = 20) {
     return this.adminService.findAllMerchants(+page, +limit);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('merchants/:id')
   @ApiOperation({ summary: 'Get merchant details' })
   findOneMerchant(@Param('id') id: string) {
     return this.adminService.findOneMerchant(id);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch('merchants/:id/status')
   @Auditable({ action: 'MERCHANT_STATUS_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Update merchant status' })
@@ -62,6 +68,7 @@ export class AdminController {
     return this.adminService.updateMerchantStatus(id, status, req.user?.id);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch('merchants/bulk/status')
   @Auditable({ action: 'MERCHANT_STATUS_BULK_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Bulk update merchant status' })
@@ -73,18 +80,21 @@ export class AdminController {
     return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('stats')
   @ApiOperation({ summary: 'Get global stats' })
   getStats() {
     return this.adminService.getGlobalStats();
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('fees')
   @ApiOperation({ summary: 'List all global fee configurations' })
   getFees() {
     return this.adminService.getGlobalFees();
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch('fees')
   @Auditable({ action: 'FEE_UPDATED', resource: 'fee_config' })
   @ApiOperation({ summary: 'Update a global fee rate' })
@@ -102,6 +112,7 @@ export class AdminController {
 
   // ── Cache Management ──────────────────────────────────────────────────────
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('cache/rates/refresh')
   @ApiOperation({ summary: 'Force-refresh the XLM/USD exchange rate cache' })
   async refreshRateCache() {
@@ -109,6 +120,7 @@ export class AdminController {
     return { rate };
   }
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('cache/flush')
   @ApiOperation({ summary: 'Flush application caches (analytics, exchange rates, fee config)' })
   flushCache() {
@@ -117,18 +129,21 @@ export class AdminController {
 
   // ── Geographic Distribution Analytics (#714) ───────────────────────────────
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('analytics/geography')
   @ApiOperation({ summary: 'Get geographic distribution of merchants and payments' })
   getGeographicDistribution(@Query('sortBy') sortBy = 'volume') {
     return this.adminService.getGeographicDistribution(sortBy);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('analytics/live')
   @ApiOperation({ summary: 'Get real-time dashboard counters (max age: 60s)' })
   getLiveAnalytics() {
     return this.adminService.getLiveAnalytics();
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('analytics/top-merchants')
   @ApiOperation({
     summary: 'Get top merchants ranked by settled payment volume',
@@ -144,6 +159,7 @@ export class AdminController {
 
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('users')
   @Auditable({ action: 'ADMIN_CREATED', resource: 'admin' })
   @ApiOperation({ summary: 'Create a new admin user (SUPERADMIN only)' })
@@ -160,6 +176,7 @@ export class AdminController {
     );
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Delete('users/:id')
   @Auditable({ action: 'ADMIN_DELETED', resource: 'admin' })
   @ApiOperation({ summary: 'Delete an admin user (SUPERADMIN only)' })
@@ -170,12 +187,14 @@ export class AdminController {
     return this.adminService.deleteAdmin(id, req.user.role, req.user?.id);
   }
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('users/:id/2fa/setup')
   @ApiOperation({ summary: 'Generate a TOTP secret for an admin user' })
   setupAdminTotp(@Param('id') id: string) {
     return this.adminService.setupAdminTotp(id);
   }
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('users/:id/2fa/verify')
   @ApiOperation({ summary: 'Verify a TOTP token and enable 2FA for an admin user' })
   verifyAdminTotp(
@@ -185,6 +204,7 @@ export class AdminController {
     return this.adminService.verifyAdminTotp(id, token);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch('users/:id/allowed-ips')
   @ApiOperation({ summary: 'Update the IP allowlist for an admin user' })
   updateAdminAllowedIps(
@@ -196,6 +216,7 @@ export class AdminController {
 
   // ── Sandbox Environment Management (#708) ──────────────────────────────────
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch('merchants/:id/sandbox')
   @Auditable({ action: 'SANDBOX_MODE_TOGGLED', resource: 'merchant' })
   @ApiOperation({ summary: 'Enable or disable sandbox mode for a merchant' })
@@ -207,6 +228,7 @@ export class AdminController {
     return this.adminService.toggleSandboxMode(id, enabled, req.user?.id);
   }
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post('merchants/:id/sandbox/reset')
   @Auditable({ action: 'DATA_PURGED', resource: 'merchant' })
   @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
@@ -219,6 +241,7 @@ export class AdminController {
 
   // ── Audit Log Viewer ───────────────────────────────────────────────────────
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('audit-log')
   @ApiOperation({ summary: 'Get paginated audit log with filtering' })
   async getAuditLogs(
@@ -241,6 +264,7 @@ export class AdminController {
 
   // ── Platform-wide Payment Oversight ──────────────────────────────────────
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('payments')
   @ApiOperation({ summary: 'Get all payments across all merchants (paginated, filterable)' })
   getAdminPayments(@Query() query: QueryAdminPaymentsDto) {
@@ -256,6 +280,7 @@ export class AdminController {
     });
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('payments/:id')
   @ApiOperation({ summary: 'Get full payment detail by ID' })
   @ApiParam({ name: 'id', description: 'Payment ID' })
@@ -265,6 +290,7 @@ export class AdminController {
 
   // ── Generic Soft/Hard Delete and Restore ───────────────────────────────────
 
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':entity/:id/restore')
   @Auditable({ action: 'RECORD_RESTORED', resource: 'record' })
   @ApiOperation({ summary: 'Restore a soft-deleted record' })
@@ -276,6 +302,7 @@ export class AdminController {
     return this.adminService.restoreRecord(entity, id, req.user?.id);
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Delete(':entity/:id')
   @Auditable({ action: 'RECORD_DELETED', resource: 'record' })
   @ApiOperation({ summary: 'Soft or hard delete a record' })
@@ -291,6 +318,7 @@ export class AdminController {
 
   // ── PCI-DSS Compliance Reports (#704) ─────────────────────────────────────
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get('reports/compliance')
   @ApiOperation({ summary: 'Generate PCI-DSS compliance report' })
   async getComplianceReport(

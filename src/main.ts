@@ -1,10 +1,11 @@
+import { createOpenApiDocument } from './common/swagger';
 import { NestFactory, Reflector, HttpAdapterHost } from '@nestjs/core';
 import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 import helmet from 'helmet';
 import { ClassSerializerInterceptor, ValidationPipe, RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { readTelemetryConfig, shutdownTelemetry, startTelemetry } from './telemetry/telemetry';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -113,8 +114,8 @@ async function bootstrap(): Promise<void> {
         },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-correlation-id'],
-    exposedHeaders: ['X-Correlation-ID'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-correlation-id', 'x-merchant-id'],
+    exposedHeaders: ['X-Correlation-ID', 'X-Request-ID'],
   });
 
   app.setGlobalPrefix(apiPrefix, {
@@ -148,34 +149,7 @@ async function bootstrap(): Promise<void> {
   // (or `@UseInterceptors(DeprecationInterceptor)`) in the same commit that adds
   // the first @Deprecated() endpoint.
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('DupDub API')
-    .setDescription(
-      'Crypto-to-Fiat settlement platform. Use **Authorize** for JWT Bearer and/or **X-API-Key** for API key auth. ' +
-        `HTTP API routes are under \`/${apiPrefix}\`; Swagger UI is at \`/docs\`.`,
-    )
-    .setVersion(version)
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        description: 'JWT from POST /auth/login or /auth/register',
-      },
-      'bearer',
-    )
-    .addApiKey(
-      {
-        type: 'apiKey',
-        in: 'header',
-        name: 'X-API-Key',
-        description: 'Merchant API key (when using API key auth instead of Bearer)',
-      },
-      'api-key',
-    )
-    .build();
-
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  const document = createOpenApiDocument(app, version);
   SwaggerModule.setup('docs', app, document, {
     customSiteTitle: 'DupDub API',
     swaggerOptions: {

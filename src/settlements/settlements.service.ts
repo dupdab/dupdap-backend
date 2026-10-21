@@ -4,7 +4,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { QUEUE_NAMES, DEFAULT_QUEUE_JOB } from '../queues/queue.constants';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
+import { EntityManager, Repository, FindManyOptions, Between, IsNull, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import Big from 'big.js';
@@ -115,7 +115,9 @@ export class SettlementsService {
     return DEFAULT_SETTLEMENT_CURRENCY;
   }
 
-  async initiateSettlement(payment: Payment): Promise<void> {
+  async initiateSettlement(payment: Payment, manager?: EntityManager): Promise<void> {
+    const settlementsRepo = manager?.getRepository(Settlement) ?? this.settlementsRepo;
+    const paymentsRepo = manager?.getRepository(Payment) ?? this.paymentsRepo;
     // Respect merchant settlement preference: DAILY/WEEKLY merchants are
     // batched by the scheduled cron jobs below; only INSTANT settles here.
     try {
@@ -144,7 +146,7 @@ export class SettlementsService {
 
     const fiatCurrency = await this.resolveSettlementCurrency(payment.merchantId);
 
-    const settlement = this.settlementsRepo.create({
+    const settlement = settlementsRepo.create({
       merchantId: payment.merchantId,
       totalAmountUsd: amountUsd.toFixed(6),
       feeAmountUsd: feeUsd.toFixed(6),
@@ -154,12 +156,12 @@ export class SettlementsService {
       requiresApproval: netUsd.gte(LARGE_SETTLEMENT_THRESHOLD),
     });
 
-    const saved = await this.settlementsRepo.save(settlement);
+    const saved = await settlementsRepo.save(settlement);
 
     payment.status = PaymentStatus.SETTLING;
     payment.feeUsd = feeUsd.toFixed(6);
     payment.settlementId = saved.id;
-    await this.paymentsRepo.save(payment);
+    await paymentsRepo.save(payment);
 
     await this.webhooks.dispatch(payment.merchantId, 'payment.settling', {
       paymentId: payment.id,
@@ -403,6 +405,7 @@ export class SettlementsService {
       settlement.status = SettlementStatus.COMPLETED;
       settlement.completedAt = new Date();
       await this.settlementsRepo.save(settlement);
+      await this.paymentsRepo.update({ settlementId: settlement.id, status: PaymentStatus.SETTLING }, { status: PaymentStatus.SETTLED });
       this.invalidateAnalyticsForMerchant(settlement.merchantId);
       await this.webhooks.dispatch(settlement.merchantId, 'settlement.completed', {
         settlementId: settlement.id,

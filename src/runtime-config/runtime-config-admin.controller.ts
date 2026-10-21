@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import {
   Controller,
   Get,
@@ -18,16 +20,19 @@ import { Request } from 'express';
 @ApiBearerAuth()
 @UseGuards(RolesGuard)
 @Roles(MerchantRole.SUPERADMIN)
+@ApiErrors()
 @Controller('admin/config')
 export class RuntimeConfigController {
   constructor(private readonly runtimeConfigService: RuntimeConfigService) {}
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get()
   @ApiOperation({ summary: 'List all runtime configurations' })
   async getAll() {
     return this.runtimeConfigService.getAll();
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch(':key')
   @ApiOperation({ summary: 'Update a runtime configuration' })
   async update(

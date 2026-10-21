@@ -74,9 +74,6 @@ export class HealthController {
     }
     return { status: 'ready' };
   }
-    }
-    return { status: 'ready' };
-  }
 
   @Get('admin')
   @ApiBearerAuth()

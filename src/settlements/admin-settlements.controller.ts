@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse, ApiBearerAuth as AdminBearer } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import {
   Controller,
   Get,
@@ -17,16 +19,22 @@ import { AdminSettlementsQueryDto } from './dto/admin-settlements-query.dto';
 import { Request } from 'express';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 
+@ApiErrors()
+@AdminBearer('bearer')
 @Controller('admin/settlements')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminSettlementsController {
   constructor(private readonly settlementsService: SettlementsService) {}
 
+  @AdminOperation({ summary: 'Get collection' })
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get()
   async findAll(@Query() query: AdminSettlementsQueryDto) {
     return this.settlementsService.findAllAdmin(query);
   }
 
+  @AdminOperation({ summary: 'Post :id/retry' })
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':id/retry')
   @HttpCode(HttpStatus.OK)
   @Auditable({ action: 'SETTLEMENT_RETRIED', resource: 'settlement' })
@@ -38,6 +46,8 @@ export class AdminSettlementsController {
     return { message: 'Settlement retry initiated successfully' };
   }
 
+  @AdminOperation({ summary: 'Post :id/approve' })
+  @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':id/approve')
   @HttpCode(HttpStatus.OK)
   @Auditable({ action: 'SETTLEMENT_APPROVED', resource: 'settlement' })

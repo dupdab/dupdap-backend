@@ -1,3 +1,15 @@
+## Unreleased
+
+- **Breaking:** all HTTP errors now use `{ statusCode, error, message, requestId }`.
+  `message` can be a string or validation message array. Clients must use `requestId`
+  instead of `timestamp`/`path` and read retry/reset metadata from response headers.
+- Admin operations and common errors are documented in `/docs` and `openapi.json`.
+- Merchant owners can invite team emails with OWNER, DEVELOPER, or VIEWER access.
+  Invitees register/sign in with their own credentials and select the merchant using
+  `X-Merchant-ID`. Only owners manage teams. Team API keys are generated at
+  `POST /merchant/team/api-keys`; permissions are resolved from current membership
+  on every request, so demotion/removal immediately restricts/revokes keys.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse, ApiBearerAuth as AdminBearer } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsInt, Max, Min } from 'class-validator';
@@ -14,10 +16,13 @@ export class SetMaxSlippageDto {
 
 @ApiTags('Admin - Slippage')
 @UseGuards(JwtAuthGuard, AdminGuard)
+@ApiErrors()
+@AdminBearer('bearer')
 @Controller('admin/slippage')
 export class SlippageAdminController {
   constructor(private readonly slippageService: SlippageService) {}
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Get()
   @ApiOperation({ summary: 'Get current max slippage tolerance (bps)' })
   async get(): Promise<{ maxSlippageBps: number }> {
@@ -25,6 +30,7 @@ export class SlippageAdminController {
     return { maxSlippageBps };
   }
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Put()
   @ApiOperation({ summary: 'Update max slippage tolerance (bps). 100 = 1%.' })
   async set(@Body() dto: SetMaxSlippageDto): Promise<{ maxSlippageBps: number }> {

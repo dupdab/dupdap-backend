@@ -1,3 +1,5 @@
+import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
+import { ApiErrors } from '../common/api-errors.decorator';
 import { Controller, Param, Patch, Body, UseGuards, Request } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -17,10 +19,12 @@ import { ExtendApiKeyExpiryDto } from './dto/extend-api-key-expiry.dto';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN, MerchantRole.SUPERADMIN)
+@ApiErrors()
 @Controller({ path: 'admin/merchants', version: '1' })
 export class MerchantsAdminController {
   constructor(private readonly merchantsService: MerchantsService) {}
 
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch(':id/fee')
   @ApiOperation({ summary: 'Set custom fee rate for a merchant' })
   @ApiResponse({ status: 200, type: Merchant })
@@ -39,6 +43,7 @@ export class MerchantsAdminController {
    * Resets the 14-day reminder flag so the merchant receives a fresh warning.
    * Writes an audit log entry for compliance.
    */
+  @AdminResponse({ status: 200, description: 'Successful response' })
   @Patch(':id/api-key/expiry')
   @ApiOperation({ summary: 'Extend API key expiry for a merchant (admin)' })
   @ApiParam({ name: 'id', description: 'Merchant UUID' })

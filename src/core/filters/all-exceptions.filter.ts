@@ -1,3 +1,6 @@
+import { TransactionLimitExceededException } from '../../payments/transaction-limit.exception';
+import { randomUUID } from 'crypto';
+import { getCorrelationId } from '../../common/correlation-id.context';
 import {
   ArgumentsHost,
   BadRequestException,
@@ -51,6 +54,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
+    if (exception instanceof TransactionLimitExceededException) {
+      response.setHeader('X-Limit-Reset', String(exception.resetAt));
+    }
+    response.setHeader('X-Request-ID', responseBody.requestId);
     response.status(status).json(responseBody);
   }
 
@@ -165,8 +172,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       error,
       message,
-      timestamp: new Date().toISOString(),
-      path: request?.url ?? "",
+      requestId: getCorrelationId() ?? randomUUID(),
     };
   }
 }
