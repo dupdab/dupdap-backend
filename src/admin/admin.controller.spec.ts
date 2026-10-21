@@ -135,8 +135,8 @@ describe('AdminController', () => {
     it('should call service.updateMerchantStatus', async () => {
       const result = { id: '1', status: MerchantStatus.ACTIVE };
       mockAdminService.updateMerchantStatus.mockResolvedValue(result);
-      expect(await controller.updateStatus('1', MerchantStatus.ACTIVE)).toBe(result);
-      expect(service.updateMerchantStatus).toHaveBeenCalledWith('1', MerchantStatus.ACTIVE);
+      expect(await controller.updateStatus('1', MerchantStatus.ACTIVE, { user: { id: 'admin-1' } } as any)).toBe(result);
+      expect(service.updateMerchantStatus).toHaveBeenCalledWith('1', MerchantStatus.ACTIVE, 'admin-1');
     });
   });
 
@@ -144,8 +144,8 @@ describe('AdminController', () => {
     it('should call service.bulkUpdateMerchantStatus', async () => {
       const result = { success: ['1'], failed: [] };
       mockAdminService.bulkUpdateMerchantStatus.mockResolvedValue(result);
-      expect(await controller.bulkUpdateStatus(['1'], MerchantStatus.ACTIVE)).toBe(result);
-      expect(service.bulkUpdateMerchantStatus).toHaveBeenCalledWith(['1'], MerchantStatus.ACTIVE);
+      expect(await controller.bulkUpdateStatus(['1'], MerchantStatus.ACTIVE, { user: { id: 'admin-1' } } as any)).toBe(result);
+      expect(service.bulkUpdateMerchantStatus).toHaveBeenCalledWith(['1'], MerchantStatus.ACTIVE, 'admin-1');
     });
   });
 
@@ -300,16 +300,16 @@ describe('AdminController', () => {
   describe('toggleSandboxMode', () => {
     it('should forward the merchant id and enabled flag', async () => {
       mockAdminService.toggleSandboxMode.mockResolvedValue({ sandbox: true });
-      expect(await controller.toggleSandboxMode('merchant-1', true)).toEqual({ sandbox: true });
-      expect(service.toggleSandboxMode).toHaveBeenCalledWith('merchant-1', true);
+      expect(await controller.toggleSandboxMode('merchant-1', true, { user: { id: 'admin-1' } } as any)).toEqual({ sandbox: true });
+      expect(service.toggleSandboxMode).toHaveBeenCalledWith('merchant-1', true, 'admin-1');
     });
   });
 
   describe('resetSandboxData', () => {
     it('should call service.resetSandboxData with the merchant id', async () => {
       mockAdminService.resetSandboxData.mockResolvedValue({ deleted: 12 });
-      expect(await controller.resetSandboxData('merchant-1')).toEqual({ deleted: 12 });
-      expect(service.resetSandboxData).toHaveBeenCalledWith('merchant-1');
+      expect(await controller.resetSandboxData('merchant-1', { user: { id: 'admin-1' } } as any)).toEqual({ deleted: 12 });
+      expect(service.resetSandboxData).toHaveBeenCalledWith('merchant-1', 'admin-1');
     });
   });
 
@@ -409,8 +409,8 @@ describe('AdminController', () => {
   describe('restoreRecord', () => {
     it('should forward the entity name and id', async () => {
       mockAdminService.restoreRecord.mockResolvedValue({ restored: true });
-      expect(await controller.restoreRecord('payment', 'rec-1')).toEqual({ restored: true });
-      expect(service.restoreRecord).toHaveBeenCalledWith('payment', 'rec-1');
+      expect(await controller.restoreRecord('payment', 'rec-1', { user: { id: 'admin-1' } } as any)).toEqual({ restored: true });
+      expect(service.restoreRecord).toHaveBeenCalledWith('payment', 'rec-1', 'admin-1');
     });
   });
 

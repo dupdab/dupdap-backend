@@ -7,7 +7,7 @@ import type { Queue } from 'bull';
 import { CacheService } from '../cache/cache.service';
 import { DEFAULT_QUEUE_JOB, QUEUE_NAMES } from '../queues/queue.constants';
 import { CronJobService } from '../cron/cron-job.service';
-import { AdminAlertService } from '../admin/admin-alert.service';
+import { AdminAlertService } from '../alerts/admin-alert.service';
 import {
   PaymentConfirmedEventDto,
   SettlementCompletedEventDto,

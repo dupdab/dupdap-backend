@@ -1,0 +1,2 @@
+<p>Your payment import is complete. Created: {{createdCount}}. Rows needing attention: {{errorCount}}.</p>
+<ul>{{#each results}}<li>Row {{row}}: {{#if status}}{{status}} {{reference}}{{else}}{{reason}}{{/if}}</li>{{/each}}</ul>

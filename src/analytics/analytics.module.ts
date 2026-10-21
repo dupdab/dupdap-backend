@@ -29,6 +29,6 @@ import { CronModule } from '../cron/cron.module';
   ],
   controllers: [AnalyticsController, AnalyticsExportController, AnalyticsExportDownloadController],
   providers: [AnalyticsService, AnalyticsExportService, AnalyticsExportProcessor, AnalyticsRefreshService],
-  exports: [AnalyticsService],
+  exports: [AnalyticsService, AnalyticsExportService],
 })
 export class AnalyticsModule {}

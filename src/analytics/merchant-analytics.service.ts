@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { CacheService } from '../cache/cache.service';
 import { Payment } from '../payments/entities/payment.entity';
 import { Merchant } from '../merchants/entities/merchant.entity';
+import { PaymentFunnelQueryDto } from './dto/payment-funnel-query.dto';
 
 const DAILY_SIGNUP_WINDOW_DAYS = 30;
 const ACTIVATION_WINDOW_DAYS = 7;
@@ -112,12 +113,15 @@ export class MerchantAnalyticsService {
               [asOf.toISOString(), DAILY_SIGNUP_WINDOW_DAYS - 1],
             ),
             this.dataSource.query<CountRow[]>(
-              `SELECT COUNT(*) FILTER (WHERE EXISTS (
-                 SELECT 1 FROM sessions
-                 WHERE sessions.user_id = users.id
-                   AND sessions."createdAt" <= users."createdAt" + ($1 * INTERVAL '1 day')
-               ))::text AS count, COUNT(*)::text AS total
-               FROM users WHERE "is_admin" = false AND "is_treasury" = false`,
+              `SELECT COUNT(*) FILTER (WHERE first_sessions.first_seen <= users."createdAt" + ($1 * INTERVAL '1 day'))::text AS count,
+                 COUNT(*)::text AS total
+               FROM users
+               LEFT JOIN (
+                 SELECT user_id, MIN("createdAt") AS first_seen
+                 FROM sessions
+                 GROUP BY user_id
+               ) first_sessions ON first_sessions.user_id = users.id
+               WHERE users."is_admin" = false AND users."is_treasury" = false`,
               [ACTIVATION_WINDOW_DAYS],
             ),
             this.dataSource.query<CountRow[]>(
@@ -235,13 +239,13 @@ export class MerchantAnalyticsService {
     }
   }
 
-  async getPaymentFunnel(
-    startDate?: string,
-    endDate?: string,
-    network?: string,
-  ): Promise<PaymentFunnelResponse> {
+  async getPaymentFunnel(query: PaymentFunnelQueryDto): Promise<PaymentFunnelResponse> {
+    const { startDate, endDate, network } = query;
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate) : new Date();
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+      throw new BadRequestException('Invalid analytics date range');
+    }
     const cacheKey = this.analyticsCacheKey({
       merchantId: 'admin',
       endpoint: 'payment-funnel',
@@ -301,6 +305,16 @@ export class MerchantAnalyticsService {
             percentage: created > 0 ? Number(((settled / created) * 100).toFixed(2)) : 0,
             dropOffCount: settling - settled,
             dropOffPercentage: settling > 0 ? Number((((settling - settled) / settling) * 100).toFixed(2)) : 0,
+          },
+          {
+            stage: 'failed',
+            count: failed,
+            percentage: created > 0 ? Number(((failed / created) * 100).toFixed(2)) : 0,
+          },
+          {
+            stage: 'expired',
+            count: expired,
+            percentage: created > 0 ? Number(((expired / created) * 100).toFixed(2)) : 0,
           },
         ];
 

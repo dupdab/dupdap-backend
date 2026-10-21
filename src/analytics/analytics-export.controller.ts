@@ -36,7 +36,7 @@ export class AnalyticsExportController {
   @Post('export')
   @Scopes('analytics:read')
   @ApiOperation({ summary: 'Queue an analytics export' })
-  @ApiQuery({ name: 'format', required: false, enum: ['pdf'] })
+  @ApiQuery({ name: 'format', required: false, enum: ['pdf', 'csv', 'json'] })
   @ApiQuery({ name: 'period', required: false, enum: ['daily', 'monthly'] })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Start date in YYYY-MM-DD format' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'End date in YYYY-MM-DD format' })
@@ -81,7 +81,10 @@ export class AnalyticsExportDownloadController {
   ): Promise<void> {
     const exportRecord = await this.analyticsExportService.getDownloadByToken(token);
 
-    res.setHeader('Content-Type', 'application/pdf');
+    const contentType = exportRecord.format === AnalyticsExportFormat.JSON
+      ? 'application/json'
+      : exportRecord.format === AnalyticsExportFormat.CSV ? 'text/csv' : 'application/pdf';
+    res.setHeader('Content-Type', contentType);
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${exportRecord.fileName ?? 'analytics-report.pdf'}"`,

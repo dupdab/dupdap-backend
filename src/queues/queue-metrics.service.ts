@@ -32,6 +32,10 @@ export class QueueMetricsService {
     await this.checkThresholds(metrics);
   }
 
+  async getMetrics(): Promise<QueueMetric[]> {
+    return this.queueMetricRepo.find({ order: { createdAt: 'DESC' }, take: 100 });
+  }
+
   private async snapshotQueues(): Promise<QueueSnapshot[]> {
     // Queue snapshots are gathered from the underlying Bull queues elsewhere;
     // this service only records and evaluates the resulting metrics.
@@ -65,7 +69,7 @@ export class QueueMetricsService {
         continue;
       }
 
-      if (prev > 0 && m.completed === prev) {
+      if (prev.completed > 0 && m.completed === prev.completed) {
         this.logger.warn(`Queue "${m.name}" processing rate has dropped to zero`);
         await this.adminAlerts.raise({
           type: AdminAlertType.STELLAR_MONITOR,

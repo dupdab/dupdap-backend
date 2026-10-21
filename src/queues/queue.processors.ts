@@ -64,15 +64,9 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
     const lockKey = `lock:settlement:merchant:${settlement.merchantId}`;
     
     // Acquire distributed lock for merchant isolation
-    const acquired = await (this.cacheService as any).redis.set(
-      `lock:${lockKey}`, 
-      'locked', 
-      'EX', 
-      60, 
-      'NX'
-    );
+    const lockToken = await this.cacheService.acquireLock(lockKey, 60_000);
 
-    if (!acquired) {
+    if (!lockToken) {
       this.logger.debug(`Concurrency lock active for merchant ${settlement.merchantId}. Retrying.`);
       throw new Error(`Merchant ${settlement.merchantId} is already processing a settlement.`);
     }
@@ -80,8 +74,13 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
     try {
       await this.settlementsService.executeFiatTransfer(settlement);
     } finally {
-      await (this.cacheService as any).redis.del(`lock:${lockKey}`);
+      await this.cacheService.releaseLock(lockKey, lockToken);
     }
+  }
+
+  @Process('export')
+  async handleExport(job: Job<{ settlementExportId: string }>): Promise<void> {
+    await this.settlementsService.generateCsvExport(job.data.settlementExportId);
   }
 }
 

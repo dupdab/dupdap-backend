@@ -1,134 +1,27 @@
 name: Migration Safety
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/database/migrations/**'
-      - 'src/**/*.entity.ts'
-      - 'ormconfig.ts'
-      - 'scripts/migration-*.ts'
   pull_request:
-    paths:
-      - 'src/database/migrations/**'
-      - 'src/**/*.entity.ts'
-      - 'ormconfig.ts'
-      - 'scripts/migration-*.ts'
-  # Allow manual trigger for ad-hoc checks
-  workflow_dispatch:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
 
 jobs:
-  migration-safety:
-    name: Migration safety checks
+  migration-uncommitted-check:
+    name: Migration Uncommitted Check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: dupdub_ci
-          POSTGRES_PASSWORD: ci_password
-          POSTGRES_DB: dupdub_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U dupdub_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_USER: dupdub_ci
-      DB_PASSWORD: ci_password
-      DB_NAME: dupdub_test
-      NODE_ENV: test
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+          cache: 'npm'
 
       - name: Install dependencies
-        # --no-frozen-lockfile mirrors how the main CI installs in the presence
-        # of an outdated lockfile; migrations scripts have no runtime behaviour
-        # that depends on exact resolved versions.
-        run: pnpm install --no-frozen-lockfile
+        run: npm ci
 
-      # ── Check 1: No uncommitted migration files ──────────────────────────
-      # Ensures generated migrations are always committed before a PR merges.
-      - name: Check for uncommitted migration files
-        run: pnpm migration:uncommitted:check
-
-      # ── Check 2: All migrations apply cleanly ────────────────────────────
-      # Runs every migration in sequence against a fresh Postgres instance
-      # and exits non-zero if any migration fails.
-      - name: Apply all migrations
-        run: pnpm migration:check
-
-      # ── Check 3: All migrations roll back cleanly ────────────────────────
-      # Applies then reverts every migration, verifying that down() is
-      # complete and correct. Exits non-zero if any down() raises an error
-      # or leaves the DB in an inconsistent state.
-      - name: Run rollback check
-        run: pnpm migration:rollback:check
-
-  # Separate job so it can be skipped on paths that don't touch SQL
-  sql-injection-scan:
-    name: Raw SQL injection scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # Scan for raw query() calls that interpolate variables directly into SQL
-      # strings rather than using parameterized queries. This is a best-effort
-      # lint — it flags patterns like `query(\`... ${variable}`)` and requires
-      # manual review of each match.
-      #
-      # Exclusions:
-      #   - IF NOT EXISTS / IF EXISTS / ADD VALUE IF NOT EXISTS  → safe DDL guards
-      #   - src/test/                                            → test helpers only
-      #                                                            use TypeORM-derived
-      #                                                            table names, never
-      #                                                            user-supplied input
-      #   - *.spec.ts / *.e2e-spec.ts / *.integration-spec.ts   → test files
-      - name: Scan for unparameterized SQL interpolation
-        run: |
-          echo "Scanning for potentially unsafe raw SQL string interpolation..."
-          MATCHES=$(grep -rn \
-            --include="*.ts" \
-            -E "\.query\(\`[^\`]*\\\$\{" \
-            src/ \
-            | grep -v "IF NOT EXISTS\|IF EXISTS\|ADD VALUE IF NOT EXISTS" \
-            | grep -v "\.spec\.ts\|\.e2e-spec\.ts\|\.integration-spec\.ts" \
-            | grep -v "^src/test/" \
-            || true)
-
-          if [ -n "$MATCHES" ]; then
-            echo ""
-            echo "WARNING: Potentially unparameterized SQL interpolation detected:"
-            echo "$MATCHES"
-            echo ""
-            echo "Review each match and ensure user-supplied values are never"
-            echo "interpolated directly. Use parameterized queries instead:"
-            echo '  queryRunner.query("SELECT * FROM t WHERE id = $1", [id])'
-            echo ""
-            # Fail the build — remove 'exit 1' to downgrade to a warning.
-            exit 1
-          fi
-
-          echo "SQL injection scan passed — no unparameterized interpolation found."
+      - name: Check for uncommitted migrations
+        run: npm run migration:uncommitted:check

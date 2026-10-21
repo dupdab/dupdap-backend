@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Req, UseGuards, Headers, UnauthorizedException } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -14,6 +14,8 @@ import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AuthTokenResponseDto } from './dto/auth-token-response.dto';
 import { JwtAuthGuard } from './guards/jwt.guard';
 
@@ -64,5 +66,49 @@ export class AuthController {
   @ApiResponse({ status: 500, description: 'Internal server error' })
   login(@Body() dto: LoginDto): Promise<AuthTokenResponseDto> {
     return this.authService.login(dto);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Email a password reset link (valid for 1 hour)' })
+  @ApiResponse({ status: 202, description: 'If the account exists, a reset email has been sent' })
+  @ApiBadRequestResponse({ description: 'Validation failed' })
+  @ApiTooManyRequestsResponse({ description: 'IP rate limit exceeded' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<{ success: boolean }> {
+    await this.authService.forgotPassword(dto);
+    return { success: true };
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Set a new password using a reset token or a recovery code' })
+  @ApiResponse({ status: 200, description: 'Password updated' })
+  @ApiBadRequestResponse({ description: 'Validation failed or reset token/recovery code invalid or expired' })
+  @ApiTooManyRequestsResponse({ description: 'IP rate limit exceeded' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request): Promise<{ success: boolean }> {
+    await this.authService.resetPassword(dto, req.ip);
+    return { success: true };
+  }
+
+  @Post('admin/2fa/enable')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  enableAdminTwoFactor(@Req() req: Request & { user: { merchantId: string } }) {
+    return this.authService.enableAdminTwoFactor(req.user.merchantId);
+  }
+
+  @Post('admin/2fa/verify')
+  @HttpCode(HttpStatus.OK)
+  verifyAdminTwoFactor(
+    @Body() body: { code: string; accessToken?: string },
+    @Headers('authorization') authorization?: string,
+  ) {
+    const token = body.accessToken ?? authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) throw new UnauthorizedException('A 2FA challenge token is required');
+    return this.authService.verifyAdminTwoFactor(token, body.code);
   }
 }

@@ -1,23 +1,32 @@
-import { Test, TestingModule } from '@nestjs/testing';
+import { register } from 'prom-client';
 import { MetricsService } from './metrics.service';
 
 describe('MetricsService', () => {
   let service: MetricsService;
 
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [MetricsService],
-    }).compile();
-
-    service = module.get<MetricsService>(MetricsService);
+    service = new MetricsService();
   });
 
   afterEach(() => {
     jest.clearAllMocks();
+    register.clear();
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  it('registers the payment confirmation and webhook delivery histograms', async () => {
+    await expect(service.paymentConfirmationDurationSeconds.get()).resolves.toEqual(
+      expect.objectContaining({ name: 'payment_confirmation_duration_seconds' }),
+    );
+    await expect(service.webhookDeliveryDurationSeconds.get()).resolves.toEqual(
+      expect.objectContaining({ name: 'webhook_delivery_duration_seconds' }),
+    );
+    await expect(service.settlementDurationSeconds.get()).resolves.toEqual(
+      expect.objectContaining({ name: 'settlement_duration_seconds' }),
+    );
   });
 
   describe('incrementPaymentCreated', () => {

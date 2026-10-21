@@ -117,6 +117,16 @@ export class PaymentsController {
     return this.paymentsService.findOne(id, req.user.merchantId);
   }
 
+  @Post(':id/cancel')
+  @Scopes('payments:write')
+  @Auditable({ action: 'PAYMENT_CANCELLED', resource: 'payment' })
+  @ApiOperation({ summary: 'Cancel a pending payment' })
+  @ApiParam({ name: 'id', description: 'Payment UUID' })
+  @ApiOkResponse({ description: 'Payment cancelled' })
+  cancel(@Request() req: { user: { merchantId: string } }, @Param('id', ParseUUIDPipe) id: string) {
+    return this.paymentsService.cancel(id, req.user.merchantId);
+  }
+
   @Post(':id/refund')
   @Scopes('payments:write')
   @Auditable({ action: 'PAYMENT_REFUNDED', resource: 'payment' })

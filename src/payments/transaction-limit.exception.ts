@@ -18,6 +18,7 @@ export class TransactionLimitExceededException extends HttpException {
     super(
       {
         statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        errorCode: 'TRANSACTION_LIMIT_EXCEEDED',
         message: 'Daily transaction limit exceeded. Please try again later.',
         retryAfter: retry,
         reset: resetAt,

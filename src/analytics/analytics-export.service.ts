@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  TooManyRequestsException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Queue } from 'bull';
@@ -16,6 +17,7 @@ import { Merchant, MerchantRole } from '../merchants/entities/merchant.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { Settlement, SettlementStatus } from '../settlements/entities/settlement.entity';
 import { AnalyticsService } from './analytics.service';
+import { CacheService } from '../cache/cache.service';
 import {
   AnalyticsExport,
   AnalyticsExportFormat,
@@ -53,6 +55,7 @@ interface ExportMetrics {
     netUsd: number;
     feesUsd: number;
   };
+  settlementSeries: Array<{ date: string; grossUsd: number; netUsd: number; feesUsd: number }>;
   topMetrics: Array<{ label: string; value: string }>;
 }
 
@@ -73,20 +76,28 @@ export class AnalyticsExportService {
     private readonly exportQueue: Queue<{ exportId: string }>,
     private readonly analyticsService: AnalyticsService,
     private readonly emailService: EmailService,
+    private readonly cacheService: CacheService,
   ) {}
 
   async requestExport(options: RequestExportOptions) {
     const { requesterId, requesterRole, format, period, dateFrom, dateTo, deliveryBaseUrl } =
       options;
 
-    if (format !== AnalyticsExportFormat.PDF) {
-      throw new BadRequestException('Only pdf exports are supported');
+    if (!Object.values(AnalyticsExportFormat).includes(format as AnalyticsExportFormat)) {
+      throw new BadRequestException('format must be csv, json, or pdf');
     }
+    resolveDateRange(period, dateFrom, dateTo);
 
     const requester = await this.merchantsRepo.findOne({ where: { id: requesterId } });
     if (!requester) {
       throw new NotFoundException('Merchant not found');
     }
+
+    const quota = await this.cacheService.checkSlidingWindowRateLimit(
+      `analytics-export:merchant:${requesterId}`,
+      { limit: 5, windowSeconds: 86_400 },
+    );
+    if (!quota.allowed) throw new TooManyRequestsException('Export limit reached: 5 exports per 24 hours');
 
     const scope =
       requesterRole === MerchantRole.ADMIN || requesterRole === MerchantRole.SUPERADMIN
@@ -95,7 +106,7 @@ export class AnalyticsExportService {
 
     const exportRecord = await this.exportRepo.save(
       this.exportRepo.create({
-        format: AnalyticsExportFormat.PDF,
+        format: format as AnalyticsExportFormat,
         scope,
         status: AnalyticsExportStatus.QUEUED,
         requestedByMerchantId: requester.id,
@@ -140,7 +151,11 @@ export class AnalyticsExportService {
 
     try {
       const metrics = await this.buildMetrics(exportRecord);
-      const buffer = await this.buildPdf(metrics);
+      const buffer = exportRecord.format === AnalyticsExportFormat.PDF
+        ? await this.buildPdf(metrics)
+        : Buffer.from(exportRecord.format === AnalyticsExportFormat.JSON
+          ? JSON.stringify(this.toExportRows(metrics), null, 2)
+          : this.toExportCsv(metrics));
       const token = randomBytes(24).toString('hex');
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const fileName = this.buildFileName(exportRecord, metrics);
@@ -169,6 +184,23 @@ export class AnalyticsExportService {
       await this.exportRepo.save(exportRecord);
       throw error;
     }
+  }
+
+  private toExportRows(metrics: ExportMetrics) {
+    const dates = new Set([...metrics.volumeSeries.map(point => point.date), ...metrics.settlementSeries.map(point => point.date)]);
+    const volumes = new Map(metrics.volumeSeries.map(point => [point.date, point.volumeUsd]));
+    const settlements = new Map(metrics.settlementSeries.map(point => [point.date, point]));
+    return [...dates].sort().map(date => {
+      const settlement = settlements.get(date);
+      return { date, paymentVolume: volumes.get(date) ?? 0, settlementGross: settlement?.grossUsd ?? 0, settlementNet: settlement?.netUsd ?? 0, fees: settlement?.feesUsd ?? 0 };
+    });
+  }
+
+  private toExportCsv(metrics: ExportMetrics): string {
+    const quote = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+    return ['date,payment_volume,settlement_gross,settlement_net,fees', ...this.toExportRows(metrics).map(row =>
+      [row.date, row.paymentVolume, row.settlementGross, row.settlementNet, row.fees].map(quote).join(','),
+    )].join('\n');
   }
 
   async getDownloadByToken(token: string): Promise<AnalyticsExport> {
@@ -214,7 +246,10 @@ export class AnalyticsExportService {
       exportRecord.dateFrom ?? undefined,
       exportRecord.dateTo ?? undefined,
     );
-    const settlementSummary = await this.getSettlementSummary(exportRecord, range);
+    const [settlementSummary, settlementSeries] = await Promise.all([
+      this.getSettlementSummary(exportRecord, range),
+      this.getSettlementSeries(exportRecord, range),
+    ]);
     const periodLabel =
       volumeSeries.length > 0
         ? `${volumeSeries[0].date} to ${volumeSeries[volumeSeries.length - 1].date}`
@@ -234,6 +269,7 @@ export class AnalyticsExportService {
       highestVolumeBucket,
       averageBucketVolumeUsd,
       settlementSummary,
+      settlementSeries,
       topMetrics: [
         { label: 'Total Volume (USD)', value: this.formatCurrency(totalVolumeUsd) },
         { label: 'Payments', value: paymentCount.toLocaleString('en-US') },
@@ -246,6 +282,22 @@ export class AnalyticsExportService {
         { label: 'Settlement Fees (USD)', value: this.formatCurrency(settlementSummary.feesUsd) },
       ],
     };
+  }
+
+  private async getSettlementSeries(exportRecord: AnalyticsExport, range: DateRange) {
+    const qb = this.settlementsRepo.createQueryBuilder('settlement')
+      .select("TO_CHAR(DATE_TRUNC('day', settlement.createdAt), 'YYYY-MM-DD')", 'date')
+      .addSelect('COALESCE(SUM(settlement.totalAmountUsd), 0)', 'grossUsd')
+      .addSelect('COALESCE(SUM(settlement.netAmountUsd), 0)', 'netUsd')
+      .addSelect('COALESCE(SUM(settlement.feeAmountUsd), 0)', 'feesUsd')
+      .where('settlement.createdAt >= :start', { start: range.start })
+      .andWhere('settlement.createdAt < :end', { end: range.endExclusive })
+      .andWhere('settlement.status = :status', { status: SettlementStatus.COMPLETED });
+    if (exportRecord.scope === AnalyticsExportScope.MERCHANT && exportRecord.merchantId) {
+      qb.andWhere('settlement.merchantId = :merchantId', { merchantId: exportRecord.merchantId });
+    }
+    const rows = await qb.groupBy("DATE_TRUNC('day', settlement.createdAt)").orderBy("DATE_TRUNC('day', settlement.createdAt)", 'ASC').getRawMany();
+    return rows.map(row => ({ date: row.date, grossUsd: Number(row.grossUsd), netUsd: Number(row.netUsd), feesUsd: Number(row.feesUsd) }));
   }
 
   private async getSettlementSummary(
@@ -268,9 +320,9 @@ export class AnalyticsExportService {
     return settlements.reduce(
       (summary, settlement) => {
         summary.count += 1;
-        summary.grossUsd += Number(settlement.grossAmount ?? 0);
-        summary.netUsd += Number(settlement.netAmount ?? 0);
-        summary.feesUsd += Number(settlement.feeAmount ?? 0);
+        summary.grossUsd += Number(settlement.totalAmountUsd ?? 0);
+        summary.netUsd += Number(settlement.netAmountUsd ?? 0);
+        summary.feesUsd += Number(settlement.feeAmountUsd ?? 0);
         return summary;
       },
       { count: 0, grossUsd: 0, netUsd: 0, feesUsd: 0 },

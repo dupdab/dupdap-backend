@@ -1,4 +1,3 @@
-import { HttpStatus } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import { TlsEnforcementMiddleware } from './tls-enforcement.middleware';
 
@@ -28,9 +27,10 @@ describe('TlsEnforcementMiddleware', () => {
   it('rejects non-secure requests', () => {
     middleware.use(req as Request, res as Response, next);
 
-    expect(res.status).toHaveBeenCalledWith(HttpStatus.UPGRADE_REQUIRED);
+    expect(res.status).toHaveBeenCalledWith(426);
     expect(res.json).toHaveBeenCalledWith({
-      statusCode: HttpStatus.UPGRADE_REQUIRED,
+      statusCode: 426,
+      errorCode: 'HTTPS_REQUIRED',
       message: 'HTTPS is required for all requests.',
     });
     expect(next).not.toHaveBeenCalled();

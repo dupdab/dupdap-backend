@@ -18,15 +18,17 @@ function makeMockRedis() {
   };
 }
 
+type MockRedis = ReturnType<typeof makeMockRedis>;
+
 describe('CacheService', () => {
   let service: CacheService;
-  let redis: ReturnType<typeof makeMockRedis>;
-  let subscriber: ReturnType<typeof makeMockRedis>;
+  let redis: MockRedis;
+  let subscriber: MockRedis;
 
   beforeEach(async () => {
     redis = makeMockRedis();
     subscriber = makeMockRedis();
-    service = new CacheService(undefined, redis as any, subscriber as any);
+    service = new CacheService(undefined, redis as unknown as never, subscriber as unknown as never);
     await service.onModuleInit();
   });
 
@@ -35,7 +37,8 @@ describe('CacheService', () => {
   });
 
   const env = process.env.NODE_ENV ?? 'development';
-  const ns = `${env}:cache:`;
+  const version = process.env.CACHE_VERSION?.trim() || 'v1';
+  const ns = `${env}:cache:${version}:`;
 
   describe('key namespacing', () => {
     it('prefixes get with {env}:cache:', async () => {
@@ -50,8 +53,17 @@ describe('CacheService', () => {
       expect(redis.set).toHaveBeenCalledWith(`${ns}mykey`, expect.any(String), 'EX', 10);
     });
 
-    it('ns property matches NODE_ENV', () => {
-      expect(service.ns).toBe(`${env}:cache:`);
+    it('ns property includes environment and cache version', () => {
+      expect(service.ns).toBe(ns);
+    });
+
+    it('uses a new namespace when CACHE_VERSION changes', () => {
+      const previous = process.env.CACHE_VERSION;
+      process.env.CACHE_VERSION = 'release-abc123';
+      const versioned = new CacheService(undefined, redis as any, subscriber as any);
+      expect(versioned.ns).toBe(`${env}:cache:release-abc123:`);
+      if (previous === undefined) delete process.env.CACHE_VERSION;
+      else process.env.CACHE_VERSION = previous;
     });
   });
 
