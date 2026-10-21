@@ -8,6 +8,9 @@ import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { CacheService } from '../cache/cache.service';
 import { AuditLog } from '../audit/entities/audit-log.entity';
+import { MerchantBankAccount } from './entities/merchant-bank-account.entity';
+import { EmailService } from '../email/email.service';
+import { KycStatus } from './entities/merchant.entity';
 
 /** Maximum allowed API key lifetime in milliseconds (365 days). */
 const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
@@ -22,7 +25,9 @@ export class MerchantsService {
     private merchantsRepo: Repository<Merchant>,
     @InjectRepository(AuditLog)
     private readonly auditLogRepo: Repository<AuditLog>,
+    @InjectRepository(MerchantBankAccount) private readonly bankAccounts: Repository<MerchantBankAccount>,
     private readonly cache: CacheService,
+    private readonly email: EmailService,
   ) {}
 
   async getActiveMerchantCount(): Promise<number> {
@@ -49,6 +54,36 @@ export class MerchantsService {
     const merchant = await this.merchantsRepo.findOne({ where: { id } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     return merchant;
+  }
+
+  async addBankAccount(merchantId: string, input: { currency: string; accountNumber: string; routingNumber: string }) {
+    const currency = input.currency.toUpperCase();
+    const exists = await this.bankAccounts.count({ where: { merchantId, currency } });
+    return this.bankAccounts.save(this.bankAccounts.create({ ...input, currency, merchantId, isDefault: exists === 0 }));
+  }
+  async setDefaultBankAccount(merchantId: string, id: string) {
+    const account = await this.bankAccounts.findOne({ where: { id, merchantId } });
+    if (!account) throw new NotFoundException('Bank account not found');
+    await this.bankAccounts.update({ merchantId, currency: account.currency }, { isDefault: false });
+    account.isDefault = true;
+    return this.bankAccounts.save(account);
+  }
+  async addKycDocument(merchantId: string, document: { name: string; mimeType: string; data: string }) {
+    if (!document?.data || !document.name || !document.mimeType) throw new BadRequestException('Document name, mimeType, and base64 data are required');
+    if (!/^application\/(pdf|msword|vnd.openxmlformats-officedocument.wordprocessingml.document)|^image\/(jpeg|png)$/.test(document.mimeType)) throw new BadRequestException('Unsupported verification document type');
+    if (Buffer.from(document.data, 'base64').length > 10 * 1024 * 1024) throw new BadRequestException('Document exceeds 10 MB');
+    const merchant = await this.findOne(merchantId);
+    merchant.kycDocuments = [...(merchant.kycDocuments ?? []), document];
+    merchant.kycStatus = KycStatus.PENDING;
+    return this.merchantsRepo.save(merchant);
+  }
+  async listPendingKyc() { return this.merchantsRepo.find({ where: { kycStatus: KycStatus.PENDING }, select: ['id', 'email', 'businessName', 'businessType', 'country', 'kycStatus', 'kycDocuments', 'createdAt'] }); }
+  async reviewKyc(id: string, status: KycStatus) {
+    if (![KycStatus.VERIFIED, KycStatus.REJECTED].includes(status)) throw new BadRequestException('KYC status must be VERIFIED or REJECTED');
+    const merchant = await this.findOne(id); merchant.kycStatus = status;
+    const saved = await this.merchantsRepo.save(merchant);
+    await this.email.queue(saved.email, 'kyc-status-changed', { subject: `Business verification ${status.toLowerCase()}`, merchantName: saved.businessName, status });
+    return saved;
   }
 
   async update(id: string, dto: UpdateMerchantDto): Promise<Merchant> {

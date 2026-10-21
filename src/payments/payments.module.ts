@@ -5,6 +5,10 @@ import { PaymentsService } from './payments.service';
 import { PaymentsController, PublicPaymentController } from './payments.controller';
 import { Payment } from './entities/payment.entity';
 import { PaymentEvent } from './entities/payment-event.entity';
+import { PaymentDispute } from './entities/payment-dispute.entity';
+import { DisputesService } from './disputes.service';
+import { DisputesController } from './disputes.controller';
+import { SettlementsModule } from '../settlements/settlements.module';
 import { StellarModule } from '../stellar/stellar.module';
 import { CacheModule } from '../cache/cache.module';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
@@ -21,7 +25,7 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment, PaymentEvent]),
+    TypeOrmModule.forFeature([Payment, PaymentEvent, PaymentDispute]),
     forwardRef(() => StellarModule),
     CacheModule,
     WebhooksModule,
@@ -30,9 +34,10 @@ import { AdminAlertModule } from '../alerts/admin-alert.module';
     ConfigModule,
     AdminAlertModule,
     forwardRef(() => AmlModule),
+    SettlementsModule,
   ],
-  controllers: [PaymentsController, PublicPaymentController],
-  providers: [PaymentsService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
+  controllers: [PaymentsController, PublicPaymentController, DisputesController],
+  providers: [PaymentsService, DisputesService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

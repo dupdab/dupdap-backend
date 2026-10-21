@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Inject, forwardRef, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -23,6 +23,8 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+import { MerchantBankAccount } from '../merchants/entities/merchant-bank-account.entity';
+import { PaymentDispute, DisputeStatus } from '../payments/entities/payment-dispute.entity';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -83,6 +85,8 @@ export class SettlementsService {
     private settlementQueue: Queue,
     private cronJobService: CronJobService,
     private retryConfig: RetryConfigService,
+    @Optional() @InjectRepository(MerchantBankAccount) private bankAccountsRepo?: Repository<MerchantBankAccount>,
+    @Optional() @InjectRepository(PaymentDispute) private disputesRepo?: Repository<PaymentDispute>,
   ) {}
 
   private invalidateAnalyticsForMerchant(merchantId: string): void {
@@ -116,6 +120,7 @@ export class SettlementsService {
   }
 
   async initiateSettlement(payment: Payment): Promise<void> {
+    if (await this.hasActiveDispute([payment.id])) return;
     // Respect merchant settlement preference: DAILY/WEEKLY merchants are
     // batched by the scheduled cron jobs below; only INSTANT settles here.
     try {
@@ -309,6 +314,9 @@ export class SettlementsService {
   }
 
   private async createBatchSettlement(payments: Payment[]): Promise<void> {
+    const eligiblePayments: Payment[] = [];
+    for (const payment of payments) if (!(await this.hasActiveDispute([payment.id]))) eligiblePayments.push(payment);
+    payments = eligiblePayments;
     if (payments.length === 0) {
       return;
     }
@@ -370,6 +378,7 @@ export class SettlementsService {
       throw new Error('Settlement partner is not configured');
     }
 
+    const bankAccount = await this.bankAccountsRepo?.findOne({ where: { merchantId: settlement.merchantId, currency: settlement.fiatCurrency, isDefault: true } });
     await axios.post(
       `${partnerUrl}/transfers`,
       {
@@ -377,6 +386,7 @@ export class SettlementsService {
         amount: settlement.netAmountUsd,
         currency: settlement.fiatCurrency,
         merchantId: settlement.merchantId,
+        ...(bankAccount ? { bankAccount: { accountNumber: bankAccount.accountNumber, routingNumber: bankAccount.routingNumber } } : {}),
       },
       {
         headers: {
@@ -395,6 +405,12 @@ export class SettlementsService {
 
     if (settlement.status !== SettlementStatus.PROCESSING) {
       this.logger.warn(`Settlement ${settlementId} is not in PROCESSING state; skipping`);
+      return;
+    }
+
+    const linkedPayments = await this.paymentsRepo.find({ where: { settlementId } });
+    if (await this.hasActiveDispute(linkedPayments.map((payment) => payment.id))) {
+      this.logger.warn(`Settlement ${settlementId} blocked by an unresolved payment dispute`);
       return;
     }
 
@@ -422,6 +438,24 @@ export class SettlementsService {
       });
       throw error;
     }
+  }
+
+  private async hasActiveDispute(paymentIds: string[]): Promise<boolean> {
+    if (!paymentIds.length) return false;
+    if (!this.disputesRepo) return false;
+    return await this.disputesRepo.createQueryBuilder('dispute')
+      .where('dispute.paymentId IN (:...paymentIds)', { paymentIds })
+      .andWhere('dispute.status IN (:...statuses)', { statuses: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW, DisputeStatus.ESCALATED] })
+      .getCount() > 0;
+  }
+
+  async resumeAfterDisputeResolution(paymentId: string): Promise<void> {
+    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    if (!payment?.settlementId) return;
+    const linkedPayments = await this.paymentsRepo.find({ where: { settlementId: payment.settlementId } });
+    if (await this.hasActiveDispute(linkedPayments.map((item) => item.id))) return;
+    const settlement = await this.settlementsRepo.findOne({ where: { id: payment.settlementId } });
+    if (settlement?.status === SettlementStatus.PROCESSING) await this.enqueueSettlement(settlement.id);
   }
 
   async approveSettlement(settlementId: string, adminId: string): Promise<Settlement> {

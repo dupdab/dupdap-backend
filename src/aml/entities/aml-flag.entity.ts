@@ -34,6 +34,9 @@ export class AmlFlag {
   @Column({ type: 'enum', enum: AmlFlagStatus, default: AmlFlagStatus.PENDING })
   status: AmlFlagStatus;
 
+  @Column({ type: 'timestamp' })
+  slaDeadline: Date;
+
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, any>;
 
@@ -44,7 +47,7 @@ export class AmlFlag {
   reviewedAt: Date;
 
   @Column({ nullable: true })
-  reviewNote: string;
+  reviewNote: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -1,4 +1,4 @@
-import { Controller, Param, Patch, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Param, Patch, Body, UseGuards, Request, Get } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ExtendApiKeyExpiryDto } from './dto/extend-api-key-expiry.dto';
+import { KycStatus } from './entities/merchant.entity';
 
 @ApiTags('admin/merchants')
 @ApiBearerAuth()
@@ -20,6 +21,12 @@ import { ExtendApiKeyExpiryDto } from './dto/extend-api-key-expiry.dto';
 @Controller({ path: 'admin/merchants', version: '1' })
 export class MerchantsAdminController {
   constructor(private readonly merchantsService: MerchantsService) {}
+
+  @Get('kyc/pending') pendingKyc() { return this.merchantsService.listPendingKyc(); }
+
+  @Patch(':id/kyc') reviewKyc(@Param('id') id: string, @Body('status') status: KycStatus) {
+    return this.merchantsService.reviewKyc(id, status);
+  }
 
   @Patch(':id/fee')
   @ApiOperation({ summary: 'Set custom fee rate for a merchant' })

@@ -6,9 +6,11 @@ import { AmlService } from './aml.service';
 import { AmlController } from './aml.controller';
 import { Payment } from '../payments/entities/payment.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PrometheusModule } from '../prometheus/prometheus.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AmlFlag, Payment]), ConfigModule, NotificationsModule],
+  imports: [TypeOrmModule.forFeature([AmlFlag, Payment]), ConfigModule, NotificationsModule, PrometheusModule, EmailModule],
   providers: [AmlService],
   controllers: [AmlController],
   exports: [AmlService],

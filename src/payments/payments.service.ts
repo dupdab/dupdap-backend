@@ -18,6 +18,7 @@ import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
+import { KycStatus } from '../merchants/entities/merchant.entity';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -101,6 +102,11 @@ export class PaymentsService {
   }
 
   async create(merchantId: string, dto: CreatePaymentDto): Promise<Payment> {
+    const merchant = await this.merchants.findOne(merchantId);
+    const unverifiedLimit = Number(process.env.KYC_UNVERIFIED_PAYMENT_LIMIT_USD ?? 100);
+    if (merchant.kycStatus !== KycStatus.VERIFIED && Number(dto.amountUsd) > unverifiedLimit) {
+      throw new BadRequestException(`Unverified merchants may create test payments up to $${unverifiedLimit}`);
+    }
     // Enforce per-merchant rolling 24h transaction limits (#553).
     await this.txLimits?.checkAndIncrement(merchantId);
 
@@ -226,6 +232,11 @@ export class PaymentsService {
     merchantId: string,
     dto: BatchCreatePaymentDto,
   ): Promise<BatchPaymentResultDto> {
+    const merchant = await this.merchants.findOne(merchantId);
+    const unverifiedLimit = Number(process.env.KYC_UNVERIFIED_PAYMENT_LIMIT_USD ?? 100);
+    if (merchant.kycStatus !== KycStatus.VERIFIED && dto.payments.some((p) => Number(p.amountUsd) > unverifiedLimit)) {
+      throw new BadRequestException(`Unverified merchants may create test payments up to $${unverifiedLimit}`);
+    }
     const { payments: items } = dto;
 
     // Enforce per-merchant rolling 24h transaction limits (#553).

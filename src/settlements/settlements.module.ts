@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { QueueModule } from '../queues/queue.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { MerchantBankAccount } from '../merchants/entities/merchant-bank-account.entity';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
 import { SettlementsService } from './settlements.service';
 import { SettlementsController, PartnerCallbackController } from './settlements.controller';
@@ -18,7 +19,7 @@ import { RetryModule } from '../retry/retry.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Settlement, Payment]),
+    TypeOrmModule.forFeature([Settlement, Payment, MerchantBankAccount]),
     AdminAlertModule,
     WebhooksModule,
     CacheModule,

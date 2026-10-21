@@ -34,6 +34,8 @@ export enum SettlementFrequency {
   WEEKLY = 'WEEKLY',
 }
 
+export enum KycStatus { UNVERIFIED = 'UNVERIFIED', PENDING = 'PENDING', VERIFIED = 'VERIFIED', REJECTED = 'REJECTED' }
+
 /**
  * Maps a merchant's country to the fiat currency used for its settlements.
  * Falls back to USD for unknown/missing countries so settlements are never
@@ -97,6 +99,12 @@ export class Merchant {
 
   @Column({ type: 'enum', enum: MerchantStatus, default: MerchantStatus.PENDING })
   status: MerchantStatus;
+
+  @Column({ type: 'enum', enum: KycStatus, enumName: 'merchants_kyc_status_enum', default: KycStatus.UNVERIFIED })
+  kycStatus: KycStatus;
+
+  @Column({ type: 'jsonb', nullable: true })
+  kycDocuments: Array<{ name: string; mimeType: string; data: string }> | null;
 
   @Column({ type: 'enum', enum: MerchantRole, default: MerchantRole.MERCHANT })
   role: MerchantRole;
