@@ -16,12 +16,14 @@ export enum NotificationChannel {
   PUSH = 'push',
   IN_APP = 'in_app',
   SMS = 'sms',
+  WEBHOOK = 'webhook',
 }
 
 export enum NotificationEventType {
   PAYMENT_CONFIRMED = 'payment.confirmed',
   PAYMENT_SETTLED = 'payment.settled',
   SETTLEMENT_FAILED = 'settlement.failed',
+  PAYMENT_FAILED = 'payment.failed',
 }
 
 @Entity('notification_preferences')
