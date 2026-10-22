@@ -50,6 +50,7 @@ export class BlockchainWalletService {
       stellarAddress: publicKey,
       encryptedSecretKey: secretKey,
       iv: null,
+      keyVersion: this.encryptionService.keyVersion,
     });
     const saved = await this.walletRepo.save(wallet);
 
@@ -138,5 +139,46 @@ export class BlockchainWalletService {
         'Unable to decrypt wallet secret. Security team has been notified.',
       );
     }
+  }
+
+  // ── Key rotation (#444) ────────────────────────────────────────────────────
+
+  async reencryptWallets(actorId: string): Promise<{
+    rotated: number;
+    skipped: number;
+    keyVersion: number;
+  }> {
+    const wallets = await this.walletRepo.find();
+    const targetVersion = this.encryptionService.keyVersion;
+    let rotated = 0;
+    let skipped = 0;
+
+    for (const wallet of wallets) {
+      if (!wallet.encryptedSecretKey) {
+        skipped += 1;
+        continue;
+      }
+      if (wallet.keyVersion === targetVersion) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        const { ciphertext, keyVersion } = this.encryptionService.reencrypt(
+          wallet.encryptedSecretKey,
+        );
+        wallet.encryptedSecretKey = ciphertext;
+        wallet.keyVersion = keyVersion;
+        await this.walletRepo.save(wallet);
+        rotated += 1;
+      } catch (error) {
+        this.logger.error(
+          `Failed to re-encrypt wallet ${wallet.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        skipped += 1;
+      }
+    }
+
+    return { rotated, skipped, keyVersion: targetVersion };
   }
 }

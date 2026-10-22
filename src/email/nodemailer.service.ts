@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, Logger, Inject, OnModuleInit, Optional, NotFoundException } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import * as Handlebars from 'handlebars';
@@ -102,7 +102,7 @@ export class NodemailerService implements OnModuleInit {
   private readTemplate(filename: string): string {
     const filePath = path.join(TEMPLATES_DIR, filename);
     if (!fs.existsSync(filePath)) {
-      throw new Error(`Email template not found: ${filename}`);
+      throw new NotFoundException(`Email template not found: ${filename}`);
     }
     return fs.readFileSync(filePath, 'utf8');
   }

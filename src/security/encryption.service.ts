@@ -1,31 +1,63 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
-const ENCRYPTED_PREFIX = 'encv1';
+const ENCRYPTED_PREFIX = 'env1';
 const GCM_IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 
 let diManagedInstance: EncryptionService | null = null;
 
+/**
+ * Parses the active 32-byte encryption key from ENCRYPTION_KEY.
+ * Falls back to ENCRYPTION_KEY_PREVIOUS for decrypting records encrypted
+ * under a rotated (previous) key during a key-rotation window.
+ */
+function resolveKey(envName: string): Buffer {
+  const rawKey = process.env[envName];
+  if (!rawKey) {
+    throw new Error(`${envName} is not set`);
+  }
+
+  const utf8Key = Buffer.from(rawKey, 'utf8');
+  if (utf8Key.length === 32) {
+    return utf8Key;
+  }
+
+  const hexKey = /^[a-fA-F0-9]{64}$/.test(rawKey)
+    ? Buffer.from(rawKey, 'hex')
+    : null;
+  if (hexKey && hexKey.length === 32) {
+    return hexKey;
+  }
+
+  const base64Key = /^[A-Za-z0-9+/]+={0,2}$/.test(rawKey)
+    ? Buffer.from(rawKey, 'base64')
+    : null;
+  if (base64Key && base64Key.length === 32) {
+    return base64Key;
+  }
+
+  throw new Error(
+    `${envName} must resolve to exactly 32 bytes (raw utf8, base64, or hex)`,
+  );
+}
+
 @Injectable()
 export class EncryptionService {
   private readonly logger = new Logger(EncryptionService.name);
   private readonly key: Buffer;
+  private readonly previousKey: Buffer | null;
+  readonly keyVersion: number;
 
   constructor() {
-    this.key = this.resolveKey();
+    this.key = resolveKey('ENCRYPTION_KEY');
+    this.previousKey = this.resolveOptionalKey('ENCRYPTION_KEY_PREVIOUS');
+    this.keyVersion = Number(
+      process.env.ENCRYPTION_KEY_VERSION ?? 1,
+    );
     diManagedInstance = this;
   }
 
-  /**
-   * Returns the Nest DI-managed instance of EncryptionService.
-   *
-   * TypeORM column transformers are plain functions with no access to Nest's
-   * DI container, so they need a way to reach the single DI-managed instance
-   * rather than constructing a parallel one. This reference is set once when
-   * Nest instantiates the service and is the only instance used for encryption
-   * and decryption across the app.
-   */
   static getInstance(): EncryptionService {
     if (!diManagedInstance) {
       throw new Error(
@@ -77,7 +109,9 @@ export class EncryptionService {
       throw new Error('Invalid encrypted payload components');
     }
 
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv);
+    const key = this.previousKey ?? this.key;
+
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(authTag);
     const plaintext = Buffer.concat([
       decipher.update(payload),
@@ -96,9 +130,24 @@ export class EncryptionService {
     const authTag = Buffer.from(authTagHex, 'hex');
     const encrypted = Buffer.from(encryptedHex, 'hex');
 
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv);
+    const key = this.previousKey ?? this.key;
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(authTag);
     return decipher.update(encrypted) + decipher.final('utf8');
+  }
+
+  /**
+   * Re-encrypts a ciphertext produced under an older key version using the
+   * current active key. Returns the new ciphertext and the current keyVersion.
+   * Throws if the payload cannot be decrypted with either the current or
+   * previous key.
+   */
+  reencrypt(ciphertext: string): { ciphertext: string; keyVersion: number } {
+    const plaintext = this.decrypt(ciphertext);
+    return {
+      ciphertext: this.encrypt(plaintext),
+      keyVersion: this.keyVersion,
+    };
   }
 
   logDecryptionFailure(fieldName: string, error: unknown): void {
@@ -108,33 +157,11 @@ export class EncryptionService {
     );
   }
 
-  private resolveKey(): Buffer {
-    const rawKey = process.env.ENCRYPTION_KEY;
-    if (!rawKey) {
-      throw new Error('ENCRYPTION_KEY is not set');
+  private resolveOptionalKey(envName: string): Buffer | null {
+    try {
+      return resolveKey(envName);
+    } catch {
+      return null;
     }
-
-    const utf8Key = Buffer.from(rawKey, 'utf8');
-    if (utf8Key.length === 32) {
-      return utf8Key;
-    }
-
-    const hexKey = /^[a-fA-F0-9]{64}$/.test(rawKey)
-      ? Buffer.from(rawKey, 'hex')
-      : null;
-    if (hexKey && hexKey.length === 32) {
-      return hexKey;
-    }
-
-    const base64Key = /^[A-Za-z0-9+/]+={0,2}$/.test(rawKey)
-      ? Buffer.from(rawKey, 'base64')
-      : null;
-    if (base64Key && base64Key.length === 32) {
-      return base64Key;
-    }
-
-    throw new Error(
-      'ENCRYPTION_KEY must resolve to exactly 32 bytes (raw utf8, base64, or hex)',
-    );
   }
 }

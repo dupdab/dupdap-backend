@@ -34,6 +34,10 @@ export class BlockchainWallet {
   @Column({ type: 'varchar', nullable: true })
   iv: string | null;
 
+  /** Key version under which encryptedSecretKey was last encrypted (for rotation) */
+  @Column({ type: 'int', default: 1 })
+  keyVersion: number;
+
   /** USDC balance stored as string to avoid float precision loss */
   @Column({ type: 'varchar', default: '0' })
   balanceUsdc: string;

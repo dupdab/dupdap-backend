@@ -14,7 +14,9 @@ import { RatesModule } from '../rates/rates.module';
 import { CacheModule } from '../cache/cache.module';
 import { Settlement } from '../settlements/entities/settlement.entity';
 import { StellarModule } from '../stellar/stellar.module';
+import { BlockchainWalletModule } from '../blockchain-wallet/blockchain-wallet.module';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
+import { EncryptionAdminController } from './encryption-admin.controller';
 
 @Module({
   imports: [
@@ -31,8 +33,9 @@ import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
     RatesModule,
     CacheModule,
     StellarModule,
+    BlockchainWalletModule,
   ],
-  controllers: [AdminController, CronAdminController],
+  controllers: [AdminController, CronAdminController, EncryptionAdminController],
   providers: [AdminService, IpAllowlistGuard],
   exports: [AdminService, TypeOrmModule],
 })

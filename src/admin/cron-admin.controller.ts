@@ -10,6 +10,8 @@ import { CronJobRegistry } from '../cron/cron-job.registry';
 
 interface JobStatusDto {
   jobName: string;
+  schedule?: string;
+  nextRun?: Date;
   lastRun?: {
     status: CronJobStatus;
     completedAt?: Date;
@@ -54,6 +56,7 @@ export class CronAdminController {
   @ApiOperation({ summary: 'List cron jobs status' })
   async listJobs(): Promise<JobStatusDto[]> {
     const registered = this.jobRegistry.getRegisteredJobs();
+    const schedules = this.jobRegistry.getJobSchedules();
     const statuses: JobStatusDto[] = [];
 
     for (const jobName of registered) {
@@ -62,8 +65,12 @@ export class CronAdminController {
         order: { startedAt: 'DESC' },
       });
 
+      const scheduleInfo = schedules.get(jobName);
+
       statuses.push({
         jobName,
+        schedule: scheduleInfo?.schedule,
+        nextRun: scheduleInfo?.nextRun,
         lastRun: lastRun ? {
           status: lastRun.status,
           completedAt: lastRun.completedAt,
