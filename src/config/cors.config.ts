@@ -1,3 +1,5 @@
+import { InternalServerErrorException } from '@nestjs/common';
+
 /** CORS origin helpers (#542). Pure functions for unit testing. */
 
 export function parseAllowedOrigins(raw?: string): string[] {
@@ -21,10 +23,14 @@ export function isOriginAllowed(origin: string | undefined, allowedOrigins: stri
 export function validateCorsConfig(nodeEnv: string | undefined, allowedOrigins: string[]): void {
   if (nodeEnv === 'production') {
     if (allowedOrigins.length === 0) {
-      throw new Error('CORS misconfigured: ALLOWED_ORIGINS must be set in production');
+      throw new InternalServerErrorException(
+        'CORS misconfigured: ALLOWED_ORIGINS must be set in production',
+      );
     }
     if (allowedOrigins.includes('*')) {
-      throw new Error('CORS misconfigured: wildcard "*" is not allowed in production');
+      throw new InternalServerErrorException(
+        'CORS misconfigured: wildcard "*" is not allowed in production',
+      );
     }
   }
 }

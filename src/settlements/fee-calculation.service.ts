@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 
 export interface FeeResult {
   feeUsd: number;
@@ -25,7 +25,9 @@ const FEE_TIERS: FeeTier[] = [
 export class FeeCalculationService {
   async calculateFee(merchantId: string, amountUsd: number): Promise<FeeResult> {
     if (!Number.isFinite(amountUsd) || amountUsd < 0) {
-      throw new Error(`Invalid amount for merchant ${merchantId}: ${amountUsd}`);
+      throw new BadRequestException(
+        `Invalid amount for merchant ${merchantId}: ${amountUsd}`,
+      );
     }
 
     const tier = this.resolveTier(amountUsd);

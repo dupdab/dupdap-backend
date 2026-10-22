@@ -1,0 +1,37 @@
+<h1 style="font-size:20px;margin:0 0 16px;">Settlement Approved</h1>
+
+<p>Hi {{merchantName}},</p>
+
+<p>
+  Your settlement <strong>{{settlementId}}</strong> has been approved by our
+  settlement team and is now being processed.
+</p>
+
+<table style="margin:16px 0;border-collapse:collapse;font-size:14px;">
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Settlement ID</td>
+    <td style="padding:4px 0;"><strong>{{settlementId}}</strong></td>
+  </tr>
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Gross amount</td>
+    <td style="padding:4px 0;">${{totalAmountUsd}}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Fee</td>
+    <td style="padding:4px 0;">${{feeAmountUsd}}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Net amount</td>
+    <td style="padding:4px 0;">${{netAmountUsd}}</td>
+  </tr>
+  {{#if fiatCurrency}}
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Currency</td>
+    <td style="padding:4px 0;">{{fiatCurrency}}</td>
+  </tr>
+  {{/if}}
+</table>
+
+<p>You will receive another email once the settlement has been paid out.</p>
+
+<p>— The DupDub Settlement Team</p>

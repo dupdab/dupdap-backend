@@ -1,22 +1,45 @@
-import { ApiOperation as AdminOperation, ApiResponse as AdminResponse, ApiBearerAuth as AdminBearer } from '@nestjs/swagger';
+import {
+  ApiOperation as AdminOperation,
+  ApiResponse as AdminResponse,
+  ApiBearerAuth as AdminBearer,
+} from '@nestjs/swagger';
 import { ApiErrors } from '../common/api-errors.decorator';
-import { Controller, Get, Post, Param, Query, UseGuards, BadRequestException, InternalServerErrorException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Query,
+  UseGuards,
+  BadRequestException,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { CronJobLog, CronJobStatus } from '../cron/entities/cron-job-log.entity';
 import { CronJobRegistry } from '../cron/cron-job.registry';
+import { Auditable } from '../audit/decorators/auditable.decorator';
+
+interface JobLastRunDto {
+  status: CronJobStatus;
+  startedAt?: Date;
+  completedAt?: Date;
+  durationMs?: number;
+  errorMessage?: string;
+  itemsProcessed?: number;
+}
 
 interface JobStatusDto {
   jobName: string;
-  lastRun?: {
-    status: CronJobStatus;
-    completedAt?: Date;
-    durationMs?: number;
-    errorMessage?: string;
-    itemsProcessed?: number;
-  };
+  /** Cron expression the job runs on. */
+  schedule: string;
+  description?: string;
+  lastRun?: JobLastRunDto;
+  /** Next execution time, or null when the job is not scheduled. */
+  nextRun: Date | null;
 }
 
 interface JobHistoryDto {
@@ -35,6 +58,7 @@ interface PaginatedHistoryDto {
   total: number;
   page: number;
   limit: number;
+  totalPages: number;
 }
 
 @ApiTags('admin.crons')
@@ -51,26 +75,36 @@ export class CronAdminController {
 
   @AdminResponse({ status: 200, description: 'Successful response' })
   @Get()
-  @ApiOperation({ summary: 'List cron jobs status' })
+  @ApiOperation({
+    summary: 'List cron jobs',
+    description:
+      'Returns every registered cron job with its schedule, the last recorded run and the next scheduled run.',
+  })
   async listJobs(): Promise<JobStatusDto[]> {
-    const registered = this.jobRegistry.getRegisteredJobs();
+    const definitions = this.jobRegistry.getJobDefinitions();
     const statuses: JobStatusDto[] = [];
 
-    for (const jobName of registered) {
+    for (const definition of definitions) {
       const lastRun = await this.logRepo.findOne({
-        where: { jobName },
+        where: { jobName: definition.name },
         order: { startedAt: 'DESC' },
       });
 
       statuses.push({
-        jobName,
-        lastRun: lastRun ? {
-          status: lastRun.status,
-          completedAt: lastRun.completedAt,
-          durationMs: lastRun.durationMs,
-          errorMessage: lastRun.errorMessage,
-          itemsProcessed: lastRun.itemsProcessed,
-        } : undefined,
+        jobName: definition.name,
+        schedule: definition.schedule,
+        description: definition.description,
+        lastRun: lastRun
+          ? {
+              status: lastRun.status,
+              startedAt: lastRun.startedAt,
+              completedAt: lastRun.completedAt,
+              durationMs: lastRun.durationMs,
+              errorMessage: lastRun.errorMessage,
+              itemsProcessed: lastRun.itemsProcessed,
+            }
+          : undefined,
+        nextRun: this.jobRegistry.getNextRun(definition.name),
       });
     }
 
@@ -79,9 +113,14 @@ export class CronAdminController {
 
   @AdminResponse({ status: 200, description: 'Successful response' })
   @Get(':jobName/history')
-  @ApiOperation({ summary: 'Job history' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiOperation({
+    summary: 'Job run history',
+    description:
+      'Paginated run history for a cron job, including status, duration and error message of every run.',
+  })
+  @ApiParam({ name: 'jobName', description: 'Cron job name' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (1-based)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (max 100)' })
   async getHistory(
     @Param('jobName') jobName: string,
     @Query('page') page = '1',
@@ -99,7 +138,7 @@ export class CronAdminController {
     });
 
     return {
-      items: items.map(log => ({
+      items: items.map((log) => ({
         id: log.id,
         jobName: log.jobName,
         status: log.status,
@@ -112,12 +151,19 @@ export class CronAdminController {
       total,
       page: pageNum,
       limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
     };
   }
 
   @AdminResponse({ status: 201, description: 'Successful response' })
   @Post(':jobName/trigger')
-  @ApiOperation({ summary: 'Manual trigger' })
+  @ApiOperation({
+    summary: 'Manual trigger',
+    description:
+      'Runs the job immediately. The run is persisted in the cron job history like a scheduled run.',
+  })
+  @ApiParam({ name: 'jobName', description: 'Cron job name' })
+  @Auditable({ action: 'CRON_JOB_TRIGGERED', resource: 'cron-job' })
   async triggerJob(@Param('jobName') jobName: string) {
     const registered = this.jobRegistry.getRegisteredJobs();
     if (!registered.includes(jobName)) {
@@ -128,9 +174,12 @@ export class CronAdminController {
       await this.jobRegistry.trigger(jobName);
       return { triggered: true, jobName };
     } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('not found')) {
-        throw new BadRequestException(message);
+        throw new NotFoundException(message);
       }
       throw new InternalServerErrorException(`Failed to trigger job: ${message}`);
     }

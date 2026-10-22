@@ -1,4 +1,5 @@
 import { ValueTransformer } from 'typeorm';
+import { InternalServerErrorException } from '@nestjs/common';
 import { EncryptionService } from './encryption.service';
 import { DecryptionFailedException } from './decryption-failed.exception';
 
@@ -22,7 +23,7 @@ export function setEncryptionServiceInstance(
 
 function getEncryptionService(): EncryptionService {
   if (!encryptionServiceInstance) {
-    throw new Error(
+    throw new InternalServerErrorException(
       'EncryptionService has not been registered yet. Ensure the security module is initialized before using encrypted columns.',
     );
   }

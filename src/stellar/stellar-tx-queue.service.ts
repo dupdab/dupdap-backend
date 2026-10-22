@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 
@@ -58,7 +58,7 @@ export class StellarTxQueueService implements OnModuleInit {
     buildTx: (account: StellarSdk.Horizon.ServerApi.AccountRecord) => T,
   ): Promise<string> {
     if (!this.keypair) {
-      throw new Error('STELLAR_ACCOUNT_SECRET not configured');
+      throw new InternalServerErrorException('STELLAR_ACCOUNT_SECRET not configured');
     }
 
     const publicKey = this.keypair.publicKey();

@@ -13,6 +13,7 @@ import { UptimeHeartbeatService } from './uptime-heartbeat.service';
 import { ApiKeyExpiryService } from './api-key-expiry.service';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { EmailModule } from '../email/email.module';
+import { BlockchainWalletModule } from '../blockchain-wallet/blockchain-wallet.module';
 
 const CRON_QUEUE = 'cron';
 
@@ -23,6 +24,7 @@ const CRON_QUEUE = 'cron';
     forwardRef(() => StellarModule),
     forwardRef(() => SettlementsModule),
     forwardRef(() => QueueModule),
+    forwardRef(() => BlockchainWalletModule),
     EmailModule,
     BullModule.registerQueue({ name: CRON_QUEUE }),
   ],

@@ -1,6 +1,6 @@
 import { ApiOperation as AdminOperation, ApiResponse as AdminResponse } from '@nestjs/swagger';
 import { ApiErrors } from '../common/api-errors.decorator';
-import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -79,7 +79,7 @@ export class QueueAdminController {
       case QUEUE_NAMES.sorobanEventDlq:
         return this.sorobanEventDlqQueue;
       default:
-        throw new Error(`Unknown queue: ${name}`);
+        throw new BadRequestException(`Unknown queue: ${name}`);
     }
   }
 }

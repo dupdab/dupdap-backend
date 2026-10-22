@@ -1,4 +1,11 @@
-import { Injectable, Logger, Inject, OnModuleInit, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  Inject,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import * as Handlebars from 'handlebars';
@@ -19,6 +26,9 @@ const SUBJECTS: Record<string, string> = {
   welcome: 'Welcome to DupDub',
   'payment-confirmed': 'Payment Confirmed',
   'settlement-completed': 'Settlement Completed',
+  'settlement-approved': 'Settlement Approved',
+  'settlement-rejected': 'Settlement Rejected',
+  'settlement-status': 'Settlement Update',
   'payment-failed': 'Payment Failed',
   'analytics-report-ready': 'Your Analytics Report Is Ready',
 };
@@ -102,7 +112,7 @@ export class NodemailerService implements OnModuleInit {
   private readTemplate(filename: string): string {
     const filePath = path.join(TEMPLATES_DIR, filename);
     if (!fs.existsSync(filePath)) {
-      throw new Error(`Email template not found: ${filename}`);
+      throw new InternalServerErrorException(`Email template not found: ${filename}`);
     }
     return fs.readFileSync(filePath, 'utf8');
   }
