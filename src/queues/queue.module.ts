@@ -38,6 +38,6 @@ import { QueueMetric } from './queue-metric.entity';
     SorobanEventDlqProcessor,
     QueueMetricsService,
   ],
-  exports: [BullModule],
+  exports: [BullModule, QueueMetricsService],
 })
 export class QueueModule {}

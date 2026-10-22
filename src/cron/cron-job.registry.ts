@@ -1,4 +1,11 @@
-import { Injectable, Inject, forwardRef, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  Optional,
+  forwardRef,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { NotificationService } from '../notifications/notification.service';
 import { SorobanEventIndexer } from '../stellar/soroban-event-indexer.service';
 import { SettlementsService } from '../settlements/settlements.service';
@@ -6,6 +13,7 @@ import { UptimeHeartbeatService } from './uptime-heartbeat.service';
 import { QueueMetricsService } from '../queues/queue-metrics.service';
 import { CronJobService } from './cron-job.service';
 import { getNextCronRun } from './cron-schedule.util';
+import { WalletKeyRotationService } from '../blockchain-wallet/wallet-key-rotation.service';
 
 /** A cron job that can be listed, inspected and triggered from the admin API. */
 export interface CronJobDefinition {
@@ -30,15 +38,24 @@ export class CronJobRegistry {
   private readonly jobs: Map<string, CronJobDefinition> = new Map();
 
   constructor(
+    @Optional()
     @Inject(forwardRef(() => NotificationService))
     private notificationService?: NotificationService,
+    @Optional()
     @Inject(forwardRef(() => SorobanEventIndexer))
     private sorobanIndexer?: SorobanEventIndexer,
+    @Optional()
     @Inject(forwardRef(() => SettlementsService))
     private settlementsService?: SettlementsService,
+    @Optional()
     private uptimeHeartbeat?: UptimeHeartbeatService,
+    @Optional()
     private queueMetrics?: QueueMetricsService,
+    @Optional()
     private cronJobService?: CronJobService,
+    @Optional()
+    @Inject(forwardRef(() => WalletKeyRotationService))
+    private walletKeyRotation?: WalletKeyRotationService,
   ) {
     this.setupJobs();
   }
@@ -86,6 +103,15 @@ export class CronJobRegistry {
         schedule: '* * * * *',
         description: 'Checks Bull queue depth/latency against the alerting thresholds.',
         run: () => this.queueMetrics!.collect(),
+      });
+    }
+    if (this.walletKeyRotation) {
+      this.register({
+        name: 'wallet-key-rotation',
+        schedule: '0 3 * * *',
+        description:
+          'Re-encrypts Stellar wallet secrets with the active encryption key (#444).',
+        run: () => this.walletKeyRotation!.rotateWallets(),
       });
     }
   }
@@ -158,6 +184,7 @@ export class CronJobRegistry {
       'batch-small-confirmed-payments',
       'uptime-heartbeat',
       'queue-metrics-check',
+      'wallet-key-rotation',
     ].includes(jobName);
   }
 }

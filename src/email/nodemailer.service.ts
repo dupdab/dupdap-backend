@@ -26,6 +26,9 @@ const SUBJECTS: Record<string, string> = {
   welcome: 'Welcome to DupDub',
   'payment-confirmed': 'Payment Confirmed',
   'settlement-completed': 'Settlement Completed',
+  'settlement-approved': 'Settlement Approved',
+  'settlement-rejected': 'Settlement Rejected',
+  'settlement-status': 'Settlement Update',
   'payment-failed': 'Payment Failed',
   'analytics-report-ready': 'Your Analytics Report Is Ready',
 };

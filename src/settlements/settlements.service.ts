@@ -33,6 +33,14 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+import { randomUUID } from 'crypto';
+import { AuditService } from '../audit/audit.service';
+import {
+  SettlementNotFoundException,
+  SettlementNotPendingApprovalException,
+  SettlementNotRetryableException,
+  SettlementPartnerException,
+} from '../common/exceptions/settlement.exceptions';
 
 export interface PartnerCallbackPayload {
   reference: string;
@@ -75,6 +83,12 @@ const DEFAULT_SETTLEMENT_CURRENCY = 'USD';
 export class SettlementsService {
   private readonly logger = new Logger(SettlementsService.name);
 
+  /** Short lived CSV exports handed out to merchants. */
+  private readonly csvExports = new Map<
+    string,
+    { fileName: string; fileData: string; expiresAt: number }
+  >();
+
   constructor(
     @InjectRepository(Settlement)
     private settlementsRepo: Repository<Settlement>,
@@ -93,6 +107,7 @@ export class SettlementsService {
     private settlementQueue: Queue,
     private cronJobService: CronJobService,
     private retryConfig: RetryConfigService,
+    private auditService: AuditService,
   ) {}
 
   private invalidateAnalyticsForMerchant(merchantId: string): void {
@@ -385,12 +400,12 @@ export class SettlementsService {
     }
   }
 
-  private async executeFiatTransfer(settlement: Settlement): Promise<void> {
+  async executeFiatTransfer(settlement: Settlement): Promise<void> {
     const partnerUrl = this.config.get<string>('SETTLEMENT_PARTNER_URL');
     const partnerApiKey = this.config.get<string>('SETTLEMENT_PARTNER_API_KEY');
 
     if (!partnerUrl || !partnerApiKey) {
-      throw new Error('Settlement partner is not configured');
+      throw new SettlementPartnerException();
     }
 
     await axios.post(
@@ -448,16 +463,20 @@ export class SettlementsService {
     }
   }
 
+  /**
+   * Approves a settlement that is waiting for a SUPERADMIN decision (#445).
+   *
+   * The settlement moves to `processing`, the fiat transfer is enqueued and the
+   * merchant is notified by email. Every decision is written to the audit log.
+   */
   async approveSettlement(settlementId: string, adminId: string): Promise<Settlement> {
     const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
     if (!settlement) {
-      throw new NotFoundException(`Settlement ${settlementId} not found`);
+      throw new SettlementNotFoundException(settlementId);
     }
 
     if (settlement.status !== SettlementStatus.PENDING_APPROVAL) {
-      throw new BadRequestException(
-        'This settlement is not awaiting approval. Refresh its status before taking action.',
-      );
+      throw new SettlementNotPendingApprovalException(settlement.status);
     }
 
     settlement.status = SettlementStatus.PROCESSING;
@@ -466,9 +485,26 @@ export class SettlementsService {
     const saved = await this.settlementsRepo.save(settlement);
 
     await this.enqueueSettlement(saved.id);
+
+    await this.auditService.log({
+      actor: adminId,
+      action: 'SETTLEMENT_APPROVED',
+      resource: `settlement:${saved.id}`,
+      before: { status: SettlementStatus.PENDING_APPROVAL },
+      after: { status: saved.status, approvedAt: saved.approvedAt },
+    });
+
+    await this.notifyMerchantOfDecision(saved, 'settlement-approved');
+
     return saved;
   }
 
+  /**
+   * Rejects a settlement that is waiting for a SUPERADMIN decision (#445).
+   *
+   * The settlement is marked `rejected`, the reason is stored and shown to the
+   * merchant and every decision is written to the audit log.
+   */
   async rejectSettlement(
     settlementId: string,
     adminId: string,
@@ -476,14 +512,82 @@ export class SettlementsService {
   ): Promise<Settlement> {
     const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
     if (!settlement) {
-      throw new NotFoundException(`Settlement ${settlementId} not found`);
+      throw new SettlementNotFoundException(settlementId);
+    }
+
+    if (settlement.status !== SettlementStatus.PENDING_APPROVAL) {
+      throw new SettlementNotPendingApprovalException(settlement.status);
     }
 
     settlement.status = SettlementStatus.REJECTED;
     settlement.rejectedBy = adminId;
     settlement.rejectedAt = new Date();
     settlement.rejectionReason = reason;
-    return this.settlementsRepo.save(settlement);
+    const saved = await this.settlementsRepo.save(settlement);
+
+    await this.auditService.log({
+      actor: adminId,
+      action: 'SETTLEMENT_REJECTED',
+      resource: `settlement:${saved.id}`,
+      before: { status: SettlementStatus.PENDING_APPROVAL },
+      after: { status: saved.status, reason, rejectedAt: saved.rejectedAt },
+    });
+
+    await this.notifyMerchantOfDecision(saved, 'settlement-rejected');
+
+    return saved;
+  }
+
+  /** Notifies the merchant about an approval/rejection decision. */
+  private async notifyMerchantOfDecision(
+    settlement: Settlement,
+    templateAlias: 'settlement-approved' | 'settlement-rejected',
+  ): Promise<void> {
+    let recipient: string | null = null;
+    let merchantName = 'there';
+
+    try {
+      const merchant = await this.merchantsService.findOne(settlement.merchantId);
+      recipient = merchant?.email ?? null;
+      merchantName = merchant?.businessName ?? merchant?.email ?? 'there';
+    } catch (error) {
+      this.logger.warn(
+        `Could not resolve merchant ${settlement.merchantId} for settlement notification: ${(error as Error).message}`,
+      );
+    }
+
+    if (!recipient) {
+      this.logger.warn(
+        `No merchant email for settlement ${settlement.id}; skipping ${templateAlias} notification`,
+      );
+      return;
+    }
+
+    try {
+      await this.emailService.queue(
+        recipient,
+        templateAlias,
+        {
+          subject:
+            templateAlias === 'settlement-approved'
+              ? `Settlement ${settlement.id} approved`
+              : `Settlement ${settlement.id} rejected`,
+          merchantName,
+          settlementId: settlement.id,
+          status: settlement.status,
+          totalAmountUsd: settlement.totalAmountUsd,
+          feeAmountUsd: settlement.feeAmountUsd,
+          netAmountUsd: settlement.netAmountUsd,
+          fiatCurrency: settlement.fiatCurrency ?? null,
+          rejectionReason: settlement.rejectionReason ?? null,
+        },
+        settlement.merchantId,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to queue ${templateAlias} email for settlement ${settlement.id}: ${(error as Error).message}`,
+      );
+    }
   }
 
   async findForMerchant(
@@ -557,26 +661,247 @@ export class SettlementsService {
     return [header, ...lines].join('\n');
   }
 
+  /**
+   * Builds the CSV export of a settlement and emails it to the merchant.
+   * Used by the export queue processor.
+   */
+  async generateCsvExport(settlementExportId: string): Promise<void> {
+    const settlement = await this.settlementsRepo.findOne({
+      where: { id: settlementExportId },
+    });
+    if (!settlement) {
+      throw new SettlementNotFoundException(settlementExportId);
+    }
+
+    const csv = await this.exportCsvForMerchant(settlement.merchantId);
+
+    let recipient: string | null = null;
+    let merchantName = 'there';
+    try {
+      const merchant = await this.merchantsService.findOne(settlement.merchantId);
+      recipient = merchant?.email ?? null;
+      merchantName = merchant?.businessName ?? merchant?.email ?? 'there';
+    } catch {
+      recipient = null;
+    }
+
+    if (!recipient) {
+      this.logger.warn(
+        `No merchant email for settlement export ${settlement.id}; skipping email`,
+      );
+      return;
+    }
+
+    await this.emailService.queue(
+      recipient,
+      'settlement-export',
+      {
+        subject: `Settlement export ${settlement.id}`,
+        merchantName,
+        settlementId: settlement.id,
+        csv,
+      },
+      settlement.merchantId,
+    );
+  }
+
+
+  /** Paginated settlement list for a merchant. */
+  async findAll(
+    merchantId: string,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginatedResponseDto<Settlement>> {
+    const safeLimit = Math.max(1, Math.min(100, limit));
+    const [items, total] = await this.settlementsRepo.findAndCount({
+      where: { merchantId },
+      order: { createdAt: 'DESC' },
+      skip: Math.max(0, (page - 1) * safeLimit),
+      take: safeLimit,
+    });
+
+    return PaginatedResponseDto.of(items, total, page, safeLimit);
+  }
+
+  /**
+   * Applies the on-chain settlement completion event emitted by the Soroban
+   * contract (#445) — the settlement is marked completed and the merchant is
+   * notified.
+   */
+  async applySorobanSettlementCompleted(event: {
+    settlementId?: string;
+    reference?: string;
+    partnerReference?: string;
+    txHash?: string;
+  }): Promise<void> {
+    const settlementId = event.settlementId ?? event.reference;
+    if (!settlementId) {
+      this.logger.warn('Received settlement.completed event without a settlement id');
+      return;
+    }
+
+    const settlement = await this.settlementsRepo.findOne({
+      where: { id: settlementId },
+    });
+    if (!settlement) {
+      this.logger.warn(`Received settlement.completed event for unknown settlement ${settlementId}`);
+      return;
+    }
+
+    if (settlement.status === SettlementStatus.COMPLETED) {
+      return;
+    }
+
+    settlement.status = SettlementStatus.COMPLETED;
+    settlement.completedAt = new Date();
+    if (event.partnerReference) {
+      settlement.partnerReference = event.partnerReference;
+    }
+    await this.settlementsRepo.save(settlement);
+    this.invalidateAnalyticsForMerchant(settlement.merchantId);
+
+    await this.webhooks.dispatch(settlement.merchantId, 'settlement.completed', {
+      settlementId: settlement.id,
+    });
+  }
+
+  /**
+   * Builds a CSV export for a merchant. The CSV is returned inline and also
+   * cached behind a short lived token so it can be downloaded later.
+   */
+  async requestMerchantCsvExport(
+    merchantId: string,
+    from?: string,
+    to?: string,
+    _baseUrl?: string,
+  ): Promise<{ csv: string; token?: string; fileName?: string }> {
+    const csv = await this.exportCsvForMerchant(merchantId);
+    const token = randomUUID();
+    const fileName = `settlements-${merchantId}-${Date.now()}.csv`;
+
+    this.csvExports.set(token, {
+      fileName,
+      fileData: csv,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    });
+
+    return { csv, token, fileName };
+  }
+
+  /** Resolves a previously generated CSV export by token. */
+  async getCsvExportByToken(
+    token: string,
+  ): Promise<{ fileName: string; fileData: string }> {
+    const record = this.csvExports.get(token);
+    if (!record || record.expiresAt < Date.now()) {
+      this.csvExports.delete(token);
+      throw new NotFoundException('Export not found or expired');
+    }
+    return { fileName: record.fileName, fileData: record.fileData };
+  }
+
+  /** Builds a minimal PDF receipt for a settlement. */
+  async getReceiptPdf(merchantId: string, settlementId: string): Promise<Buffer> {
+    const settlement = await this.findOneForMerchant(merchantId, settlementId);
+    return this.buildReceiptPdf(settlement);
+  }
+
+  /** Minimal single-page PDF writer — enough for a printable receipt. */
+  private buildReceiptPdf(settlement: Settlement): Buffer {
+    const lines = [
+      'DupDub Settlement Receipt',
+      `Settlement: ${settlement.id}`,
+      `Status: ${settlement.status}`,
+      `Gross amount: USD ${settlement.totalAmountUsd}`,
+      `Fee: USD ${settlement.feeAmountUsd}`,
+      `Net amount: USD ${settlement.netAmountUsd}`,
+      `Created: ${settlement.createdAt?.toISOString() ?? ''}`,
+    ];
+
+    const escape = (value: string) => value.replace(/([\\()])/g, '\\$1');
+    const content = lines
+      .map(
+        (line, index) =>
+          `BT /F1 ${index === 0 ? 16 : 11} Tf 40 ${740 - index * 20} Td (${escape(line)}) Tj ET`,
+      )
+      .join('\n');
+
+    const objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      `<< /Length ${Buffer.byteLength(content, 'utf8')} >>\nstream\n${content}\nendstream`,
+    ];
+
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [];
+    objects.forEach((body, index) => {
+      offsets.push(Buffer.byteLength(pdf, 'utf8'));
+      pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+    });
+
+    const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    for (const offset of offsets) {
+      pdf += `${offset.toString().padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+    return Buffer.from(pdf, 'utf8');
+  }
+
   async findForAdmin(query: AdminSettlementsQueryDto): Promise<PaginatedResponseDto<Settlement>> {
-    const { page = 1, limit = 20, status, merchantId, from, to } = query;
+    const { page = 1, limit = 20, status, merchantId, startDate, endDate } = query;
     const where: Record<string, unknown> = {};
     if (status) where.status = status;
     if (merchantId) where.merchantId = merchantId;
-    if (from && to) where.createdAt = Between(new Date(from), new Date(to));
+    if (startDate && endDate) {
+      where.createdAt = Between(new Date(startDate), new Date(endDate));
+    }
 
     const [items, total] = await this.settlementsRepo.findAndCount({
       where,
+      relations: ['merchant', 'payments'],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
 
+    return PaginatedResponseDto.of(items, total, page, limit);
+  }
+
+  /** Paginated settlement list for the admin API (#445). */
+  async findAllAdmin(query: AdminSettlementsQueryDto): Promise<PaginatedResponseDto<Settlement>> {
+    return this.findForAdmin(query);
+  }
+
+  /**
+   * Re-enqueues a failed settlement for processing (#445). Settlements that
+   * are not failed cannot be retried.
+   */
+  async retrySettlement(
+    settlementId: string,
+  ): Promise<{ success: boolean; message: string; settlement: Settlement }> {
+    const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
+    if (!settlement) {
+      throw new SettlementNotFoundException(settlementId);
+    }
+
+    if (settlement.status !== SettlementStatus.FAILED) {
+      throw new SettlementNotRetryableException(settlement.status);
+    }
+
+    settlement.status = SettlementStatus.PENDING;
+    settlement.failureReason = null as unknown as string;
+    const saved = await this.settlementsRepo.save(settlement);
+
+    await this.enqueueSettlement(saved.id);
+
     return {
-      items,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      success: true,
+      message: `Settlement ${settlementId} re-enqueued for processing.`,
+      settlement: saved,
     };
   }
 
@@ -610,15 +935,23 @@ export class SettlementsService {
     } catch {
       recipient = null;
     }
-    if (recipient) {
-      await this.emailService.sendSettlementStatusEmail(recipient, settlement, feeBreakdown);
+    let emailEnabled = true;
+    try {
+      emailEnabled = await this.notificationPrefs.isEnabled(
+        settlement.merchantId,
+        NotificationChannel.EMAIL,
+        NotificationEventType.SETTLEMENT_FAILED,
+      );
+    } catch {
+      emailEnabled = true;
     }
 
-    await this.notificationPrefs.notify(
-      settlement.merchantId,
-      NotificationEventType.SETTLEMENT_STATUS,
-      NotificationChannel.EMAIL,
-      { settlementId: settlement.id, status: settlement.status },
-    );
+    if (recipient && emailEnabled) {
+      await this.emailService.sendSettlementStatusEmail(
+        recipient,
+        settlement,
+        feeBreakdown as unknown as Record<string, unknown>,
+      );
+    }
   }
 }

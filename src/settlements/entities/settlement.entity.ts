@@ -19,6 +19,7 @@ export enum SettlementStatus {
   PROCESSING = 'processing',
   COMPLETED = 'completed',
   FAILED = 'failed',
+  REJECTED = 'rejected',
 }
 
 @Entity('settlements')
@@ -74,6 +75,17 @@ export class Settlement {
 
   @Column({ nullable: true })
   approvedAt: Date;
+
+  /** Admin that rejected the settlement (#445). */
+  @Column({ nullable: true })
+  rejectedBy: string;
+
+  @Column({ nullable: true })
+  rejectedAt: Date;
+
+  /** Why the settlement was rejected — shown to the merchant. */
+  @Column({ nullable: true, type: 'text' })
+  rejectionReason: string;
 
   @Column({ nullable: true })
   completedAt: Date;

@@ -163,3 +163,92 @@ WHERE job_name = 'db-backup'
 ORDER BY started_at DESC
 LIMIT 10;
 ```
+
+---
+
+# Encryption Key Rotation (#444)
+
+`ENCRYPTION_KEY` encrypts every sensitive column with AES-256-GCM, including
+the Stellar wallet secret (`blockchain_wallets.encryptedSecretKey`). If the key
+leaks, **every** stored secret is compromised, so the key must be rotatable
+without a full restore.
+
+## Key model
+
+| Variable | Meaning |
+|----------|---------|
+| `ENCRYPTION_KEY` | The **active** key. All new encryptions use it. |
+| `ENCRYPTION_KEY_VERSION` | Numeric version of the active key (default `1`). |
+| `ENCRYPTION_KEY_V<n>` | Retired key material for version `<n>`, still accepted for decryption. |
+| `ENCRYPTION_KEY_FALLBACKS` | Alternative way to register retired keys: `"<version>:<key>,<version>:<key>"`. |
+
+Each encrypted wallet record stores the version that produced its ciphertext in
+`blockchain_wallets.keyVersion`, so the rotation job knows which key to read
+it with.
+
+## Rotation procedure
+
+1. **Prepare the new key** (32 bytes, raw utf8 / base64 / hex) in the secrets
+   manager — never in git.
+2. **Register the new key** as the active one and keep the old key available:
+
+   ```bash
+   ENCRYPTION_KEY=<new key>
+   ENCRYPTION_KEY_VERSION=2
+   ENCRYPTION_KEY_V1=<old key>
+   ```
+
+   Deploy this configuration. Old records still decrypt (the service falls
+   back to every registered key) and new records are encrypted with version 2.
+3. **Dry run** — inspect what would change, nothing is written:
+
+   ```bash
+   curl -X POST "$API/admin/security/wallet-keys/rotate" \
+     -H "Authorization: Bearer $SUPERADMIN_TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"dryRun": true}'
+   ```
+
+4. **Run the rotation** (SUPERADMIN only, audited):
+
+   ```bash
+   curl -X POST "$API/admin/security/wallet-keys/rotate" \
+     -H "Authorization: Bearer $SUPERADMIN_TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"batchSize": 100}'
+   ```
+
+   The job reads each record with its recorded key version, re-encrypts it with
+   the active key and bumps `keyVersion`. Records that cannot be decrypted are
+   reported in `failures` and left untouched, so the run is safe to retry.
+   The same job runs automatically every day at 03:00 UTC
+   (`wallet-key-rotation` cron job) and is visible in
+   `GET /admin/crons` together with its run history.
+5. **Verify** that no record is left on the retired key:
+
+   ```sql
+   SELECT "keyVersion", count(*) FROM blockchain_wallets GROUP BY "keyVersion";
+   ```
+
+   Every row must report the active version.
+6. **Retire the old key** once the rotation reports `failed: 0`:
+   remove `ENCRYPTION_KEY_V1` (or the entry in `ENCRYPTION_KEY_FALLBACKS`) and
+   restart the service. Records that were not rotated become unreadable —
+   that is the point of retiring a compromised key.
+7. **Audit trail** — every run writes an `audit_logs` entry with action
+   `WALLET_KEY_ROTATION` (actor, active version, scanned/rotated/skipped/
+   failed counters). Keep those entries as evidence for the incident report.
+
+## Emergency rotation (key suspected compromised)
+
+Skip step 3 and run the rotation immediately with the new key registered as
+active and the compromised key still registered for decryption. If the
+compromised key must be revoked before the rotation finished, rotate first
+and revoke afterwards — otherwise the affected records become unreadable.
+
+## Drill checklist (quarterly)
+
+- [ ] Generate a test key pair and run the dry-run rotation
+- [ ] Confirm `keyVersion` is bumped and the secret still decrypts
+- [ ] Confirm the audit entry and the cron job history entry exist
+- [ ] Remove the test key from the configuration and redeploy

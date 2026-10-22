@@ -1,0 +1,32 @@
+<h1 style="font-size:20px;margin:0 0 16px;">Settlement Rejected</h1>
+
+<p>Hi {{merchantName}},</p>
+
+<p>
+  We are sorry — your settlement <strong>{{settlementId}}</strong> was rejected
+  by our settlement team and has not been paid out.
+</p>
+
+<table style="margin:16px 0;border-collapse:collapse;font-size:14px;">
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Settlement ID</td>
+    <td style="padding:4px 0;"><strong>{{settlementId}}</strong></td>
+  </tr>
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Net amount</td>
+    <td style="padding:4px 0;">${{netAmountUsd}}</td>
+  </tr>
+  {{#if rejectionReason}}
+  <tr>
+    <td style="padding:4px 12px 4px 0;color:#666;">Reason</td>
+    <td style="padding:4px 0;">{{rejectionReason}}</td>
+  </tr>
+  {{/if}}
+</table>
+
+<p>
+  If you believe this was a mistake, reply to this email and our settlement
+  team will review the case.
+</p>
+
+<p>— The DupDub Settlement Team</p>

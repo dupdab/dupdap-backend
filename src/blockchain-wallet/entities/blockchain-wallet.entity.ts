@@ -34,6 +34,14 @@ export class BlockchainWallet {
   @Column({ type: 'varchar', nullable: true })
   iv: string | null;
 
+  /**
+   * Version of the encryption key used to encrypt `encryptedSecretKey` (#444).
+   * A rotation job re-encrypts every wallet with the active key and bumps
+   * this column so a compromised key can be retired safely.
+   */
+  @Column({ type: 'int', default: 1 })
+  keyVersion: number;
+
   /** USDC balance stored as string to avoid float precision loss */
   @Column({ type: 'varchar', default: '0' })
   balanceUsdc: string;
