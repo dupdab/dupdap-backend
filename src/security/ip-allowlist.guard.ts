@@ -4,6 +4,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
@@ -153,10 +154,20 @@ function getClientIp(req: Request): string {
 }
 
 @Injectable()
-export class IpAllowlistGuard implements CanActivate {
+export class IpAllowlistGuard implements CanActivate, OnModuleInit {
   private readonly logger = new Logger(IpAllowlistGuard.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  onModuleInit(): void {
+    const isDev = this.config.get<string>('NODE_ENV') === 'development';
+    const bypassInDev = this.config.get<string>('ADMIN_IP_BYPASS_IN_DEV') === 'true';
+    if (isDev && bypassInDev) {
+      this.logger.warn(
+        '[Security] ADMIN_IP_BYPASS_IN_DEV is enabled: admin IP allowlist is bypassed because NODE_ENV is development',
+      );
+    }
+  }
 
   canActivate(context: ExecutionContext): boolean {
     const isDev = this.config.get<string>('NODE_ENV') === 'development';

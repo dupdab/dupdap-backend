@@ -2,6 +2,7 @@ import { BullModule } from '@nestjs/bull';
 import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import * as Joi from 'joi';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -43,14 +44,32 @@ import { TlsEnforcementMiddleware } from './security/tls-enforcement.middleware'
 import { SensitiveAccessLogMiddleware } from './security/sensitive-access.middleware';
 import { CacheWarmupService } from './cache/cache-warmup.service';
 
-import { CacheModule } from '@nestjs/cache-manager';
+import { CacheModule as NestCacheModule } from '@nestjs/cache-manager';
 import * as redisStore from 'cache-manager-redis-store';
 import Redis from 'ioredis';
 
+import { CacheModule } from './cache/cache.module';
+import { ApiKeyRateLimitGuard } from './auth/guards/api-key-rate-limit.guard';
+import { RateLimitService } from './auth/rate-limit.service';
+
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    CacheModule.forRootAsync({
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        NODE_ENV: Joi.string()
+          .valid('development', 'staging', 'production')
+          .default('development'),
+        EMAIL_PROVIDER: Joi.string().valid('smtp', 'sendgrid').default('smtp'),
+        EMAIL_SMTP_HOST: Joi.string().default('smtp.sendgrid.net'),
+        EMAIL_SMTP_PORT: Joi.number().port().default(587),
+        EMAIL_SMTP_USER: Joi.string().default('apikey'),
+        EMAIL_SMTP_PASS: Joi.string().default(''),
+        SENDGRID_API_KEY: Joi.string().allow('').default(''),
+      }),
+    }),
+    CacheModule,
+    NestCacheModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: async (config: ConfigService) => {
@@ -167,6 +186,10 @@ import Redis from 'ioredis';
       useClass: AppThrottlerGuard,
     },
     {
+      provide: APP_GUARD,
+      useClass: ApiKeyRateLimitGuard,
+    },
+    {
       provide: APP_INTERCEPTOR,
       useClass: HttpMetricsInterceptor,
     },
@@ -175,6 +198,7 @@ import Redis from 'ioredis';
       useClass: SentryInterceptor,
     },
     CacheWarmupService,
+    RateLimitService,
   ],
 })
 export class AppModule implements NestModule {
