@@ -38,7 +38,7 @@ export class SensitiveAccessLogMiddleware implements NestMiddleware {
     const start = Date.now();
     _res.on('finish', () => {
       const durationMs = Date.now() - start;
-      const user = (req as any).user;
+      const user = (req as Request & { user?: { id?: string; role?: string } }).user;
       const actor = user
         ? `${user.id ?? 'unknown'} (${user.role ?? 'unknown'})`
         : 'anonymous';

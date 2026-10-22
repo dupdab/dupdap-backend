@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { SOROBAN_RPC_CLIENT, SorobanService } from './soroban.service';
+import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { SOROBAN_RPC_CLIENT, SOROBAN_RPC_FALLBACK_CLIENT, SorobanService } from './soroban.service';
 
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, AdminAlertModule],
   providers: [
     {
       provide: SOROBAN_RPC_CLIENT,
@@ -16,6 +17,14 @@ import { SOROBAN_RPC_CLIENT, SorobanService } from './soroban.service';
         }
 
         return new StellarSdk.rpc.Server(rpcUrl);
+      },
+    },
+    {
+      provide: SOROBAN_RPC_FALLBACK_CLIENT,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const fallbackUrl = configService.get<string>('SOROBAN_RPC_FALLBACK_URL');
+        return fallbackUrl ? new StellarSdk.rpc.Server(fallbackUrl) : undefined;
       },
     },
     SorobanService,

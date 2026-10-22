@@ -58,9 +58,9 @@ export class AdminController {
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: MerchantStatus,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.updateMerchantStatus(id, status, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.updateMerchantStatus(id, status, req.user?.id ?? req.user?.merchantId);
   }
 
   @Patch('merchants/bulk/status')
@@ -69,9 +69,9 @@ export class AdminController {
   bulkUpdateStatus(
     @Body('ids') ids: string[],
     @Body('status') status: MerchantStatus,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id ?? req.user?.merchantId);
   }
 
   @Get('stats')
@@ -91,12 +91,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Update a global fee rate' })
   updateFee(
     @Body() dto: UpdateFeeDto,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
     return this.adminService.updateGlobalFee(
       dto.feeType,
       dto.newRate,
-      req.user.id ?? (req.user as any)?.merchantId ?? 'system',
+      req.user.id ?? req.user?.merchantId ?? 'system',
       dto.reason,
     );
   }
@@ -149,14 +149,14 @@ export class AdminController {
   @ApiOperation({ summary: 'Create a new admin user (SUPERADMIN only)' })
   createAdmin(
     @Body() dto: { email: string; password: string; businessName: string },
-    @Req() req: Request & { user: { id: string; role: MerchantRole } },
+    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
     return this.adminService.createAdmin(
       dto.email,
       dto.password,
       dto.businessName,
       req.user.role,
-      req.user?.id ?? (req.user as any)?.merchantId,
+      req.user?.id ?? req.user?.merchantId,
     );
   }
 
@@ -164,9 +164,9 @@ export class AdminController {
   @ApiOperation({ summary: 'Delete an admin user (SUPERADMIN only)' })
   deleteAdmin(
     @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; role: MerchantRole } },
+    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
-    return this.adminService.deleteAdmin(id, req.user.role, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.deleteAdmin(id, req.user.role, req.user?.id ?? req.user?.merchantId);
   }
 
   @Patch('users/:id/role')
@@ -211,9 +211,9 @@ export class AdminController {
   toggleSandboxMode(
     @Param('id') id: string,
     @Body('enabled') enabled: boolean,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? req.user?.merchantId);
   }
 
   @Post('merchants/:id/sandbox/reset')
@@ -221,9 +221,9 @@ export class AdminController {
   @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
   resetSandboxData(
     @Param('id') id: string,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.resetSandboxData(id, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.resetSandboxData(id, req.user?.id ?? req.user?.merchantId);
   }
 
   // ── Audit Log Viewer ───────────────────────────────────────────────────────
@@ -280,9 +280,9 @@ export class AdminController {
   restoreRecord(
     @Param('entity') entity: string,
     @Param('id') id: string,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.restoreRecord(entity, id, req.user?.id ?? (req.user as any)?.merchantId);
+    return this.adminService.restoreRecord(entity, id, req.user?.id ?? req.user?.merchantId);
   }
 
   @Delete(':entity/:id')
@@ -292,7 +292,7 @@ export class AdminController {
     @Param('entity') entity: string,
     @Param('id') id: string,
     @Query('hard') hard: string,
-    @Req() req: Request & { user: { id: string; role: MerchantRole } },
+    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
     const isHard = hard === 'true';
     return this.adminService.deleteRecord(entity, id, isHard, req.user.role, req.user?.id);

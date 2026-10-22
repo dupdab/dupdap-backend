@@ -29,6 +29,11 @@ interface SorobanEventsResponse {
   latestLedger: number;
 }
 
+interface SorobanRpcEventsResponse {
+  error?: unknown;
+  result?: { events?: SorobanEvent[]; latestLedger?: number };
+}
+
 type EscrowEventTopic = 'deposit' | 'release' | 'refund' | 'expired' | 'dispute';
 
 interface EscrowEventPayload {
@@ -335,7 +340,7 @@ export class SorobanMonitorService {
       throw new Error(`Soroban RPC HTTP ${res.status}: ${await res.text()}`);
     }
 
-    const json = (await res.json()) as any;
+    const json = (await res.json()) as SorobanRpcEventsResponse;
     if (json.error) {
       throw new Error(`Soroban RPC error: ${JSON.stringify(json.error)}`);
     }
