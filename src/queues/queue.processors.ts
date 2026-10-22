@@ -1,5 +1,5 @@
 import { Process, Processor } from '@nestjs/bull';
-import { Inject, Logger, forwardRef } from '@nestjs/common';
+import { ConflictException, Inject, Logger, forwardRef } from '@nestjs/common';
 import type { Job } from 'bull';
 import { DEFAULT_QUEUE_JOB, QUEUE_NAMES } from './queue.constants';
 import { StellarMonitorService } from '../stellar/stellar-monitor.service';
@@ -68,7 +68,9 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
 
     if (!lockToken) {
       this.logger.debug(`Concurrency lock active for merchant ${settlement.merchantId}. Retrying.`);
-      throw new Error(`Merchant ${settlement.merchantId} is already processing a settlement.`);
+      throw new ConflictException(
+          `Merchant ${settlement.merchantId} is already processing a settlement.`,
+        );
     }
 
     try {

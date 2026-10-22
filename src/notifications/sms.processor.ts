@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { Processor, Process } from "@nestjs/bull";
 import { Job } from "bull";
 import { ConfigService } from "@nestjs/config";
@@ -27,7 +27,7 @@ export class SmsProcessor {
     const authToken = this.configService.get<string>("TWILIO_AUTH_TOKEN");
     const from = this.configService.get<string>("TWILIO_FROM_NUMBER");
     if (!accountSid || !authToken || !from) {
-      throw new Error("Twilio configuration is incomplete");
+      throw new InternalServerErrorException("Twilio configuration is incomplete");
     }
 
     const response = await axios.post(

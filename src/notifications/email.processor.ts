@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { Processor, Process, OnQueueFailed } from "@nestjs/bull";
 import { Job } from "bull";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -125,7 +125,7 @@ export class EmailProcessor {
     const pass = this.configService.get<string>("EMAIL_SMTP_PASS");
 
     if (!host || !user || !pass) {
-      throw new Error("SMTP configuration is incomplete");
+      throw new InternalServerErrorException("SMTP configuration is incomplete");
     }
 
     const transporter = nodemailer.createTransport({

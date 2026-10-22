@@ -282,7 +282,17 @@ export class StellarMonitorService implements OnModuleInit {
       {
         merchantName: merchant.businessName,
         reference: payment.reference,
-        amountUsd:
+        amountUsd: Number(payment.amountUsd).toFixed(2),
+        assetAmount,
+        asset,
+        txHash: payment.txHash,
+        txUrl,
+        confirmedAt: payment.confirmedAt?.toISOString() ?? new Date().toISOString(),
+        paymentDetailUrl,
+      },
+      merchant.id,
+    );
+  }
 
   private async queuePaymentConfirmedSms(
     payment: Payment & { merchant?: Merchant },

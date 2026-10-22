@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { InternalServerErrorException, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { SOROBAN_RPC_CLIENT, SorobanService } from './soroban.service';
@@ -12,7 +12,7 @@ import { SOROBAN_RPC_CLIENT, SorobanService } from './soroban.service';
       useFactory: (configService: ConfigService) => {
         const rpcUrl = configService.get<string>('SOROBAN_RPC_URL');
         if (!rpcUrl) {
-          throw new Error('SOROBAN_RPC_URL is not configured');
+          throw new InternalServerErrorException('SOROBAN_RPC_URL is not configured');
         }
 
         return new StellarSdk.rpc.Server(rpcUrl);

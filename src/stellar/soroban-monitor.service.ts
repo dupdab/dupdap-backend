@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { StellarService } from './stellar.service';
 import { CacheService } from '../cache/cache.service';
+import { SorobanRpcException } from './soroban-rpc.exception';
 
 const CURSOR_KEY = 'soroban:monitor:last-ledger';
 const PROCESSED_IDS_KEY = 'soroban:monitor:processed-event-ids';
@@ -332,12 +333,22 @@ export class SorobanMonitorService {
     });
 
     if (!res.ok) {
-      throw new Error(`Soroban RPC HTTP ${res.status}: ${await res.text()}`);
+      throw new SorobanRpcException(
+        `Soroban RPC HTTP ${res.status}: ${await res.text()}`,
+        'rpc_http_error',
+        HttpStatus.BAD_GATEWAY,
+        'getEvents',
+      );
     }
 
     const json = (await res.json()) as any;
     if (json.error) {
-      throw new Error(`Soroban RPC error: ${JSON.stringify(json.error)}`);
+      throw new SorobanRpcException(
+        `Soroban RPC error: ${JSON.stringify(json.error)}`,
+        'rpc_error',
+        HttpStatus.BAD_GATEWAY,
+        'getEvents',
+      );
     }
 
     return {

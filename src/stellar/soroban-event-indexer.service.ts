@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bull';
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, UnprocessableEntityException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -14,6 +14,7 @@ import {
   SorobanContractEventDto,
   SorobanRpcEvent,
 } from './soroban-event.dto';
+import { SorobanRpcException } from './soroban-rpc.exception';
 
 interface SorobanEventsResponse {
   events: SorobanRpcEvent[];
@@ -154,7 +155,9 @@ export class SorobanEventIndexer {
     const asset = String(value.asset ?? 'USDC');
 
     if (!paymentReference || !txHash || Number.isNaN(amount)) {
-      throw new Error(`Invalid payment_confirmed event payload: ${JSON.stringify(raw.value)}`);
+      throw new UnprocessableEntityException(
+        `Invalid payment_confirmed event payload: ${JSON.stringify(raw.value)}`,
+      );
     }
 
     return {
@@ -182,7 +185,9 @@ export class SorobanEventIndexer {
         : undefined;
 
     if (!settlementId) {
-      throw new Error(`Invalid settlement_completed event payload: ${JSON.stringify(raw.value)}`);
+      throw new UnprocessableEntityException(
+        `Invalid settlement_completed event payload: ${JSON.stringify(raw.value)}`,
+      );
     }
 
     return {
@@ -229,12 +234,22 @@ export class SorobanEventIndexer {
     });
 
     if (!response.ok) {
-      throw new Error(`Soroban RPC HTTP ${response.status}: ${await response.text()}`);
+      throw new SorobanRpcException(
+        `Soroban RPC HTTP ${response.status}: ${await response.text()}`,
+        'rpc_http_error',
+        HttpStatus.BAD_GATEWAY,
+        'getEvents',
+      );
     }
 
     const json = (await response.json()) as any;
     if (json.error) {
-      throw new Error(`Soroban RPC error: ${JSON.stringify(json.error)}`);
+      throw new SorobanRpcException(
+        `Soroban RPC error: ${JSON.stringify(json.error)}`,
+        'rpc_error',
+        HttpStatus.BAD_GATEWAY,
+        'getEvents',
+      );
     }
 
     return {

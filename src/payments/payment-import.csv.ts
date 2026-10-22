@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 /** Parses RFC-4180-style quoted fields, including escaped quotes and embedded commas/newlines. */
 export function parseCsv(input: string): string[][] {
   const rows: string[][] = [];
@@ -24,7 +26,7 @@ export function parseCsv(input: string): string[][] {
       row = [];
     } else field += char;
   }
-  if (quoted) throw new Error('CSV contains an unclosed quoted field');
+  if (quoted) throw new BadRequestException('CSV contains an unclosed quoted field');
   if (field.length || row.length) {
     row.push(field);
     if (row.some((value) => value.length > 0)) rows.push(row);

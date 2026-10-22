@@ -1,4 +1,14 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -31,7 +41,9 @@ export class WebhooksService {
   ) {}
 
   async updateRetryConfig(merchantId: string, config: UpdateWebhookRetryConfigDto) {
-    if (!this.merchantsRepo) throw new Error('Merchant repository is unavailable');
+    if (!this.merchantsRepo) {
+      throw new InternalServerErrorException('Merchant repository is unavailable');
+    }
     const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     merchant.webhookRetryConfig = config;
@@ -40,7 +52,9 @@ export class WebhooksService {
   }
 
   async getRetryConfig(merchantId: string) {
-    if (!this.merchantsRepo) throw new Error('Merchant repository is unavailable');
+    if (!this.merchantsRepo) {
+      throw new InternalServerErrorException('Merchant repository is unavailable');
+    }
     const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
     if (!merchant) throw new NotFoundException('Merchant not found');
     return merchant.webhookRetryConfig;
