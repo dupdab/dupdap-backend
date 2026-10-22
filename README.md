@@ -382,6 +382,10 @@ Every delivery is a `POST` with a JSON body and two headers:
 
 The body is `{ "event": "...", "data": { ... }, "timestamp": "2026-10-20T12:00:00.000Z" }`. The signature covers the exact bytes received, so verify against the raw body **before** parsing or re-serialising JSON. The secret is the one you supplied when creating the webhook (`secret` on `POST /webhooks`) or the generated value returned for it.
 
+### Webhook event versioning (#452)
+
+Every webhook payload carries a `version` field (e.g. `"v1"`). Merchants can filter subscriptions by event version when registering a webhook. Breaking changes increment the major version (`v1` → `v2`) and the deprecated version is maintained for 90 days before removal.
+
 Verification steps:
 
 1. Read the raw body as bytes or a string.

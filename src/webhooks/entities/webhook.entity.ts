@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -29,6 +30,9 @@ export class Webhook {
   @Column()
   url: string;
 
+  @Column({ default: 'v1' })
+  version: string;
+
   @Column({ type: 'simple-array' })
   events: string[];
 
@@ -53,4 +57,7 @@ export class Webhook {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date;
 }
