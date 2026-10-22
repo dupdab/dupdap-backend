@@ -16,6 +16,8 @@ import { Merchant } from '../merchants/entities/merchant.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CacheModule } from '../cache/cache.module';
 import { PrometheusModule } from '../prometheus/prometheus.module';
+import { EmailModule } from '../email/email.module';
+import { WebhookCircuitAdminController } from './webhook-circuit-admin.controller';
 
 @Module({
   imports: [
@@ -26,8 +28,9 @@ import { PrometheusModule } from '../prometheus/prometheus.module';
     NotificationsModule,
     CacheModule,
     PrometheusModule,
+    EmailModule,
   ],
-  controllers: [WebhooksController],
+  controllers: [WebhooksController, WebhookCircuitAdminController],
   providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService],
   exports: [WebhooksService, WebhookDeliveryService],
 })
