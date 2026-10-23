@@ -99,7 +99,7 @@ Postgres (via TypeORM) is the system of record for payments, merchants, settleme
 
 ### Prerequisites
 
-- Node.js 20+ and pnpm (CI uses pnpm 10; npm also works for local dev)
+- Node.js 20+ and pnpm (CI uses pnpm 9; npm also works for local dev)
 - PostgreSQL 16+
 - Redis 6+
 - (recommended) Docker + Docker Compose — runs PostgreSQL 16 and Redis 6 for you
@@ -382,6 +382,10 @@ Every delivery is a `POST` with a JSON body and two headers:
 
 The body is `{ "event": "...", "data": { ... }, "timestamp": "2026-10-20T12:00:00.000Z" }`. The signature covers the exact bytes received, so verify against the raw body **before** parsing or re-serialising JSON. The secret is the one you supplied when creating the webhook (`secret` on `POST /webhooks`) or the generated value returned for it.
 
+### Webhook event versioning (#452)
+
+Every webhook payload carries a `version` field (e.g. `"v1"`). Merchants can filter subscriptions by event version when registering a webhook. Breaking changes increment the major version (`v1` → `v2`) and the deprecated version is maintained for 90 days before removal.
+
 Verification steps:
 
 1. Read the raw body as bytes or a string.
@@ -627,3 +631,7 @@ for automatic fixes. CI runs the same zero-warning lint command.
 See [Soroban integration](docs/soroban-integration.md) for contract configuration,
 ABI types and payment sequencing, and [API errors](docs/api-errors.md) for stable
 error codes and recovery actions.
+
+New to Stellar payments? Start with the [glossary](docs/glossary.md). For
+integration code, see the [Merchant API examples](docs/examples/README.md)
+(Node.js, Python and a [Postman collection](docs/dupdub-merchant-api.postman_collection.json)).

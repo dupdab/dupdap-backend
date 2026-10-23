@@ -4,9 +4,11 @@ import {
   ExecutionContext,
   ForbiddenException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
+import { isIP } from 'net';
 
 function isIpv6(addr: string): boolean {
   return addr.includes(':');
@@ -103,7 +105,7 @@ function ipv6InCidr(ip: string, range: string, bits: number): boolean {
   return (ipBytes[fullBytes] & mask) === (rangeBytes[fullBytes] & mask);
 }
 
-function ipInCidr(ip: string, cidr: string): boolean {
+export function ipInCidr(ip: string, cidr: string): boolean {
   if (!cidr.includes('/')) return ip === cidr;
 
   const [range, bitsRaw] = cidr.split('/');
@@ -138,6 +140,21 @@ function ipInCidr(ip: string, cidr: string): boolean {
 }
 
 /**
+ * True when `entry` is a bare IPv4/IPv6 address or an `ip/prefix` CIDR with a
+ * prefix length valid for its address family. Invalid entries are rejected up
+ * front because they would never match and could lock a merchant out entirely.
+ */
+export function isValidIpOrCidr(entry: string): boolean {
+  const [addr, prefix, ...rest] = entry.split('/');
+  if (rest.length > 0) return false;
+  const version = isIP(addr);
+  if (version === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (version === 4 ? 32 : 128);
+}
+
+/**
  * Resolve the client IP for allowlist checks.
  *
  * We deliberately do NOT parse `X-Forwarded-For` by hand: that header is
@@ -148,15 +165,25 @@ function ipInCidr(ip: string, cidr: string): boolean {
  * spoofed; when one is, Express derives the left-most untrusted address for us.
  * `req.socket.remoteAddress` is the last-resort fallback.
  */
-function getClientIp(req: Request): string {
+export function getClientIp(req: Request): string {
   return req.ip ?? req.socket?.remoteAddress ?? '';
 }
 
 @Injectable()
-export class IpAllowlistGuard implements CanActivate {
+export class IpAllowlistGuard implements CanActivate, OnModuleInit {
   private readonly logger = new Logger(IpAllowlistGuard.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  onModuleInit(): void {
+    const isDev = this.config.get<string>('NODE_ENV') === 'development';
+    const bypassInDev = this.config.get<string>('ADMIN_IP_BYPASS_IN_DEV') === 'true';
+    if (isDev && bypassInDev) {
+      this.logger.warn(
+        '[Security] ADMIN_IP_BYPASS_IN_DEV is enabled: admin IP allowlist is bypassed because NODE_ENV is development',
+      );
+    }
+  }
 
   canActivate(context: ExecutionContext): boolean {
     const isDev = this.config.get<string>('NODE_ENV') === 'development';

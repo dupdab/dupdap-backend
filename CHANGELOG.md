@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Merchant API key IP allowlist: `POST /merchants/api-keys/:id/ip-allowlist` restricts
+  a key to CIDR ranges; requests from other IPs get 403 `IP_NOT_ALLOWED`. Admin-role
+  keys bypass the allowlist with an audit log entry (#496).
 - Webhook signature verification guide in the README (Node.js, Python, PHP),
   replay protection guidance, and `POST /webhooks/test` to send a signed test
   event to all active webhooks (#498).

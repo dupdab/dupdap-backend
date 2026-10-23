@@ -23,6 +23,13 @@ export interface PaymentImportJob {
   skipped: Array<{ row: number; reason: string }>;
 }
 
+export interface PaymentImportResult {
+  row: number;
+  reason?: string;
+  reference?: string;
+  status?: 'created';
+}
+
 @Injectable()
 @Processor(PAYMENT_IMPORT_QUEUE)
 export class PaymentImportProcessor {
@@ -35,7 +42,7 @@ export class PaymentImportProcessor {
   @Process()
   async process(job: Job<PaymentImportJob>): Promise<void> {
     const { merchantId, email, rows } = job.data;
-    const results = [...job.data.skipped];
+    const results: PaymentImportResult[] = [...job.data.skipped];
     for (const row of rows) {
       try {
         const payment = await this.payments.create(merchantId, row);
@@ -43,7 +50,7 @@ export class PaymentImportProcessor {
           row: row.row,
           reference: payment.reference,
           status: 'created',
-        } as any);
+        });
       } catch (error) {
         results.push({
           row: row.row,

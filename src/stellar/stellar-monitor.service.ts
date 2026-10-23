@@ -64,6 +64,13 @@ export class StellarMonitorService implements OnModuleInit {
   }
 
   async scanPendingPayments() {
+    // Graceful degradation: while the Horizon circuit is open, pause polling
+    // instead of issuing requests that are known to fail.
+    if (this.stellar.isHorizonCircuitOpen()) {
+      this.logger.warn('Horizon circuit is open; skipping Stellar poll until it recovers');
+      return;
+    }
+
     try {
       const depositAddress = this.stellar.getDepositAddress();
       if (!depositAddress) {

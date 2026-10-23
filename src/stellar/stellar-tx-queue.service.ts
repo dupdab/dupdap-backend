@@ -81,7 +81,7 @@ export class StellarTxQueueService implements OnModuleInit {
 
         try {
           const result = await this.server.submitTransaction(tx);
-          return (result as any).hash as string;
+          return result.hash;
         } catch (err: any) {
           // If sequence number is stale (tx_bad_seq), reload account and retry once
           if (this.isBadSeqError(err)) {
@@ -92,7 +92,7 @@ export class StellarTxQueueService implements OnModuleInit {
             const retryTx = buildTx(freshAccount);
             retryTx.sign(this.keypair);
             const result = await this.server.submitTransaction(retryTx);
-            return (result as any).hash as string;
+            return result.hash;
           }
           throw err;
         }

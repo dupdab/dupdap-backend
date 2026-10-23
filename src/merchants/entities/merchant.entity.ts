@@ -129,6 +129,10 @@ export class Merchant {
   @Column('simple-array', { name: 'api_key_scopes', nullable: true })
   apiKeyScopes?: ApiScope[];
 
+  /** CIDR ranges (or bare IPs) allowed to use the API key. Null or empty means any IP. */
+  @Column('simple-array', { name: 'api_key_ip_allowlist', nullable: true })
+  apiKeyIpAllowlist?: string[] | null;
+
   @Exclude()
   @Column({ nullable: true })
   apiKeyHash: string | null;

@@ -20,6 +20,11 @@ interface SorobanEventsResponse {
   latestLedger: number;
 }
 
+interface SorobanRpcEventsResponse {
+  error?: unknown;
+  result?: { events?: SorobanRpcEvent[]; latestLedger?: number | string };
+}
+
 const CURSOR_KEY = 'soroban:indexer:last-ledger';
 const CURSOR_TTL_SECONDS = 60 * 60 * 24 * 365;
 const PAGE_LIMIT = 200;
@@ -232,7 +237,7 @@ export class SorobanEventIndexer {
       throw new Error(`Soroban RPC HTTP ${response.status}: ${await response.text()}`);
     }
 
-    const json = (await response.json()) as any;
+    const json = (await response.json()) as SorobanRpcEventsResponse;
     if (json.error) {
       throw new Error(`Soroban RPC error: ${JSON.stringify(json.error)}`);
     }

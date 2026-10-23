@@ -18,6 +18,8 @@ import { EmailModule } from '../email/email.module';
 import { DailyPaymentVolume } from './entities/daily-payment-volume.view';
 import { AnalyticsRefreshService } from './analytics-refresh.service';
 import { CronModule } from '../cron/cron.module';
+import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { AnalyticsRefreshAdminController } from './analytics-refresh-admin.controller';
 
 @Module({
   imports: [
@@ -26,8 +28,9 @@ import { CronModule } from '../cron/cron.module';
     EmailModule,
     CacheModule,
     CronModule,
+    AdminAlertModule,
   ],
-  controllers: [AnalyticsController, AnalyticsExportController, AnalyticsExportDownloadController],
+  controllers: [AnalyticsController, AnalyticsExportController, AnalyticsExportDownloadController, AnalyticsRefreshAdminController],
   providers: [AnalyticsService, AnalyticsExportService, AnalyticsExportProcessor, AnalyticsRefreshService],
   exports: [AnalyticsService, AnalyticsExportService],
 })

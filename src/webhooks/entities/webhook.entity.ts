@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -29,6 +30,9 @@ export class Webhook {
   @Column()
   url: string;
 
+  @Column({ default: 'v1' })
+  version: string;
+
   @Column({ type: 'simple-array' })
   events: string[];
 
@@ -48,9 +52,16 @@ export class Webhook {
   @Column({ nullable: true })
   lastDeliveredAt: Date;
 
+  /** While in the future the circuit is open and deliveries are skipped (#457). */
+  @Column({ type: 'timestamptz', nullable: true })
+  circuitOpenUntil: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date;
 }
