@@ -99,7 +99,7 @@ Postgres (via TypeORM) is the system of record for payments, merchants, settleme
 
 ### Prerequisites
 
-- Node.js 20+ and pnpm (CI uses pnpm 10; npm also works for local dev)
+- Node.js 20+ and pnpm (CI uses pnpm 9; npm also works for local dev)
 - PostgreSQL 16+
 - Redis 6+
 - (recommended) Docker + Docker Compose — runs PostgreSQL 16 and Redis 6 for you
