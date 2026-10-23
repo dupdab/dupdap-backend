@@ -1,6 +1,6 @@
 import { BullModule } from '@nestjs/bull';
 import { Logger, Module } from '@nestjs/common';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, APP_FILTER } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -36,6 +36,7 @@ import { PrometheusModule } from './prometheus/prometheus.module';
 import { AuditModule } from './audit/audit.module';
 import { RetryModule } from './retry/retry.module';
 import { HttpMetricsInterceptor } from './prometheus/http-metrics.interceptor';
+import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
 
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
@@ -196,6 +197,10 @@ import { RateLimitService } from './auth/rate-limit.service';
     {
       provide: APP_INTERCEPTOR,
       useClass: SentryInterceptor,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: AllExceptionsFilter,
     },
     CacheWarmupService,
     RateLimitService,

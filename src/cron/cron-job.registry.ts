@@ -1,14 +1,21 @@
 import { Injectable, Inject, forwardRef, Logger } from '@nestjs/common';
+import { CronExpression } from '@nestjs/schedule';
 import { NotificationService } from '../notifications/notification.service';
 import { SorobanEventIndexer } from '../stellar/soroban-event-indexer.service';
 import { SettlementsService } from '../settlements/settlements.service';
 import { UptimeHeartbeatService } from './uptime-heartbeat.service';
 import { QueueMetricsService } from '../queues/queue-metrics.service';
 
+export interface JobSchedule {
+  schedule: string;
+  nextRun?: Date;
+}
+
 @Injectable()
 export class CronJobRegistry {
   private readonly logger = new Logger(CronJobRegistry.name);
   private readonly jobs: Map<string, () => Promise<void>> = new Map();
+  private readonly schedules: Map<string, string> = new Map();
 
   constructor(
     @Inject(forwardRef(() => NotificationService))
@@ -26,18 +33,23 @@ export class CronJobRegistry {
   private setupJobs(): void {
     if (this.notificationService) {
       this.jobs.set('notification-purge', () => this.notificationService!.purgeOldNotifications());
+      this.schedules.set('notification-purge', '0 0 * * *');
     }
     if (this.sorobanIndexer) {
       this.jobs.set('soroban-event-indexer', () => this.sorobanIndexer!.pollEvents());
+      this.schedules.set('soroban-event-indexer', '*/5 * * * *');
     }
     if (this.settlementsService) {
       this.jobs.set('batch-small-confirmed-payments', () => this.settlementsService!.batchSmallConfirmedPayments());
+      this.schedules.set('batch-small-confirmed-payments', '*/10 * * * *');
     }
     if (this.uptimeHeartbeat) {
       this.jobs.set('uptime-heartbeat', () => this.uptimeHeartbeat!.ping());
+      this.schedules.set('uptime-heartbeat', '* * * * *');
     }
     if (this.queueMetrics) {
       this.jobs.set('queue-metrics-check', () => this.queueMetrics!.checkThresholds());
+      this.schedules.set('queue-metrics-check', '*/5 * * * *');
     }
   }
 
@@ -49,6 +61,21 @@ export class CronJobRegistry {
       );
     }
     return availableJobs;
+  }
+
+  getJobSchedules(): Map<string, JobSchedule> {
+    const result = new Map<string, JobSchedule>();
+    for (const jobName of this.jobs.keys()) {
+      const schedule = this.schedules.get(jobName) ?? 'unknown';
+      let nextRun: Date | undefined;
+      try {
+        nextRun = CronExpression.from(schedule).nextDate(new Date())?.toDate() ?? undefined;
+      } catch {
+        // invalid schedule — leave nextRun undefined
+      }
+      result.set(jobName, { schedule, nextRun });
+    }
+    return result;
   }
 
   async trigger(jobName: string): Promise<void> {

@@ -163,3 +163,53 @@ WHERE job_name = 'db-backup'
 ORDER BY started_at DESC
 LIMIT 10;
 ```
+
+---
+
+# Encryption Key Rotation (#444)
+
+## Overview
+
+Stellar wallet secret keys are encrypted with AES-256-GCM using `ENCRYPTION_KEY`.
+Each `blockchain_wallets` row stores a `key_version` column indicating which key
+version encrypted its `encryptedSecretKey`. If `ENCRYPTION_KEY` is compromised,
+rotate it and re-encrypt all wallet secrets with the new key.
+
+## Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ENCRYPTION_KEY` | Current active 32-byte encryption key |
+| `ENCRYPTION_KEY_PREVIOUS` | Previous key, used to decrypt records during the rotation window |
+| `ENCRYPTION_KEY_VERSION` | Integer key version (default `1`). Bump on every rotation |
+
+## Rotation procedure
+
+1. Generate a new 32-byte key.
+2. Set `ENCRYPTION_KEY` to the new key and `ENCRYPTION_KEY_PREVIOUS` to the old key.
+3. Bump `ENCRYPTION_KEY_VERSION` (e.g. `1` → `2`).
+4. Deploy the change (rolling restart so both keys are briefly in memory).
+5. Trigger re-encryption:
+
+   ```http
+   POST /api/v1/admin/encryption/rotate-key
+   Body: { "actorId": "<admin-user-id>" }
+   ```
+
+   This reads every `blockchain_wallets` row, decrypts `encryptedSecretKey` with
+   the active or previous key, re-encrypts with the current key, and updates
+   `key_version`. An `ENCRYPTION_KEY_ROTATED` audit log entry is written with
+   the actor, rotated/skipped counts, and the new key version.
+
+6. Verify: query `blockchain_wallets` and confirm all rows have
+   `key_version = <new version>`.
+7. Once confirmed, remove `ENCRYPTION_KEY_PREVIOUS` from the environment so
+   only the current key can decrypt wallet secrets.
+
+## Rollback
+
+If re-encryption fails partway, rows not yet re-encrypted remain decryptable
+with `ENCRYPTION_KEY_PREVIOUS`. Revert `ENCRYPTION_KEY` and
+`ENCRYPTION_KEY_VERSION` to their previous values and re-run the rotation
+endpoint; already-rotated rows are skipped because their `key_version` matches.
+

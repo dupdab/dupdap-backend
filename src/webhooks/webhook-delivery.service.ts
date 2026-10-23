@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, BadRequestException } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import * as crypto from 'crypto';
@@ -77,11 +77,11 @@ export class WebhookDeliveryService {
     try {
       parsed = new URL(rawUrl);
     } catch {
-      throw new Error(`Invalid webhook URL: ${rawUrl}`);
+      throw new BadRequestException(`Invalid webhook URL: ${rawUrl}`);
     }
 
     if (parsed.protocol !== 'https:') {
-      throw new Error(`Webhook URL must use https: ${rawUrl}`);
+      throw new BadRequestException(`Webhook URL must use https: ${rawUrl}`);
     }
 
     const hostname = parsed.hostname;
@@ -97,12 +97,12 @@ export class WebhookDeliveryService {
     }
 
     if (addresses.length === 0) {
-      throw new Error(`Webhook host could not be resolved: ${hostname}`);
+      throw new BadRequestException(`Webhook host could not be resolved: ${hostname}`);
     }
 
     for (const address of addresses) {
       if (this.isPrivateAddress(address)) {
-        throw new Error(
+        throw new BadRequestException(
           `Webhook URL resolves to a private/loopback address (${address}); refusing to deliver`,
         );
       }
