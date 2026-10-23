@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import {
   NotificationChannel,
@@ -12,6 +12,23 @@ import {
   NotificationPrefsResponseDto,
   UpdateNotificationPrefsDto,
 } from './dto/notification-prefs.dto';
+import { RuntimeConfigService } from '../runtime-config/runtime-config.service';
+
+/** RuntimeConfig key (json) overriding the preferences created for new merchants. */
+export const DEFAULT_NOTIFICATION_PREFS_CONFIG_KEY = 'notifications.default_preferences';
+
+export interface DefaultNotificationPref {
+  channel: NotificationChannel;
+  eventType: NotificationEventType;
+  enabled: boolean;
+}
+
+/** Preferences created on merchant registration unless overridden in RuntimeConfig. */
+export const DEFAULT_NOTIFICATION_PREFS: DefaultNotificationPref[] = [
+  NotificationEventType.PAYMENT_CONFIRMED,
+  NotificationEventType.PAYMENT_SETTLED,
+  NotificationEventType.PAYMENT_FAILED,
+].map((eventType) => ({ channel: NotificationChannel.EMAIL, eventType, enabled: true }));
 
 /** All valid channel × event combinations, used to seed defaults. */
 const ALL_CHANNELS = Object.values(NotificationChannel);
@@ -28,7 +45,38 @@ export class NotificationPrefsService {
     private readonly prefsRepo: Repository<NotificationPreference>,
     @InjectRepository(Merchant)
     private readonly merchantRepo: Repository<Merchant>,
+    @Optional() private readonly runtimeConfig?: RuntimeConfigService,
   ) {}
+
+  /** Defaults for new merchants: RuntimeConfig override, else DEFAULT_NOTIFICATION_PREFS. */
+  async getDefaultPrefs(): Promise<DefaultNotificationPref[]> {
+    const configured = await this.runtimeConfig?.get<DefaultNotificationPref[]>(
+      DEFAULT_NOTIFICATION_PREFS_CONFIG_KEY,
+    );
+    if (!Array.isArray(configured)) return DEFAULT_NOTIFICATION_PREFS;
+
+    return configured.filter(
+      (p) =>
+        ALL_CHANNELS.includes(p?.channel) &&
+        ALL_EVENTS.includes(p?.eventType) &&
+        typeof p.enabled === 'boolean',
+    );
+  }
+
+  /** Seeds default preferences for a merchant; existing rows are left untouched. */
+  async createDefaults(merchantId: string, manager?: EntityManager): Promise<void> {
+    const defaults = await this.getDefaultPrefs();
+    if (!defaults.length) return;
+
+    const repo = manager?.getRepository(NotificationPreference) ?? this.prefsRepo;
+    await repo
+      .createQueryBuilder()
+      .insert()
+      .into(NotificationPreference)
+      .values(defaults.map((p) => ({ merchantId, ...p })))
+      .orIgnore()
+      .execute();
+  }
 
   async getPrefs(merchantId: string): Promise<NotificationPrefsResponseDto> {
     const [stored, merchant] = await Promise.all([

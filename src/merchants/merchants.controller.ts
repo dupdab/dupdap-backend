@@ -1,9 +1,10 @@
-import { Controller, Get, Patch, Post, Body, UseGuards, Request, Query, Delete } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Param, UseGuards, Request, Query, ForbiddenException, Delete } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
   ApiOkResponse,
+  ApiParam,
   ApiUnauthorizedResponse,
   ApiBadRequestResponse,
   ApiForbiddenResponse,
@@ -14,6 +15,7 @@ import { MerchantsService } from './merchants.service';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { UpdateSettlementPreferenceDto } from './dto/update-settlement-preference.dto';
 import { GenerateApiKeyDto } from './dto/generate-api-key.dto';
+import { SetApiKeyIpAllowlistDto } from './dto/set-api-key-ip-allowlist.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
 import { NotificationPrefsService } from '../notifications/notification-prefs.service';
@@ -87,6 +89,25 @@ export class MerchantsController {
       dto.expiresAt,
       req.ip,
     );
+  }
+
+  @Post('api-keys/:id/ip-allowlist')
+  @Scopes('merchant:manage')
+  @ApiOperation({ summary: 'Set the IP allowlist (CIDR ranges) for the API key' })
+  @ApiParam({ name: 'id', description: 'Merchant UUID that owns the API key (must be the caller)' })
+  @ApiOkResponse({ description: 'Merchant with updated API key IP allowlist' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  @ApiForbiddenResponse({ description: 'Requires interactive JWT session, or id does not match caller' })
+  @ApiBadRequestResponse({ description: 'Invalid IP or CIDR entry' })
+  async setApiKeyIpAllowlist(
+    @Request() req: { user: { merchantId: string } },
+    @Param('id') id: string,
+    @Body() dto: SetApiKeyIpAllowlistDto,
+  ) {
+    if (id !== req.user.merchantId) {
+      throw new ForbiddenException("Cannot modify another merchant's API key");
+    }
+    return this.merchantsService.setApiKeyIpAllowlist(id, dto.cidrs);
   }
 
   @Delete('api-keys')

@@ -17,6 +17,7 @@ import { JwtAuthGuard } from './jwt.guard';
 import { AuthService } from '../auth.service';
 import { RateLimitService } from '../rate-limit.service';
 import { MerchantRole } from '../../merchants/entities/merchant.entity';
+import { AuditService } from '../../audit/audit.service';
 
 describe('JwtAuthGuard', () => {
   const authService = {
@@ -60,6 +61,7 @@ describe('JwtAuthGuard', () => {
       authService as unknown as AuthService,
       rateLimitService as unknown as RateLimitService,
       reflector as unknown as Reflector,
+      { log: jest.fn() } as unknown as AuditService,
     );
   });
 

@@ -18,6 +18,10 @@ import { CacheModule } from '../cache/cache.module';
 import { PrometheusModule } from '../prometheus/prometheus.module';
 import { EmailModule } from '../email/email.module';
 import { WebhookCircuitAdminController } from './webhook-circuit-admin.controller';
+import { MerchantsModule } from '../merchants/merchants.module';
+import { NotificationWebhookService } from './notification-webhook.service';
+import { NotificationWebhookController } from './notification-webhook.controller';
+import { PaymentNotificationSubscriber } from './payment-notification.subscriber';
 
 @Module({
   imports: [
@@ -29,9 +33,10 @@ import { WebhookCircuitAdminController } from './webhook-circuit-admin.controlle
     CacheModule,
     PrometheusModule,
     EmailModule,
+    MerchantsModule,
   ],
-  controllers: [WebhooksController, WebhookCircuitAdminController],
-  providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService],
-  exports: [WebhooksService, WebhookDeliveryService],
+  controllers: [WebhooksController, WebhookCircuitAdminController, NotificationWebhookController],
+  providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService, NotificationWebhookService, PaymentNotificationSubscriber],
+  exports: [WebhooksService, WebhookDeliveryService, NotificationWebhookService],
 })
 export class WebhooksModule {}

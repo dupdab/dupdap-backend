@@ -627,3 +627,7 @@ for automatic fixes. CI runs the same zero-warning lint command.
 See [Soroban integration](docs/soroban-integration.md) for contract configuration,
 ABI types and payment sequencing, and [API errors](docs/api-errors.md) for stable
 error codes and recovery actions.
+
+New to Stellar payments? Start with the [glossary](docs/glossary.md). For
+integration code, see the [Merchant API examples](docs/examples/README.md)
+(Node.js, Python and a [Postman collection](docs/dupdub-merchant-api.postman_collection.json)).

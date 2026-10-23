@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Connection } from 'typeorm';
 import { RuntimeConfig } from '../../runtime-config/entities/runtime-config.entity';
 
@@ -30,6 +31,26 @@ export async function seedAppConfigs(connection: Connection): Promise<void> {
       value: 'false',
       description: 'Whether settlements are auto-approved',
     },
+    {
+      key: 'settlements.small_batch_threshold_usd',
+      value: 10,
+      description: 'Payments below this USD amount wait for the batch window',
+    },
+    {
+      key: 'settlements.batch_fee_rate',
+      value: 0.015,
+      description: 'Fee rate applied to batched settlements',
+    },
+    {
+      key: 'settlements.batch_window_minutes',
+      value: 15,
+      description: 'Batch window length in minutes',
+    },
+    {
+      key: 'settlements.large_settlement_threshold',
+      value: 10000,
+      description: 'Net USD amount at or above which a settlement requires approval',
+    },
   ];
 
   for (const seed of seeds) {
@@ -43,5 +64,5 @@ export async function seedAppConfigs(connection: Connection): Promise<void> {
     }
   }
 
-  console.log('App configs seeded.');
+  new Logger('AppConfigSeed').log('App configs seeded.');
 }
