@@ -1,4 +1,4 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, Logger, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
@@ -8,6 +8,8 @@ import { redactSensitive } from '../utils/redact.util';
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(AuditInterceptor.name);
+
   constructor(
     private readonly reflector: Reflector,
     private readonly auditService: AuditService,
@@ -43,7 +45,7 @@ export class AuditInterceptor implements NestInterceptor {
             before,
             after: redactSensitive(data),
             ip,
-          }).catch(err => console.error('Failed to write audit log:', err));
+          }).catch(err => this.logger.error(`Failed to write audit log: ${err}`));
         },
         error: (err) => {
           this.auditService.log({
@@ -53,7 +55,7 @@ export class AuditInterceptor implements NestInterceptor {
             before,
             after: { error: err.message, status: err.status },
             ip,
-          }).catch(logErr => console.error('Failed to write audit log for error:', logErr));
+          }).catch(logErr => this.logger.error(`Failed to write audit log for error: ${logErr}`));
         }
       }),
     );

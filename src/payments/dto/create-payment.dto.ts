@@ -1,4 +1,4 @@
-import { IsNumber, IsPositive, IsString, IsOptional, IsEmail, IsIP, IsObject, Max } from 'class-validator';
+import { IsNumber, IsPositive, IsString, IsOptional, IsEmail, IsIP, IsObject, Max, MaxLength, Min } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MaxJsonSize } from '../../common/decorators/max-json-size.decorator';
@@ -15,12 +15,14 @@ export class CreatePaymentDto {
   @ApiProperty({ example: 50.0 })
   @IsNumber()
   @IsPositive()
+  @Min(0.01)
   @Max(MAX_AMOUNT_USD)
   amountUsd: number;
 
   @ApiPropertyOptional({ example: 'Payment for order #123' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   @Transform(({ value }) => value?.trim())
   description?: string;
 

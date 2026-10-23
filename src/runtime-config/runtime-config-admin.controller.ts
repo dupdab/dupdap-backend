@@ -43,6 +43,6 @@ export class RuntimeConfigController {
     @Req() req: Request,
   ) {
     const adminId = (req as Request & { user: { merchantId: string } }).user.merchantId;
-    return this.runtimeConfigService.set(key, body.value, adminId, body.description);
+    return this.runtimeConfigService.set(key, body.value, adminId, body.description, req.ip);
   }
 }

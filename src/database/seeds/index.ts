@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Connection, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -5,6 +6,8 @@ import { Merchant, MerchantRole, MerchantStatus } from '../../merchants/entities
 import { Payment, PaymentNetwork, PaymentStatus } from '../../payments/entities/payment.entity';
 import { Settlement, SettlementStatus } from '../../settlements/entities/settlement.entity';
 import { seedAppConfigs } from './app-config.seed';
+
+const logger = new Logger('Seed');
 
 const DEFAULT_PASSWORD = 'Password123!';
 
@@ -33,7 +36,7 @@ export async function seedDatabase(connection: Connection, predictableIds = fals
   const merchants = await seedMerchants(connection, predictableIds);
   const settlements = await seedSettlements(connection, predictableIds, merchants);
   await seedPayments(connection, predictableIds, merchants, settlements);
-  console.log('Database seeding complete.');
+  logger.log('Database seeding complete.');
 }
 
 async function seedMerchants(connection: Connection, predictableIds: boolean) {
@@ -100,9 +103,9 @@ async function seedMerchants(connection: Connection, predictableIds: boolean) {
     }
   }
 
-  console.log('Merchants seeded.');
-  console.log(`Seeded admin account: admin@localhost`);
-  console.log(`Generated admin password (shown once): ${adminPassword}`);
+  logger.log('Merchants seeded.');
+  logger.log(`Seeded admin account: admin@localhost`);
+  logger.log(`Generated admin password (shown once): ${adminPassword}`);
   return saved;
 }
 
@@ -167,7 +170,7 @@ async function seedSettlements(connection: Connection, predictableIds: boolean, 
     }
   }
 
-  console.log('Settlements seeded.');
+  logger.log('Settlements seeded.');
   return saved;
 }
 
@@ -270,5 +273,5 @@ async function seedPayments(
     }
   }
 
-  console.log('Payments seeded.');
+  logger.log('Payments seeded.');
 }
