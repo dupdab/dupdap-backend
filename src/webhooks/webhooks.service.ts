@@ -30,6 +30,17 @@ export class WebhooksService {
     private merchantsRepo?: Repository<Merchant>,
   ) {}
 
+  /** Admin: close an open webhook circuit and clear the failure streak (#457). */
+  async resetCircuit(webhookId: string): Promise<Webhook> {
+    const webhook = await this.webhooksRepo.findOne({ where: { id: webhookId } });
+    if (!webhook) {
+      throw new NotFoundException('Webhook not found');
+    }
+    webhook.circuitOpenUntil = null;
+    webhook.failureCount = 0;
+    return this.webhooksRepo.save(webhook);
+  }
+
   async updateRetryConfig(merchantId: string, config: UpdateWebhookRetryConfigDto) {
     if (!this.merchantsRepo) throw new Error('Merchant repository is unavailable');
     const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });

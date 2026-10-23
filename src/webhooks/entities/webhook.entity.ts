@@ -48,6 +48,10 @@ export class Webhook {
   @Column({ nullable: true })
   lastDeliveredAt: Date;
 
+  /** While in the future the circuit is open and deliveries are skipped (#457). */
+  @Column({ type: 'timestamptz', nullable: true })
+  circuitOpenUntil: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 
