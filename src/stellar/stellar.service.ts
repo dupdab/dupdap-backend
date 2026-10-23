@@ -5,6 +5,40 @@ import { CacheService } from '../cache/cache.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { StellarTxQueueService } from './stellar-tx-queue.service';
+import { Gauge } from 'prom-client';
+import { CircuitBreaker, CircuitState } from '../common/circuit-breaker';
+import {
+  RPC_CIRCUIT_FAILURE_THRESHOLD,
+  RPC_CIRCUIT_RESET_MS,
+  SorobanRpcResilience,
+  isTransientRpcError,
+} from './soroban-rpc-resilience';
+
+const CIRCUIT_STATE_VALUE: Record<CircuitState, number> = { closed: 0, 'half-open': 1, open: 2 };
+
+/** Horizon polling circuit state: 0 = closed, 1 = half-open, 2 = open. */
+export const stellarHorizonCircuitState = new Gauge({
+  name: 'stellar_horizon_circuit_state',
+  help: 'Horizon circuit breaker state (0=closed, 1=half-open, 2=open)',
+});
+
+/** Horizon payment operation fields read by `verifyPayment`. */
+export interface HorizonPaymentRecord {
+  type: string;
+  asset_code?: string;
+  asset_issuer?: string;
+  asset_type?: string;
+  amount: string;
+  from?: string;
+}
+
+/** Horizon account balance line (native and credit assets). */
+export interface HorizonBalance {
+  asset_type: string;
+  asset_code?: string;
+  asset_issuer?: string;
+  balance: string;
+}
 
 export interface XlmUsdRate {
   rate: number;
@@ -26,6 +60,8 @@ export class StellarService implements OnModuleInit {
   private networkPassphrase: string;
   private usdcAsset: StellarSdk.Asset;
   private sorobanContractId: string;
+  private horizonBreaker: CircuitBreaker;
+  private sorobanRpc: SorobanRpcResilience<StellarSdk.rpc.Server>;
 
   constructor(
     private config: ConfigService,
@@ -47,6 +83,55 @@ export class StellarService implements OnModuleInit {
     );
     this.networkPassphrase =
       network === 'PUBLIC' ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET;
+
+    this.horizonBreaker = new CircuitBreaker({
+      name: 'stellar-horizon',
+      failureThreshold: RPC_CIRCUIT_FAILURE_THRESHOLD,
+      resetTimeoutMs: RPC_CIRCUIT_RESET_MS,
+      isFailure: isTransientRpcError,
+      onStateChange: (state) => {
+        stellarHorizonCircuitState.set(CIRCUIT_STATE_VALUE[state]);
+        if (state === 'open') {
+          this.logger.error('Horizon circuit breaker opened; Stellar polling is paused');
+          void this.adminAlertService
+            .raise({
+              type: AdminAlertType.STELLAR_MONITOR,
+              dedupeKey: 'horizon-circuit',
+              message: `Horizon circuit breaker opened after ${RPC_CIRCUIT_FAILURE_THRESHOLD} consecutive failures; Stellar polling is paused until it recovers.`,
+              metadata: { horizonUrl },
+              thresholdValue: RPC_CIRCUIT_FAILURE_THRESHOLD,
+            })
+            .catch((error) =>
+              this.logger.error(`Failed to raise Horizon circuit alert: ${error instanceof Error ? error.message : error}`),
+            );
+        } else {
+          this.logger.log(`Horizon circuit breaker is ${state}`);
+        }
+      },
+    });
+    stellarHorizonCircuitState.set(CIRCUIT_STATE_VALUE.closed);
+
+    const fallbackRpcUrl = this.config.get<string>('SOROBAN_RPC_FALLBACK_URL');
+    this.sorobanRpc = new SorobanRpcResilience<StellarSdk.rpc.Server>(
+      this.sorobanRpcServer,
+      fallbackRpcUrl ? new StellarSdk.rpc.Server(fallbackRpcUrl) : undefined,
+      {
+        name: 'stellar-service-soroban-rpc',
+        onCircuitOpen: (failures) => {
+          void this.adminAlertService
+            .raise({
+              type: AdminAlertType.STELLAR_MONITOR,
+              dedupeKey: 'stellar-service-soroban-circuit',
+              message: `Soroban RPC circuit breaker opened after ${failures} consecutive failures.`,
+              metadata: { failures, fallbackConfigured: Boolean(fallbackRpcUrl) },
+              thresholdValue: failures,
+            })
+            .catch((error) =>
+              this.logger.error(`Failed to raise Soroban circuit alert: ${error instanceof Error ? error.message : error}`),
+            );
+        },
+      },
+    );
 
     const secret = this.config.get('STELLAR_ACCOUNT_SECRET');
     if (secret) {
@@ -128,6 +213,15 @@ export class StellarService implements OnModuleInit {
     return { rate: 0.1, isFallback: true };
   }
 
+  /** True while the Horizon circuit is open; callers should pause polling. */
+  isHorizonCircuitOpen(): boolean {
+    return this.horizonBreaker?.isOpen() ?? false;
+  }
+
+  private callHorizon<T>(fn: () => Promise<T>): Promise<T> {
+    return this.horizonBreaker ? this.horizonBreaker.execute(fn) : fn();
+  }
+
   async getAccountTransactions(
     accountId: string,
     cursor?: string,
@@ -136,14 +230,16 @@ export class StellarService implements OnModuleInit {
 
     if (cursor) builder.cursor(cursor);
 
-    const page = await builder.call();
+    const page = await this.callHorizon(() => builder.call());
     return page.records;
   }
 
   async getPaymentsForTransaction(txHash: string): Promise<any[]> {
-    const tx = await this.server.transactions().transaction(txHash).call();
-    const operations = await tx.operations();
-    return operations.records;
+    return this.callHorizon(async () => {
+      const tx = await this.server.transactions().transaction(txHash).call();
+      const operations = await tx.operations();
+      return operations.records;
+    });
   }
 
   async verifyPayment(
@@ -153,15 +249,15 @@ export class StellarService implements OnModuleInit {
     assetType: 'XLM' | 'USDC' = 'USDC',
   ): Promise<{ verified: boolean; amount?: number; asset?: string; from?: string }> {
     try {
-      const tx = await this.server.transactions().transaction(txHash).call();
+      const tx = await this.callHorizon(() => this.server.transactions().transaction(txHash).call());
 
       const memo = tx.memo;
       if (expectedMemo && memo !== expectedMemo) {
         return { verified: false };
       }
 
-      const ops = await tx.operations();
-      for (const op of ops.records as any[]) {
+      const ops = await this.callHorizon(() => tx.operations());
+      for (const op of ops.records as unknown as HorizonPaymentRecord[]) {
         if (op.type === 'payment') {
           const isUsdc = op.asset_code === 'USDC' && op.asset_issuer === this.usdcAsset.getIssuer();
           const isXlm = op.asset_type === 'native';
@@ -204,9 +300,9 @@ export class StellarService implements OnModuleInit {
     return this.server;
   }
 
-  async getBalance(stellarAccountId: string): Promise<any[]> {
-    const account = await this.server.accounts().accountId(stellarAccountId).call();
-    return account.balances as any[];
+  async getBalance(stellarAccountId: string): Promise<HorizonBalance[]> {
+    const account = await this.callHorizon(() => this.server.accounts().accountId(stellarAccountId).call());
+    return account.balances as unknown as HorizonBalance[];
   }
 
   async invokeContract(fn: string, args: unknown[] = []): Promise<string> {
@@ -230,7 +326,7 @@ export class StellarService implements OnModuleInit {
     }
 
     try {
-      const source = await this.server.loadAccount(this.keypair.publicKey());
+      const source = await this.callHorizon(() => this.server.loadAccount(this.keypair.publicKey()));
       const contract = new StellarSdk.Contract(this.sorobanContractId);
       const tx = new StellarSdk.TransactionBuilder(source, {
         fee: StellarSdk.BASE_FEE,
@@ -240,7 +336,7 @@ export class StellarService implements OnModuleInit {
         .setTimeout(30)
         .build();
 
-      const simulated = await this.sorobanRpcServer.simulateTransaction(tx);
+      const simulated = await this.sorobanRpc.call('simulate transaction', (rpc) => rpc.simulateTransaction(tx));
       if (StellarSdk.rpc.Api.isSimulationError(simulated)) {
         throw new SorobanRpcException(
           'Soroban simulateTransaction failed',
@@ -254,7 +350,7 @@ export class StellarService implements OnModuleInit {
       const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simulated).build();
       preparedTx.sign(this.keypair);
 
-      const submitted = await this.sorobanRpcServer.sendTransaction(preparedTx);
+      const submitted = await this.sorobanRpc.call('submit transaction', (rpc) => rpc.sendTransaction(preparedTx));
       if (submitted.status !== 'PENDING') {
         throw new SorobanRpcException(
           'Soroban sendTransaction failed',

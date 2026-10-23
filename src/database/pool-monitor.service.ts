@@ -5,6 +5,14 @@ import { DataSource } from 'typeorm';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 
+/** Subset of the `pg` pool that TypeORM exposes as `driver.master`. */
+interface PgPoolStats {
+  totalCount?: number;
+  idleCount?: number;
+  waitingCount?: number;
+  options?: { max?: number };
+}
+
 /** Open connections in the DB pool (idle + active). */
 export const dbPoolSize = new Gauge({
   name: 'db_pool_size',
@@ -54,7 +62,7 @@ export class PoolMonitorService implements OnModuleInit {
 
   private async checkPool() {
     // TypeORM uses `pg` driver; the underlying pool is accessible via driver
-    const pool = (this.dataSource.driver as any)?.master;
+    const pool = (this.dataSource.driver as unknown as { master?: PgPoolStats })?.master;
     if (!pool) return;
 
     const total: number = pool.totalCount ?? 0;

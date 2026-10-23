@@ -15,6 +15,7 @@ export enum AdminAlertType {
   DB_POOL_EXHAUSTED = 'db_pool_exhausted',
   TRANSACTION_LIMIT = 'transaction_limit',
   API_KEY_NEW_IP = 'api_key_new_ip',
+  ANALYTICS_REFRESH = 'analytics_refresh',
 }
 
 export enum AdminAlertStatus {

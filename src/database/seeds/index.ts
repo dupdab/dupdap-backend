@@ -32,7 +32,7 @@ const FIXED_IDS = {
 };
 
 export async function seedDatabase(connection: Connection, predictableIds = false): Promise<void> {
-  await seedAppConfigs(connection as any);
+  await seedAppConfigs(connection);
   const merchants = await seedMerchants(connection, predictableIds);
   const settlements = await seedSettlements(connection, predictableIds, merchants);
   await seedPayments(connection, predictableIds, merchants, settlements);

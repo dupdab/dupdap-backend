@@ -6,12 +6,18 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { AdminAlertService } from '../alerts/admin-alert.service';
+import { AdminAlertType } from '../alerts/admin-alert.entity';
+import { SorobanRpcResilience } from '../stellar/soroban-rpc-resilience';
 
 export const SOROBAN_RPC_CLIENT = 'SOROBAN_RPC_CLIENT';
+/** Optional second RPC client built from `SOROBAN_RPC_FALLBACK_URL`. */
+export const SOROBAN_RPC_FALLBACK_CLIENT = 'SOROBAN_RPC_FALLBACK_CLIENT';
 
 type SorobanRpcClient = {
   getAccount(address: string): Promise<any>;
@@ -33,16 +39,57 @@ export interface InvokeContractOptions {
   timeoutInSeconds?: number;
 }
 
+/** Optional SDK helpers that are absent from partial SDK mocks and older versions. */
+interface SdkAssembleTransaction {
+  assembleTransaction?: (transaction: unknown, simulation: unknown) => { build?: () => unknown } | undefined;
+}
+interface SdkScValToNative {
+  scValToNative?: (scVal: StellarSdk.xdr.ScVal) => unknown;
+}
+interface SdkNativeToScVal {
+  nativeToScVal?: (value: unknown) => unknown;
+}
+interface XdrSwitchLike {
+  switch?: () => { name?: string };
+}
+interface XdrTransactionResultLike extends XdrSwitchLike {
+  result?: unknown;
+}
+
 @Injectable()
 export class SorobanService implements OnModuleInit {
   private readonly logger = new Logger(SorobanService.name);
   private networkPassphrase?: string;
+  private readonly rpc: SorobanRpcResilience<SorobanRpcClient>;
 
   constructor(
     private readonly configService: ConfigService,
     @Inject(SOROBAN_RPC_CLIENT)
     private readonly rpcClient: SorobanRpcClient,
-  ) {}
+    @Optional()
+    @Inject(SOROBAN_RPC_FALLBACK_CLIENT)
+    fallbackClient?: SorobanRpcClient,
+    @Optional()
+    private readonly adminAlerts?: AdminAlertService,
+  ) {
+    this.rpc = new SorobanRpcResilience<SorobanRpcClient>(rpcClient, fallbackClient, {
+      name: 'soroban-rpc',
+      isRetryable: (error) => this.isRetryable(error),
+      onCircuitOpen: (failures) => {
+        void this.adminAlerts
+          ?.raise({
+            type: AdminAlertType.STELLAR_MONITOR,
+            dedupeKey: 'soroban-rpc-circuit',
+            message: `Soroban RPC circuit breaker opened after ${failures} consecutive failures; payment operations will fail fast until it recovers.`,
+            metadata: { failures, fallbackConfigured: fallbackClient !== undefined },
+            thresholdValue: failures,
+          })
+          .catch((error) =>
+            this.logger.error(`Failed to raise Soroban circuit alert: ${this.describeError(error)}`),
+          );
+      },
+    });
+  }
 
   async onModuleInit(): Promise<void> {
     this.networkPassphrase = await this.getNetworkPassphrase();
@@ -55,7 +102,7 @@ export class SorobanService implements OnModuleInit {
   async simulateTx(transaction: any): Promise<any> {
     try {
       const simulation = await this.withRetry(
-        () => this.rpcClient.simulateTransaction(transaction),
+        (client) => client.simulateTransaction(transaction),
         'simulate transaction',
       );
 
@@ -80,7 +127,7 @@ export class SorobanService implements OnModuleInit {
       this.signTransaction(preparedTransaction, signer);
 
       const submission = await this.withRetry(
-        () => this.rpcClient.sendTransaction(preparedTransaction),
+        (client) => client.sendTransaction(preparedTransaction),
         'submit transaction',
       );
 
@@ -89,8 +136,8 @@ export class SorobanService implements OnModuleInit {
       }
 
       const finalResponse = await this.withRetry(
-        () =>
-          this.rpcClient.pollTransaction(submission.hash, {
+        (client) =>
+          client.pollTransaction(submission.hash, {
             attempts: 5,
             sleep: 1000,
           }),
@@ -120,7 +167,7 @@ export class SorobanService implements OnModuleInit {
     const sourcePublicKey =
       options.sourcePublicKey ?? this.resolveSourcePublicKey(options.secretKey);
     const account = await this.withRetry(
-      () => this.rpcClient.getAccount(sourcePublicKey),
+      (client) => client.getAccount(sourcePublicKey),
       'load source account',
     );
     const contract = new StellarSdk.Contract(options.contractId);
@@ -202,13 +249,13 @@ export class SorobanService implements OnModuleInit {
   private async prepareTransaction(transaction: any): Promise<any> {
     if (typeof this.rpcClient.prepareTransaction === 'function') {
       return this.withRetry(
-        () => this.rpcClient.prepareTransaction!(transaction),
+        (client) => client.prepareTransaction!(transaction),
         'prepare transaction',
       );
     }
 
     const simulation = await this.simulateTx(transaction);
-    const assembled = (StellarSdk.rpc as any)?.assembleTransaction?.(transaction, simulation);
+    const assembled = (StellarSdk.rpc as unknown as SdkAssembleTransaction)?.assembleTransaction?.(transaction, simulation);
 
     if (assembled?.build) {
       return assembled.build();
@@ -281,7 +328,7 @@ export class SorobanService implements OnModuleInit {
     }
 
     const networkDetails = await this.withRetry(
-      () => this.rpcClient.getNetwork(),
+      (client) => client.getNetwork(),
       'load network details',
     );
     this.networkPassphrase = networkDetails?.passphrase ?? StellarSdk.Networks.TESTNET;
@@ -336,7 +383,7 @@ export class SorobanService implements OnModuleInit {
   private decodeScVal(rawValue: string): unknown | null {
     try {
       const scVal = StellarSdk.xdr.ScVal.fromXDR(rawValue, 'base64');
-      const nativeValue = (StellarSdk as any).scValToNative?.(scVal);
+      const nativeValue = (StellarSdk as unknown as SdkScValToNative).scValToNative?.(scVal);
       return nativeValue ?? scVal.toXDR('base64');
     } catch {
       return null;
@@ -354,9 +401,11 @@ export class SorobanService implements OnModuleInit {
     }
 
     try {
-      const txResult = StellarSdk.xdr.TransactionResult.fromXDR(rawValue, 'base64') as any;
-      const txResultValue =
-        typeof txResult?.result === 'function' ? txResult.result() : txResult?.result;
+      const txResult = StellarSdk.xdr.TransactionResult.fromXDR(rawValue, 'base64') as unknown as XdrTransactionResultLike;
+      const rawResult = txResult?.result;
+      const txResultValue = (
+        typeof rawResult === 'function' ? (rawResult as () => XdrSwitchLike | undefined)() : rawResult
+      ) as XdrSwitchLike | undefined;
       const resultCode = txResultValue?.switch?.().name ?? txResult?.switch?.().name;
 
       if (resultCode) {
@@ -437,31 +486,11 @@ export class SorobanService implements OnModuleInit {
     ].some((fragment) => message.includes(fragment));
   }
 
-  private async withRetry<T>(operation: () => Promise<T>, action: string): Promise<T> {
-    const maxAttempts = 3;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        return await operation();
-      } catch (error) {
-        const finalAttempt = attempt === maxAttempts;
-        if (finalAttempt || !this.isRetryable(error)) {
-          throw error;
-        }
-
-        const delayMs = 250 * 2 ** (attempt - 1);
-        this.logger.warn(
-          `Soroban RPC ${action} failed on attempt ${attempt}; retrying in ${delayMs}ms`,
-        );
-        await this.sleep(delayMs);
-      }
-    }
-
-    throw new ServiceUnavailableException(`Soroban RPC ${action} failed after retries`);
-  }
-
-  private sleep(delayMs: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, delayMs));
+  private withRetry<T>(
+    operation: (client: SorobanRpcClient) => Promise<T>,
+    action: string,
+  ): Promise<T> {
+    return this.rpc.call(action, operation);
   }
 
   private toScVal(value: unknown): StellarSdk.xdr.ScVal {
@@ -473,7 +502,7 @@ export class SorobanService implements OnModuleInit {
       return value as StellarSdk.xdr.ScVal;
     }
 
-    const nativeToScVal = (StellarSdk as any).nativeToScVal;
+    const nativeToScVal = (StellarSdk as unknown as SdkNativeToScVal).nativeToScVal;
     return typeof nativeToScVal === 'function'
       ? (nativeToScVal(value) as StellarSdk.xdr.ScVal)
       : (value as StellarSdk.xdr.ScVal);
