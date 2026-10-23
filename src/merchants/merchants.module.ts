@@ -11,11 +11,13 @@ import { AuditLog } from '../audit/entities/audit-log.entity';
 import { MerchantBankAccount } from './entities/merchant-bank-account.entity';
 import { EmailModule } from '../email/email.module';
 import { MerchantComplianceController } from './merchant-compliance.controller';
+import { RuntimeConfigModule } from '../runtime-config/runtime-config.module';
+import { MerchantNotificationDefaultsSubscriber } from '../notifications/merchant-notification-defaults.subscriber';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Merchant, MerchantBankAccount, NotificationPreference, AuditLog]), CacheModule, EmailModule],
+  imports: [TypeOrmModule.forFeature([Merchant, MerchantBankAccount, NotificationPreference, AuditLog]), CacheModule, EmailModule, RuntimeConfigModule],
   controllers: [MerchantsController, MerchantsAdminController, MerchantComplianceController],
-  providers: [MerchantsService, NotificationPrefsService],
+  providers: [MerchantsService, NotificationPrefsService, MerchantNotificationDefaultsSubscriber],
   exports: [MerchantsService, NotificationPrefsService],
 })
 export class MerchantsModule {}

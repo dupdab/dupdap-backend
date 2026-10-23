@@ -1,0 +1,110 @@
+{
+  "info": {
+    "name": "DupDub Merchant API",
+    "description": "Common merchant flows: create payment, check status, notification settings. Set `baseUrl` and `apiKey` collection variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api/v1"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "paymentId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Create payment",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "if (body.id) pm.collectionVariables.set('paymentId', body.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amountUsd\": 25.0,\n  \"description\": \"Order #1001\",\n  \"customerEmail\": \"customer@example.com\"\n}"
+        },
+        "url": "{{baseUrl}}/payments"
+      }
+    },
+    {
+      "name": "Get payment status",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/payments/{{paymentId}}"
+      }
+    },
+    {
+      "name": "List payments",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/payments"
+      }
+    },
+    {
+      "name": "Get notification preferences",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/merchants/me/notification-prefs"
+      }
+    },
+    {
+      "name": "Register notification webhook",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"url\": \"https://example.com/webhooks/dupdub-notifications\"\n}"
+        },
+        "url": "{{baseUrl}}/merchants/me/notification-webhook"
+      }
+    }
+  ]
+}
