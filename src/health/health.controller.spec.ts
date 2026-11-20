@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { HealthCheckService, TypeOrmHealthIndicator, HttpHealthIndicator } from '@nestjs/terminus';
+import { getQueueToken } from '@nestjs/bull';
 import { HealthController } from './health.controller';
 import { CacheService } from '../cache/cache.service';
+import { QUEUE_NAMES } from '../queues/queue.constants';
 
 describe('HealthController', () => {
   let controller: HealthController;
@@ -11,6 +13,11 @@ describe('HealthController', () => {
   let mockHttpHealthIndicator: jest.Mocked<HttpHealthIndicator>;
   let mockConfigService: jest.Mocked<ConfigService>;
   let mockCacheService: jest.Mocked<Pick<CacheService, 'ping'>>;
+  let mockWebhookQueue: {
+    isReady: jest.Mock;
+    client: { ping: jest.Mock };
+    count: jest.Mock;
+  };
 
   beforeEach(async () => {
     mockHealthCheckService = {
@@ -33,6 +40,12 @@ describe('HealthController', () => {
       ping: jest.fn().mockResolvedValue('PONG'),
     };
 
+    mockWebhookQueue = {
+      isReady: jest.fn().mockReturnValue(true),
+      client: { ping: jest.fn().mockResolvedValue('PONG') },
+      count: jest.fn().mockResolvedValue(0),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HealthController],
       providers: [
@@ -41,6 +54,7 @@ describe('HealthController', () => {
         { provide: HttpHealthIndicator, useValue: mockHttpHealthIndicator },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: CacheService, useValue: mockCacheService },
+        { provide: getQueueToken(QUEUE_NAMES.webhookDelivery), useValue: mockWebhookQueue },
       ],
     }).compile();
 
@@ -60,11 +74,11 @@ describe('HealthController', () => {
 
   describe('adminHealth', () => {
     it('should return healthy status when all components are ok', async () => {
-      // Mock successful health checks
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        if (key === 'QUEUE_DEPTH_THRESHOLD') return 1000;
         return defaultValue;
       });
 
@@ -79,15 +93,15 @@ describe('HealthController', () => {
     });
 
     it('should return degraded status when non-critical components fail', async () => {
-      // Mock database success but partner API failure
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck
         .mockResolvedValueOnce({ stellar: { status: 'up' } })
         .mockRejectedValueOnce(new Error('Partner API down'));
-      
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) => {
+
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
         if (key === 'PARTNER_API_URL') return 'https://partner-api.example.com';
+        if (key === 'QUEUE_DEPTH_THRESHOLD') return 1000;
         return defaultValue;
       });
 
@@ -102,8 +116,9 @@ describe('HealthController', () => {
     it('should ping Redis via CacheService and report ok', async () => {
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string | number) => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        if (key === 'QUEUE_DEPTH_THRESHOLD') return 1000;
         return defaultValue;
       });
 
@@ -116,8 +131,9 @@ describe('HealthController', () => {
       mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
       mockCacheService.ping.mockRejectedValue(new Error('Redis unavailable'));
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string | number) => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        if (key === 'QUEUE_DEPTH_THRESHOLD') return 1000;
         return defaultValue;
       });
 
@@ -128,34 +144,87 @@ describe('HealthController', () => {
     });
 
     it('should throw 503 when critical components are down', async () => {
-      // Mock database failure
       mockTypeOrmHealthIndicator.pingCheck.mockRejectedValue(new Error('Database down'));
       mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
         if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        if (key === 'QUEUE_DEPTH_THRESHOLD') return 1000;
         return defaultValue;
       });
 
       await expect(controller.adminHealth()).rejects.toThrow();
     });
+
+    describe('queue health check', () => {
+      beforeEach(() => {
+        mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
+        mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
+        mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
+          if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+          if (key === 'QUEUE_DEPTH_THRESHOLD') return 100;
+          return defaultValue;
+        });
+      });
+
+      it('reports ok when Redis ping succeeds and queue depth is below threshold', async () => {
+        mockWebhookQueue.count.mockResolvedValue(10);
+
+        const result = await controller.adminHealth();
+
+        expect(result.components.queue.status).toBe('ok');
+        expect(mockWebhookQueue.client.ping).toHaveBeenCalled();
+      });
+
+      it('reports degraded when queue depth exceeds the configured threshold', async () => {
+        mockWebhookQueue.count.mockResolvedValue(500);
+
+        const result = await controller.adminHealth();
+
+        expect(result.components.queue.status).toBe('degraded');
+        expect((result.components.queue as any).depth).toBe(500);
+      });
+
+      it('reports down when the queue client ping fails', async () => {
+        mockWebhookQueue.client.ping.mockRejectedValue(new Error('Redis connection lost'));
+
+        const result = await controller.adminHealth();
+
+        expect(result.components.queue.status).toBe('down');
+      });
+
+      it('reports down when the queue is not ready', async () => {
+        mockWebhookQueue.isReady.mockReturnValue(false);
+
+        const result = await controller.adminHealth();
+
+        expect(result.components.queue.status).toBe('down');
+      });
+    });
   });
 
   describe('readiness', () => {
-    it('should call health check service with database and stellar checks', () => {
-      mockConfigService.get.mockReturnValue('https://horizon-testnet.stellar.org');
-      mockHealthCheckService.check.mockResolvedValue({
-        status: 'ok',
-        info: {},
-        error: {},
-        details: {},
+    it('returns ready when database, Redis, and Stellar all respond', async () => {
+      mockTypeOrmHealthIndicator.pingCheck.mockResolvedValue({ database: { status: 'up' } });
+      mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
+        if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        return defaultValue;
       });
 
-      controller.readiness();
+      const result = await controller.ready();
 
-      expect(mockHealthCheckService.check).toHaveBeenCalledWith([
-        expect.any(Function),
-        expect.any(Function),
-      ]);
+      expect(result).toEqual({ status: 'ready' });
+    });
+
+    it('throws 503 when the database is unreachable', async () => {
+      mockTypeOrmHealthIndicator.pingCheck.mockRejectedValue(new Error('DB down'));
+      mockHttpHealthIndicator.pingCheck.mockResolvedValue({ stellar: { status: 'up' } });
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
+        if (key === 'STELLAR_HORIZON_URL') return 'https://horizon-testnet.stellar.org';
+        return defaultValue;
+      });
+
+      await expect(controller.ready()).rejects.toThrow();
     });
   });
 });
