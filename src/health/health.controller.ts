@@ -15,6 +15,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { MerchantRole } from '../merchants/entities/merchant.entity';
 import { CacheWarmupService } from '../cache/cache-warmup.service';
+import { QUEUE_NAMES } from '../queues/queue.constants';
 
 @ApiTags('health')
 @Controller('health')
@@ -25,7 +26,7 @@ export class HealthController {
     private http: HttpHealthIndicator,
     private config: ConfigService,
     private cache: CacheService,
-    @InjectQueue('webhook-delivery') private webhookQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.webhookDelivery) private webhookQueue: Queue,
     @Optional() private readonly cacheWarmup?: CacheWarmupService,
   ) {}
 
@@ -273,36 +274,36 @@ export class HealthController {
     }
   }
 
-  private async checkQueue(): Promise<{ status: string; latency: number }> {
+  private async checkQueue(): Promise<{ status: string; latency: number; depth?: number }> {
     const startTime = Date.now();
     try {
       // Verify the Bull/Redis queue backend is connected and responsive.
-      // `isReady()` reflects the underlying Redis connection state, and
+      // `isReady()` reflects the underlying ioredis connection state, and
       // `client.ping()` confirms the connection actually answers commands.
       if (!this.webhookQueue.isReady()) {
-        return {
-          status: 'down',
-          latency: Date.now() - startTime,
-        };
+        return { status: 'down', latency: Date.now() - startTime };
       }
 
       await this.webhookQueue.client.ping();
       const latency = Date.now() - startTime;
-      return {
-        status: latency > 1000 ? 'degraded' : 'ok',
-        latency,
-      };
+
+      // Check queue depth and report degraded when it exceeds the threshold.
+      const depthThreshold = this.config.get<number>('QUEUE_DEPTH_THRESHOLD', 1000);
+      const waitingCount = await this.webhookQueue.count();
+      if (waitingCount > depthThreshold) {
+        return { status: 'degraded', latency, depth: waitingCount };
+      }
+
+      return { status: latency > 1000 ? 'degraded' : 'ok', latency, depth: waitingCount };
     } catch (error) {
-      return {
-        status: 'down',
-        latency: Date.now() - startTime,
-      };
+      return { status: 'down', latency: Date.now() - startTime };
     }
   }
 
-  private getResultFromSettled(result: PromiseSettledResult<{ status: string; latency: number }>): {
+  private getResultFromSettled(result: PromiseSettledResult<{ status: string; latency: number; depth?: number }>): {
     status: string;
     latency: number;
+    depth?: number;
   } {
     if (result.status === 'fulfilled') {
       return result.value;
