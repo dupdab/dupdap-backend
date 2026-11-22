@@ -29,6 +29,7 @@ import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 import { AuditService } from '../audit/audit.service';
+import { TokenBlacklistService } from '../auth/services/token-blacklist.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -40,6 +41,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly ratesService: RatesService,
     private readonly auditService: AuditService,
+    private readonly tokenBlacklistService: TokenBlacklistService,
   ) {}
 
   @Get('merchants')
@@ -65,6 +67,9 @@ export class AdminController {
     const actorId = req.user?.id ?? req.user?.merchantId;
     const before = await this.adminService.findOneMerchant(id);
     const result = await this.adminService.updateMerchantStatus(id, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await this.tokenBlacklistService.blacklistAllForMerchant(id);
+    }
     await this.auditService.log({
       actorId,
       action: 'MERCHANT_STATUS_UPDATED',
@@ -87,6 +92,13 @@ export class AdminController {
   ) {
     const actorId = req.user?.id ?? req.user?.merchantId;
     const result = await this.adminService.bulkUpdateMerchantStatus(ids, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await Promise.all(
+        ids.map((merchantId) =>
+          this.tokenBlacklistService.blacklistAllForMerchant(merchantId),
+        ),
+      );
+    }
     await this.auditService.log({
       actorId,
       action: 'MERCHANT_STATUS_BULK_UPDATED',
@@ -233,89 +245,4 @@ export class AdminController {
     });
     return result;
   }
-
-  @Delete('users/:id')
-  @ApiOperation({ summary: 'Delete an admin user (SUPERADMIN only)' })
-  async deleteAdmin(
-    @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
-  ) {
-    const actorId = req.user?.id ?? req.user?.merchantId;
-    const result = await this.adminService.deleteAdmin(id, req.user.role, actorId);
-    await this.auditService.log({
-      actorId,
-      action: 'ADMIN_USER_DELETED',
-      resourceType: 'admin_user',
-      resourceId: id,
-      before: { id },
-      after: null,
-      ip: req.ip,
-    });
-    return result;
-  }
-
-  @Patch('users/:id/role')
-  @ApiOperation({ summary: 'Update an admin user role (SUPERADMIN only)' })
-  async updateAdminRole(
-    @Param('id') id: string,
-    @Body('role') role: MerchantRole,
-    @Req() req: Request & { user: { id: string; merchantId: string; role: MerchantRole } },
-  ) {
-    const actorId = req.user.id ?? req.user.merchantId;
-    const result = await this.adminService.updateAdminRole(id, role, req.user.role, actorId);
-    await this.auditService.log({
-      actorId,
-      action: 'ADMIN_USER_ROLE_UPDATED',
-      resourceType: 'admin_user',
-      resourceId: id,
-      before: null,
-      after: { role },
-      ip: req.ip,
-    });
-    return result;
-  }
-
-  @Post('users/:id/2fa/setup')
-  @ApiOperation({ summary: 'Generate a TOTP secret for an admin user' })
-  setupAdminTotp(@Param('id') id: string) {
-    return this.adminService.setupAdminTotp(id);
-  }
-
-  @Post('users/:id/2fa/verify')
-  @ApiOperation({ summary: 'Verify a TOTP token and enable 2FA for an admin user' })
-  verifyAdminTotp(
-    @Param('id') id: string,
-    @Body('token') token: string,
-  ) {
-    return this.adminService.verifyAdminTotp(id, token);
-  }
-
-  @Patch('users/:id/allowed-ips')
-  @ApiOperation({ summary: 'Update the IP allowlist for an admin user' })
-  updateAdminAllowedIps(
-    @Param('id') id: string,
-    @Body('ips') ips: string[],
-  ) {
-    return this.adminService.updateAdminAllowedIps(id, ips);
-  }
-
-  // ── Sandbox Environment Management (#708) ──────────────────────────────────
-
-  @Patch('merchants/:id/sandbox')
-  @Auditable({ action: 'SANDBOX_MODE_TOGGLED', resource: 'merchant' })
-  @ApiOperation({ summary: 'Enable or disable sandbox mode for a merchant' })
-  toggleSandboxMode(
-    @Param('id') id: string,
-    @Body('enabled') enabled: boolean,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
-    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? req.user?.merchantId);
-  }
-
-  @Post('merchants/:id/sandbox/reset')
-  @Auditable({ action: 'DATA_PURGED', resource: 'merchant' })
-  @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
-  resetSandboxData(
-    @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
+}
