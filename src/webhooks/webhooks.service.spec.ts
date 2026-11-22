@@ -110,4 +110,35 @@ describe('WebhooksService', () => {
     expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledTimes(1);
     expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledWith(webhooks[0], 'payment.completed', expect.any(String));
   });
+
+  describe('event subscription matching', () => {
+    it('matches an exact event name', async () => {
+      const webhook = { id: 'hook-1', merchantId: 'merchant-1', events: ['payment.completed'], isActive: true };
+      webhooksRepo.find.mockResolvedValue([webhook]);
+
+      await service.dispatch('merchant-1', 'payment.completed', { id: 'p-1' });
+
+      expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledTimes(1);
+      expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledWith(webhook, 'payment.completed', expect.any(String));
+    });
+
+    it('matches a glob-style wildcard subscription such as payment.*', async () => {
+      const webhook = { id: 'hook-1', merchantId: 'merchant-1', events: ['payment.*'], isActive: true };
+      webhooksRepo.find.mockResolvedValue([webhook]);
+
+      await service.dispatch('merchant-1', 'payment.completed', { id: 'p-1' });
+
+      expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledTimes(1);
+      expect(webhookDelivery.enqueueDelivery).toHaveBeenCalledWith(webhook, 'payment.completed', expect.any(String));
+    });
+
+    it('does not match when no subscription matches the event', async () => {
+      const webhook = { id: 'hook-1', merchantId: 'merchant-1', events: ['payment.*'], isActive: true };
+      webhooksRepo.find.mockResolvedValue([webhook]);
+
+      await service.dispatch('merchant-1', 'refund.created', { id: 'r-1' });
+
+      expect(webhookDelivery.enqueueDelivery).not.toHaveBeenCalled();
+    });
+  });
 });

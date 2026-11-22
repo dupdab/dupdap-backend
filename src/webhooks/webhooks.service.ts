@@ -12,6 +12,36 @@ import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { UpdateWebhookRetryConfigDto } from './dto/update-webhook-retry-config.dto';
 
+/**
+ * Returns true when a webhook's event subscription matches the emitted event.
+ *
+ * Matching semantics:
+ * - `*` matches every event.
+ * - Exact names match only themselves (e.g. `payment.created`).
+ * - Glob patterns use `*` as a wildcard for any sequence of characters
+ *   (e.g. `payment.*` matches `payment.created` and `payment.failed`).
+ */
+export function matchesEventSubscription(subscriptions: string[], event: string): boolean {
+  if (!Array.isArray(subscriptions)) {
+    return false;
+  }
+  return subscriptions.some((pattern) => {
+    if (pattern === '*') {
+      return true;
+    }
+    if (pattern === event) {
+      return true;
+    }
+    if (pattern.includes('*')) {
+      const regex = new RegExp(
+        '^' + pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$',
+      );
+      return regex.test(event);
+    }
+    return false;
+  });
+}
+
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
@@ -62,9 +92,7 @@ export class WebhooksService {
       where: { merchantId, isActive: true },
     });
 
-    const matchingWebhooks = webhooks.filter(
-      (w) => w.events.includes(event) || w.events.includes('*'),
-    );
+    const matchingWebhooks = webhooks.filter((w) => matchesEventSubscription(w.events, event));
 
     const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
 
@@ -215,41 +243,40 @@ export class WebhooksService {
         const resolved = await dns.promises.lookup(hostname, { all: true });
         addresses.push(...resolved.map((r) => r.address));
       } catch {
-        throw new BadRequestException(`Webhook URL host could not be resolved: ${hostname}`);
+        throw new BadRequestException(`Webhook URL host could not be resolved`);
       }
     }
 
     for (const address of addresses) {
       if (this.isPrivateAddress(address)) {
-        throw new BadRequestException(
-          `Webhook URL resolves to a private or reserved address: ${address}`,
-        );
+        throw new BadRequestException('Webhook URL must not point to a private or internal address');
       }
     }
   }
 
   private isPrivateAddress(address: string): boolean {
     if (net.isIPv4(address)) {
-      const [a, b] = address.split('.').map((part) => parseInt(part, 10));
-      if (a === 0 || a === 10 || a === 127) return true;
-      if (a === 169 && b === 254) return true;
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      if (a === 192 && b === 168) return true;
-      if (a >= 224) return true;
-      return false;
+      const parts = address.split('.').map(Number);
+      const [a, b] = parts;
+      return (
+        a === 10 ||
+        a === 127 ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        a === 0
+      );
     }
-
     if (net.isIPv6(address)) {
-      const normalized = address.toLowerCase();
-      if (normalized === '::1' || normalized === '::') return true;
-      if (normalized.startsWith('fe80:')) return true;
-      if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-      if (normalized.startsWith('::ffff:')) {
-        return this.isPrivateAddress(normalized.slice('::ffff:'.length));
-      }
-      return false;
+      const lower = address.toLowerCase();
+      return (
+        lower === '::1' ||
+        lower === '::' ||
+        lower.startsWith('fc') ||
+        lower.startsWith('fd') ||
+        lower.startsWith('fe80')
+      );
     }
-
-    return true;
+    return false;
   }
 }
