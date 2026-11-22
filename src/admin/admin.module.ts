@@ -10,6 +10,7 @@ import { FeeHistory } from '../fee-config/entities/fee-history.entity';
 import { CronModule } from '../cron/cron.module';
 import { CronJobLog } from '../cron/entities/cron-job-log.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
+import { AuditService } from '../audit/audit.service';
 import { RatesModule } from '../rates/rates.module';
 import { CacheModule } from '../cache/cache.module';
 import { Settlement } from '../settlements/entities/settlement.entity';
@@ -36,7 +37,7 @@ import { EncryptionAdminController } from './encryption-admin.controller';
     BlockchainWalletModule,
   ],
   controllers: [AdminController, CronAdminController, EncryptionAdminController],
-  providers: [AdminService, IpAllowlistGuard],
+  providers: [AdminService, AuditService, IpAllowlistGuard],
   exports: [AdminService, TypeOrmModule],
 })
 export class AdminModule {}
