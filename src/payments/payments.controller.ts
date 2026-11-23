@@ -20,7 +20,7 @@ import { BatchCreatePaymentDto, BatchPaymentResultDto } from './dto/batch-create
 import { PublicPaymentViewDto } from './dto/public-payment-view.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
-import { PaginationDto } from '../common/dto/pagination.dto';
+import { PaymentsQueryDto } from './dto/payments-query.dto';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 import { TransactionLimitFilter } from './transaction-limit.filter';
@@ -73,13 +73,14 @@ export class PaymentsController {
   @Get()
   @Scopes('payments:read')
   @ApiOperation({ summary: 'List all payments' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (>= 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Page size (1-100)' })
   @ApiOkResponse({ description: 'Paginated payments' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
   @ApiForbiddenResponse({ description: 'API key missing payments:read scope' })
+  @ApiBadRequestResponse({ description: 'Invalid pagination parameters' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  findAll(@Request() req: { user: { merchantId: string } }, @Query() pagination: PaginationDto) {
+  findAll(@Request() req: { user: { merchantId: string } }, @Query() pagination: PaymentsQueryDto) {
     return this.paymentsService.findAll(req.user.merchantId, pagination.page, pagination.limit);
   }
 
