@@ -32,6 +32,8 @@ export enum PaymentNetwork {
 @Entity('payments')
 @Index(['merchantId', 'status'])
 @Index(['merchantId', 'createdAt'])
+// GIN index is created by migration 1772500000000; declared here so schema diffs don't drop it
+@Index('IDX_payments_metadata_gin', ['metadata'], { synchronize: false })
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
