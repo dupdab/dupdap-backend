@@ -17,6 +17,7 @@ import {
   startOfUtcMonth,
 } from '../common/date-range.util';
 import { DailyPaymentVolume } from './entities/daily-payment-volume.view';
+import { ANALYTICS_STALE_AFTER_MS, ANALYTICS_VIEW_LAST_REFRESHED_KEY } from './analytics-refresh.service';
 
 type AnalyticsPeriod = 'daily' | 'monthly';
 type VolumeScope = 'merchant' | 'admin';
@@ -185,7 +186,7 @@ export class AnalyticsService {
 
     const ttlMs = this.resolveAnalyticsTtlMs(scope);
 
-    return this.getCachedValue(cacheKey,
+    const series = await this.getCachedValue(cacheKey,
       async () => {
         const rows = await this.getVolumeBreakdown(
           merchantId,
@@ -197,6 +198,13 @@ export class AnalyticsService {
       },
       ttlMs,
     );
+
+    // Freshness is read per request, not cached with the series, so isStale is never out of date.
+    const lastRefreshedAt = await this.cache.get<string>(ANALYTICS_VIEW_LAST_REFRESHED_KEY);
+    const isStale =
+      lastRefreshedAt === null ||
+      Date.now() - Date.parse(lastRefreshedAt) > ANALYTICS_STALE_AFTER_MS;
+    return { series, lastRefreshedAt, isStale };
   }
 
   async getFunnel(merchantId?: string, compareWith?: 'previous', from?: string, to?: string, range?: AnalyticsRangeInput) {
