@@ -3,7 +3,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Raw, Repository } from 'typeorm';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
@@ -17,6 +17,9 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+
+const SMALL_BATCH_THRESHOLD_USD = 10;
+const BATCH_FEE_RATE = 0.015;
 
 interface SettlementDecisionResult {
   success: boolean;
@@ -49,6 +52,59 @@ export class SettlementsService {
   private readonly settlementsRepo: Repository<Settlement>;
   private readonly paymentsRepo: Repository<Payment>;
   private readonly auditLogRepo: Repository<AuditLog>;
+
+  // ── Small-payment batching ─────────────────────────────────────────────────
+
+  async batchSmallConfirmedPayments(): Promise<void> {
+    // amountUsd is a decimal column; cast explicitly so the comparison is numeric, never textual.
+    const payments = await this.paymentsRepo.find({
+      where: {
+        status: PaymentStatus.CONFIRMED,
+        amountUsd: Raw((alias) => `CAST(${alias} AS numeric) < :threshold`, {
+          threshold: SMALL_BATCH_THRESHOLD_USD,
+        }),
+      },
+      order: { confirmedAt: 'ASC' },
+    });
+
+    const byMerchant = new Map<string, Payment[]>();
+    for (const payment of payments) {
+      const group = byMerchant.get(payment.merchantId) ?? [];
+      group.push(payment);
+      byMerchant.set(payment.merchantId, group);
+    }
+
+    for (const [merchantId, group] of byMerchant) {
+      const total = group.reduce((sum, p) => sum + Number(p.amountUsd), 0);
+      if (total < SMALL_BATCH_THRESHOLD_USD) continue;
+
+      const fee = total * BATCH_FEE_RATE;
+      const merchant = await this.merchantsService.findOne(merchantId);
+      const settlement = await this.settlementsRepo.save(
+        this.settlementsRepo.create({
+          merchantId,
+          totalAmountUsd: total.toFixed(6),
+          feeAmountUsd: fee.toFixed(6),
+          netAmountUsd: (total - fee).toFixed(6),
+          fiatCurrency: merchant.settlementCurrency,
+          status: SettlementStatus.PROCESSING,
+          requiresApproval: false,
+        }),
+      );
+
+      for (const payment of group) {
+        payment.status = PaymentStatus.SETTLING;
+        payment.settlementId = settlement.id;
+        await this.paymentsRepo.save(payment);
+      }
+
+      await this.settlementQueue.add(
+        'dispatch',
+        { settlementId: settlement.id },
+        { attempts: this.retryConfig.settlement.maxAttempts + 1 },
+      );
+    }
+  }
 
   // ── Admin approval workflow (#445) ─────────────────────────────────────────
 
