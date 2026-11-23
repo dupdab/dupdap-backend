@@ -208,6 +208,8 @@ export class StellarMonitorService implements OnModuleInit {
     asset: string,
     from?: string,
   ) {
+    let contractRejected = false;
+
     await this.dataSource.transaction(async (manager) => {
       // Re-fetch with a row-level lock to prevent concurrent double-settlement.
       // If another worker already confirmed this payment, its status will no
@@ -224,13 +226,25 @@ export class StellarMonitorService implements OnModuleInit {
         return;
       }
 
-      await this.stellar.invokeContract('confirm', [
-        locked.id,
-        txHash,
-        amount,
-        asset,
-        from ?? null,
-      ]);
+      try {
+        await this.stellar.invokeContract('confirm', [
+          locked.id,
+          txHash,
+          amount,
+          asset,
+          from ?? null,
+        ]);
+      } catch (err) {
+        // Persist FAILED in this transaction; otherwise the rollback leaves the payment PENDING forever
+        this.logger.error(
+          `Soroban confirm failed for payment ${locked.reference} | tx: ${txHash} | ${(err as Error).message}`,
+        );
+        locked.status = PaymentStatus.FAILED;
+        locked.txHash = txHash;
+        await manager.save(locked);
+        contractRejected = true;
+        return;
+      }
 
       this.logger.log(`Payment confirmed: ${locked.reference} | tx: ${txHash}`);
 
@@ -258,6 +272,52 @@ export class StellarMonitorService implements OnModuleInit {
       });
 
       await this.settlements.initiateSettlement(locked, manager);
+    });
+
+    if (contractRejected) {
+      await this.notifyPaymentFailed(payment, txHash);
+    }
+  }
+
+  private async notifyPaymentFailed(
+    payment: Payment & { merchant?: Merchant },
+    txHash: string,
+  ): Promise<void> {
+    // Runs after commit: a delivery failure must not turn into a false "confirm failed" alert
+    try {
+      await this.webhooks.dispatch(payment.merchantId, 'payment.failed', {
+        paymentId: payment.id,
+        reference: payment.reference,
+        txHash,
+      });
+      await this.queuePaymentFailedEmail(payment);
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify merchant of failed payment ${payment.reference}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async queuePaymentFailedEmail(payment: Payment & { merchant?: Merchant }): Promise<void> {
+    const merchant = payment.merchant;
+    if (!merchant?.email) return;
+
+    const emailEnabled = await this.notificationPrefs.isEnabled(
+      merchant.id,
+      NotificationChannel.EMAIL,
+      NotificationEventType.PAYMENT_FAILED,
+    );
+    if (!emailEnabled) return;
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    await this.emailService.queue(merchant.email, 'payment-failed', {
+      merchantName: merchant.businessName,
+      reference: payment.reference,
+      amount: Number(payment.amountUsd ?? 0).toFixed(2),
+      currency: 'USD',
+      reason: 'The on-chain payment could not be confirmed',
+      failedAt: new Date().toISOString(),
+      supportUrl: frontendUrl.replace(/\/$/, ''),
     });
   }
 
@@ -289,7 +349,16 @@ export class StellarMonitorService implements OnModuleInit {
       {
         merchantName: merchant.businessName,
         reference: payment.reference,
-        amountUsd:
+        amountUsd: Number(payment.amountUsd ?? 0).toFixed(2),
+        assetAmount,
+        asset,
+        txHash: payment.txHash,
+        confirmedAt: new Date().toISOString(),
+        txUrl,
+        paymentDetailUrl,
+      },
+    );
+  }
 
   private async queuePaymentConfirmedSms(
     payment: Payment & { merchant?: Merchant },
