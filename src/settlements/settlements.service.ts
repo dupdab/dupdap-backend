@@ -47,6 +47,28 @@ interface SettlementDecisionResult {
   settlement: Settlement;
 }
 
+/** Timeout applied to the partner fiat transfer request (#827). */
+export const PARTNER_TRANSFER_TIMEOUT_MS = 30_000;
+
+/** Consecutive partner timeouts for one settlement before admins are alerted (#827). */
+export const PARTNER_TIMEOUT_ALERT_THRESHOLD = 3;
+
+/**
+ * Retriable error thrown when the partner API does not answer within
+ * PARTNER_TRANSFER_TIMEOUT_MS. Bull retries the job because the error is thrown.
+ */
+export class PartnerTransferTimeoutError extends Error {
+  readonly isRetriable = true;
+
+  constructor(
+    readonly settlementId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Partner fiat transfer timed out after ${timeoutMs}ms`);
+    this.name = 'PartnerTransferTimeoutError';
+  }
+}
+
 const DEFAULT_SETTLEMENT_QUEUE_DEPTH_THRESHOLD = 50;
 
 const settlementQueueDepth = new Gauge({
@@ -308,6 +330,74 @@ export class SettlementsService {
     await paymentsRepo.save(payment);
 
     return saved;
+  }
+
+  /** Consecutive partner timeouts per settlement id (#827). */
+  private readonly partnerTimeoutCounts = new Map<string, number>();
+
+  // ── Partner fiat transfer (#827) ───────────────────────────────────────────
+
+  async executeFiatTransfer(settlement: Settlement): Promise<void> {
+    const partnerUrl = this.config.get<string>('SETTLEMENT_PARTNER_URL');
+    const apiKey = this.config.get<string>('SETTLEMENT_PARTNER_API_KEY');
+
+    try {
+      const response = await axios.post(
+        partnerUrl,
+        {
+          reference: settlement.id,
+          amount: settlement.netAmountUsd,
+          currency: settlement.fiatCurrency,
+        },
+        {
+          timeout: PARTNER_TRANSFER_TIMEOUT_MS,
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+        },
+      );
+
+      this.partnerTimeoutCounts.delete(settlement.id);
+      settlement.partnerReference = response?.data?.reference;
+      settlement.status = SettlementStatus.COMPLETED;
+      await this.settlementsRepo.save(settlement);
+    } catch (error) {
+      if (this.isTimeoutError(error)) {
+        await this.handlePartnerTimeout(settlement);
+        throw new PartnerTransferTimeoutError(settlement.id, PARTNER_TRANSFER_TIMEOUT_MS);
+      }
+
+      settlement.status = SettlementStatus.FAILED;
+      settlement.failureReason = (error as Error)?.message ?? 'Partner transfer failed';
+      await this.settlementsRepo.save(settlement);
+      throw error;
+    }
+  }
+
+  private isTimeoutError(error: unknown): boolean {
+    const err = error as { code?: string; message?: string } | undefined;
+    return (
+      err?.code === 'ECONNABORTED' ||
+      err?.code === 'ETIMEDOUT' ||
+      /timeout/i.test(err?.message ?? '')
+    );
+  }
+
+  private async handlePartnerTimeout(settlement: Settlement): Promise<void> {
+    const consecutive = (this.partnerTimeoutCounts.get(settlement.id) ?? 0) + 1;
+    this.partnerTimeoutCounts.set(settlement.id, consecutive);
+
+    if (consecutive < PARTNER_TIMEOUT_ALERT_THRESHOLD) return;
+
+    await this.adminAlerts.raise({
+      type: AdminAlertType.SETTLEMENT_FAILURE,
+      dedupeKey: `settlement:${settlement.id}`,
+      message: `Partner fiat transfer timed out ${consecutive} consecutive times for settlement ${settlement.id}`,
+      metadata: {
+        settlementId: settlement.id,
+        consecutiveTimeouts: consecutive,
+        timeoutMs: PARTNER_TRANSFER_TIMEOUT_MS,
+      },
+      thresholdValue: consecutive,
+    });
   }
 
   // ── Admin approval workflow (#445) ─────────────────────────────────────────

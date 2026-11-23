@@ -29,7 +29,11 @@ const FEE_TIERS: FeeTier[] = [
 export class FeeCalculationService {
   constructor(private readonly merchantsService: MerchantsService) {}
 
-  async calculateFee(merchantId: string, amountUsd: string | number): Promise<FeeResult> {
+  async calculateFee(
+    merchantId: string,
+    amountUsd: string | number,
+    customFeeRate?: number | string | null,
+  ): Promise<FeeResult> {
     let amount: Big;
     try {
       amount = new Big(amountUsd);
@@ -53,6 +57,21 @@ export class FeeCalculationService {
       tierName: tier.name,
       netUsd: netUsd.toNumber(),
     };
+  }
+
+  /**
+   * Uses the merchant's custom fee rate when set, otherwise falls back to the
+   * tier (global batch) rate. Invalid or negative overrides are ignored.
+   */
+  resolveFeeRate(customFeeRate: number | string | null | undefined, fallbackRate: number): number {
+    if (customFeeRate === null || customFeeRate === undefined || customFeeRate === '') {
+      return fallbackRate;
+    }
+    const parsed = typeof customFeeRate === 'number' ? customFeeRate : Number(customFeeRate);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return fallbackRate;
+    }
+    return parsed;
   }
 
   private resolveTier(amount: Big): FeeTier {

@@ -57,6 +57,27 @@ describe('FeeCalculationService', () => {
       expect(result.netUsd).toBe('9925.000000');
     });
 
+    it('uses the merchant custom fee rate when provided', async () => {
+      const result = await service.calculateFee('merchant-1', 100, 0.01);
+      expect(result.feeRate).toBe(0.01);
+      expect(result.feeUsd).toBe(1);
+      expect(result.netUsd).toBe(99);
+    });
+
+    it('accepts a custom fee rate stored as a numeric string', async () => {
+      const result = await service.calculateFee('merchant-1', 100, '0.02');
+      expect(result.feeRate).toBe(0.02);
+      expect(result.feeUsd).toBe(2);
+      expect(result.netUsd).toBe(98);
+    });
+
+    it('falls back to the tier rate when custom fee rate is null', async () => {
+      const result = await service.calculateFee('merchant-1', 100, null);
+      expect(result.feeRate).toBe(0.029);
+      expect(result.feeUsd).toBe(2.9);
+      expect(result.netUsd).toBe(97.1);
+    });
+
     it('covers every configured tier', async () => {
       for (const tier of FEE_TIERS) {
         const result = await service.calculateFee('merchant-1', tier.minUsd);
