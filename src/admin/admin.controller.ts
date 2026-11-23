@@ -33,6 +33,14 @@ import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 const MIN_FEE_RATE = 0;
 const MAX_FEE_RATE = 0.1;
 
+// AML flag review state machine (#932): PENDING → REVIEWING → RESOLVED | ESCALATED
+const AML_FLAG_STATUS_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ['REVIEWING'],
+  REVIEWING: ['RESOLVED', 'ESCALATED'],
+  RESOLVED: [],
+  ESCALATED: [],
+};
+
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(IpAllowlistGuard, JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
@@ -115,6 +123,38 @@ export class AdminController {
     ) {
       throw new BadRequestException(
         `Fee rate must be between ${MIN_FEE_RATE} and ${MAX_FEE_RATE} (inclusive)`,
+      );
+    }
+  }
+
+  // ── AML Flag Review (#932) ─────────────────────────────────────────────────
+
+  @Patch('aml-flags/:id/review')
+  @Auditable({ action: 'AML_FLAG_REVIEWED', resource: 'aml_flag' })
+  @ApiOperation({ summary: 'Review an AML flag and transition its status' })
+  reviewAmlFlag(
+    @Param('id') id: string,
+    @Body('status') status: string,
+    @Body('currentStatus') currentStatus: string,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    this.assertValidAmlFlagTransition(currentStatus, status);
+    return this.adminService.reviewAmlFlag(
+      id,
+      status,
+      req.user?.id ?? req.user?.merchantId,
+    );
+  }
+
+  private assertValidAmlFlagTransition(from: string, to: string): void {
+    const allowed = AML_FLAG_STATUS_TRANSITIONS[from];
+    if (!allowed) {
+      throw new BadRequestException(`Unknown AML flag status: ${from}`);
+    }
+    if (!allowed.includes(to)) {
+      throw new BadRequestException(
+        `Invalid AML flag status transition: ${from} → ${to}. ` +
+          `Allowed from ${from}: ${allowed.length ? allowed.join(', ') : 'none'}`,
       );
     }
   }
@@ -231,16 +271,10 @@ export class AdminController {
     @Body('enabled') enabled: boolean,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? req.user?.merchantId);
+    return this.adminService.toggleSandboxMode(
+      id,
+      enabled,
+      req.user?.id ?? req.user?.merchantId,
+    );
   }
-
-  @Post('merchants/:id/sandbox/reset')
-  @Auditable({ action: 'DATA_PURGED', resource: 'merchant' })
-  @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
-  resetSandboxData(
-    @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
-
-
-/* … truncated 4660 chars — edit only what you need near the top … */
+}
