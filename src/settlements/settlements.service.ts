@@ -2,8 +2,8 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
@@ -40,6 +40,7 @@ export class SettlementsService {
     private readonly stellar: StellarService,
     private readonly cronJobService: CronJobService,
     private readonly retryConfig: RetryConfigService,
+    @InjectDataSource() private readonly dataSource?: DataSource,
   ) {
     this.settlementsRepo = settlementsRepo as Repository<Settlement>;
     this.paymentsRepo = paymentsRepo as Repository<Payment>;
