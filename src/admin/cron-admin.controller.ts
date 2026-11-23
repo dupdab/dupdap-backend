@@ -1,12 +1,14 @@
 import { ApiOperation as AdminOperation, ApiResponse as AdminResponse, ApiBearerAuth as AdminBearer } from '@nestjs/swagger';
 import { ApiErrors } from '../common/api-errors.decorator';
-import { Controller, Get, Post, Param, Query, UseGuards, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, Body, UseGuards, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { CronJobLog, CronJobStatus } from '../cron/entities/cron-job-log.entity';
 import { CronJobRegistry } from '../cron/cron-job.registry';
+import { SorobanEventIndexer } from '../stellar/soroban-event-indexer.service';
+import { ReplaySorobanEventsDto } from './dto/replay-soroban-events.dto';
 
 interface JobStatusDto {
   jobName: string;
@@ -49,6 +51,7 @@ export class CronAdminController {
     @InjectRepository(CronJobLog)
     private logRepo: Repository<CronJobLog>,
     private jobRegistry: CronJobRegistry,
+    private sorobanIndexer: SorobanEventIndexer,
   ) {}
 
   @AdminResponse({ status: 200, description: 'Successful response' })
@@ -120,6 +123,14 @@ export class CronAdminController {
       page: pageNum,
       limit: limitNum,
     };
+  }
+
+  @AdminResponse({ status: 201, description: 'Successful response' })
+  @Post('soroban-event-indexer/replay')
+  @ApiOperation({ summary: 'Replay Soroban contract events from a ledger (rewinds the indexer cursor)' })
+  async replaySorobanEvents(@Body() dto: ReplaySorobanEventsDto) {
+    await this.sorobanIndexer.replayFrom(dto.fromLedger);
+    return { replayed: true, fromLedger: dto.fromLedger };
   }
 
   @AdminResponse({ status: 201, description: 'Successful response' })

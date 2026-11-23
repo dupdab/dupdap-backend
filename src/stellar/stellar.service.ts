@@ -1,6 +1,7 @@
-import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { randomBytes } from 'crypto';
 import { CacheService } from '../cache/cache.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
@@ -58,6 +59,8 @@ export class StellarService implements OnModuleInit {
   private sorobanRpcServer: StellarSdk.rpc.Server;
   private keypair: StellarSdk.Keypair;
   private networkPassphrase: string;
+  /** Inclusion fee floor in stroops (`STELLAR_MIN_FEE`); simulation adds the resource fee on top. */
+  private minFee = Number(StellarSdk.BASE_FEE);
   private usdcAsset: StellarSdk.Asset;
   private sorobanContractId: string;
   private horizonBreaker: CircuitBreaker;
@@ -83,6 +86,12 @@ export class StellarService implements OnModuleInit {
     );
     this.networkPassphrase =
       network === 'PUBLIC' ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET;
+
+    const minFeeConfig = this.config.get<string>('STELLAR_MIN_FEE');
+    this.minFee = minFeeConfig === undefined ? Number(StellarSdk.BASE_FEE) : Number(minFeeConfig);
+    if (!Number.isSafeInteger(this.minFee) || this.minFee < Number(StellarSdk.BASE_FEE)) {
+      throw new Error(`STELLAR_MIN_FEE must be an integer >= ${StellarSdk.BASE_FEE} stroops`);
+    }
 
     this.horizonBreaker = new CircuitBreaker({
       name: 'stellar-horizon',
@@ -153,7 +162,7 @@ export class StellarService implements OnModuleInit {
   }
 
   generateMemo(): string {
-    return Math.random().toString(36).substring(2, 10).toUpperCase();
+    return randomBytes(8).toString('hex');
   }
 
   async getXlmUsdRate(): Promise<XlmUsdRate> {
@@ -260,11 +269,10 @@ export class StellarService implements OnModuleInit {
       for (const op of ops.records as unknown as HorizonPaymentRecord[]) {
         if (op.type === 'payment') {
           const isUsdc = op.asset_code === 'USDC' && op.asset_issuer === this.usdcAsset.getIssuer();
-          const isXlm = op.asset_type === 'native';
 
-          if (isUsdc || isXlm) {
+          if (isUsdc) {
             const amount = parseFloat(op.amount);
-            return { verified: true, amount, asset: isUsdc ? 'USDC' : 'XLM', from: op.from };
+            return { verified: true, amount, asset: 'USDC', from: op.from };
           }
         }
       }
@@ -281,6 +289,15 @@ export class StellarService implements OnModuleInit {
     asset: StellarSdk.Asset,
     memo?: string,
   ): Promise<string> {
+    // Not routed through callHorizon: a 404 from user input must not trip the shared circuit breaker.
+    try {
+      await this.server.loadAccount(destinationId);
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        throw new BadRequestException(`Destination Stellar account ${destinationId} does not exist`);
+      }
+      throw error;
+    }
     return this.stellarTxQueue.submitPayment(destinationId, amount, asset, memo);
   }
 
@@ -329,7 +346,7 @@ export class StellarService implements OnModuleInit {
       const source = await this.callHorizon(() => this.server.loadAccount(this.keypair.publicKey()));
       const contract = new StellarSdk.Contract(this.sorobanContractId);
       const tx = new StellarSdk.TransactionBuilder(source, {
-        fee: StellarSdk.BASE_FEE,
+        fee: String(this.minFee),
         networkPassphrase: this.networkPassphrase,
       })
         .addOperation(contract.call(fn, ...args.map((arg) => StellarSdk.nativeToScVal(arg))))
@@ -350,7 +367,19 @@ export class StellarService implements OnModuleInit {
       const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simulated).build();
       preparedTx.sign(this.keypair);
 
-      const submitted = await this.sorobanRpc.call('submit transaction', (rpc) => rpc.sendTransaction(preparedTx));
+      let submitted = await this.sorobanRpc.call('submit transaction', (rpc) => rpc.sendTransaction(preparedTx));
+      if (submitted.status === 'ERROR' && submitted.errorResult?.result().switch().name === 'txInsufficientFee') {
+        // Fee too low for current network load: resubmit once as a fee bump at 2x the original total fee.
+        this.logger.warn(`Soroban rejected fee for ${fn} as insufficient; resubmitting as fee bump`);
+        const bumpTx = StellarSdk.TransactionBuilder.buildFeeBumpTransaction(
+          this.keypair,
+          String(Math.ceil((Number(preparedTx.fee) * 2) / (preparedTx.operations.length + 1))),
+          preparedTx,
+          this.networkPassphrase,
+        );
+        bumpTx.sign(this.keypair);
+        submitted = await this.sorobanRpc.call('submit transaction', (rpc) => rpc.sendTransaction(bumpTx));
+      }
       if (submitted.status !== 'PENDING') {
         throw new SorobanRpcException(
           'Soroban sendTransaction failed',
@@ -361,6 +390,7 @@ export class StellarService implements OnModuleInit {
         );
       }
 
+      await this.waitForTransaction(submitted.hash, fn, args);
       return submitted.hash;
     } catch (error) {
       if (error instanceof SorobanRpcException) {
@@ -374,6 +404,39 @@ export class StellarService implements OnModuleInit {
         fn,
         args,
       );
+    }
+  }
+
+  /**
+   * Poll getTransaction until the ledger closes. NOT_FOUND means not yet included, so keep polling.
+   * Timeout is a 504 with sorobanCode 'tx_confirmation_timeout': the tx may still land, so callers can retry the read.
+   */
+  private async waitForTransaction(hash: string, fn: string, args: unknown[]): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    let delayMs = 500;
+    while (true) {
+      const tx = await this.sorobanRpc.call('get transaction', (rpc) => rpc.getTransaction(hash));
+      if (tx.status === 'SUCCESS') return;
+      if (tx.status === 'FAILED') {
+        throw new SorobanRpcException(
+          'Soroban transaction failed on ledger close',
+          this.extractSorobanErrorCode(tx),
+          HttpStatus.BAD_GATEWAY,
+          fn,
+          args,
+        );
+      }
+      if (Date.now() + delayMs > deadline) {
+        throw new SorobanRpcException(
+          `Soroban transaction ${hash} not confirmed within 30s`,
+          'tx_confirmation_timeout',
+          HttpStatus.GATEWAY_TIMEOUT,
+          fn,
+          args,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(delayMs * 2, 5_000);
     }
   }
 
