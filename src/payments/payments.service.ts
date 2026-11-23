@@ -10,6 +10,7 @@ import { PaymentEvent, PaymentEventType } from './entities/payment-event.entity'
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { BatchCreatePaymentDto, BatchPaymentResultDto } from './dto/batch-create-payment.dto';
+import { PaymentStatsDto } from './dto/payment-stats.dto';
 import { StellarService } from '../stellar/stellar.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -18,6 +19,7 @@ import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
+import { PaymentConfirmedEventDto } from '../stellar/soroban-event.dto';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -437,8 +439,8 @@ export class PaymentsService {
     return payment;
   }
 
-  async getStats(merchantId: string) {
-    return this.paymentsRepo
+  async getStats(merchantId: string): Promise<PaymentStatsDto[]> {
+    const rows = await this.paymentsRepo
       .createQueryBuilder('payment')
       .select('payment.status', 'status')
       .addSelect('COUNT(*)', 'count')
@@ -446,5 +448,35 @@ export class PaymentsService {
       .where('payment.merchantId = :merchantId', { merchantId })
       .groupBy('payment.status')
       .getRawMany();
+
+    // Postgres returns COUNT/SUM as strings (e.g. "1234.000000"); convert to numbers for callers.
+    return rows.map((row) => ({
+      status: row.status,
+      count: Number(row.count
+      .createQueryBuilder('payment')
+      .select('payment.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('SUM(payment.amountUsd)', 'totalUsd')
+      .where('payment.merchantId = :merchantId', { merchantId })
+      .groupBy('payment.status')
+      .getRawMany();
+  async getStats(merchantId: string): Promise<PaymentStatsDto[]> {
+    const rows = await this.paymentsRepo
+      .createQueryBuilder('payment')
+      .select('payment.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('SUM(payment.amountUsd)', 'totalUsd')
+      .where('payment.merchantId = :merchantId', { merchantId })
+      .groupBy('payment.status')
+      .getRawMany();
+
+    // Postgres returns COUNT/SUM as strings (e.g. "1234.000000"); convert to numbers for callers.
+    return rows.map((row) => ({
+      status: row.status,
+      count: Number(row.count),
+      totalUsd: Number(row.totalUsd),
+    }));
+  }
+}
   }
 }
