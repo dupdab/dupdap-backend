@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import axios from 'axios';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
@@ -25,6 +26,8 @@ interface SettlementDecisionResult {
 
 @Injectable()
 export class SettlementsService {
+  private readonly logger = new Logger(SettlementsService.name);
+
   constructor(
     settlementsRepo?: Repository<Settlement>,
     paymentsRepo?: Repository<Payment>,
@@ -183,6 +186,55 @@ export class SettlementsService {
       ip: undefined,
     });
     await this.auditLogRepo.save(log);
+  }
+
+  private async executeFiatTransfer(settlement: Settlement): Promise<void> {
+    const partnerUrl = this.config.get<string>('SETTLEMENT_PARTNER_URL');
+    const partnerApiKey = this.config.get<string>('SETTLEMENT_PARTNER_API_KEY');
+    if (!partnerUrl || !partnerApiKey) {
+      throw new Error('Settlement partner is not configured');
+    }
+
+    await axios.post(
+      `${partnerUrl}/transfers`,
+      {
+        reference: settlement.id,
+        amount: settlement.netAmountUsd,
+        currency: settlement.fiatCurrency,
+        merchantId: settlement.merchantId,
+      },
+      { headers: { Authorization: `Bearer ${partnerApiKey}`, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  async processSettlement(settlementId: string): Promise<void> {
+    const settlement = await this.settlementsRepo.findOne({ where: { id: settlementId } });
+    if (!settlement) throw new NotFoundException(`Settlement ${settlementId} not found`);
+    if (settlement.status !== SettlementStatus.PROCESSING) {
+      this.logger.warn(`Settlement ${settlementId} is not in PROCESSING state; skipping`);
+      return;
+    }
+
+    try {
+      await this.executeFiatTransfer(settlement);
+      settlement.status = SettlementStatus.COMPLETED;
+      settlement.completedAt = new Date();
+      await this.settlementsRepo.save(settlement);
+      await this.webhooks.dispatch(settlement.merchantId, 'settlement.completed', {
+        settlementId: settlement.id,
+      });
+    } catch (error) {
+      settlement.status = SettlementStatus.FAILED;
+      settlement.failureReason = (error as Error).message;
+      await this.settlementsRepo.save(settlement);
+      throw error;
+    }
+
+    // Outside the try: an email failure must not mark a completed transfer as FAILED.
+    const merchant = await this.merchantsService.findOne(settlement.merchantId).catch(() => null);
+    if (merchant?.email) {
+      await this.emailService.sendSettlementStatusEmail(merchant.email, settlement);
+    }
   }
 
   private async notifySettlementDecision(
