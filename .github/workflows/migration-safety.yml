@@ -25,3 +25,60 @@ jobs:
 
       - name: Check for uncommitted migrations
         run: npm run migration:uncommitted:check
+
+  migration-rollback-check:
+    name: Migration Rollback Check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: migration_rollback_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/migration_rollback_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run latest migration
+        run: npm run migration:run
+
+      - name: Capture schema state after migration
+        run: |
+          pg_dump --schema-only --no-owner --no-privileges "$DATABASE_URL" > /tmp/schema_after_migration.sql
+
+      - name: Rollback latest migration
+        run: npm run migration:revert
+
+      - name: Re-run latest migration
+        run: npm run migration:run
+
+      - name: Capture schema state after rollback round-trip
+        run: |
+          pg_dump --schema-only --no-owner --no-privileges "$DATABASE_URL" > /tmp/schema_after_roundtrip.sql
+
+      - name: Assert schema state is identical after rollback round-trip
+        run: |
+          if ! diff -u /tmp/schema_after_migration.sql /tmp/schema_after_roundtrip.sql; then
+            echo "::error::Schema state differs after migration rollback round-trip. Rollback is not safe."
+            exit 1
+          fi
+          echo "Schema state identical before and after rollback round-trip."
