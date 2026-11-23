@@ -70,6 +70,11 @@ export class SettlementsService {
     settlement.approvedAt = new Date();
     await this.settlementsRepo.save(settlement);
 
+    for (const payment of settlement.payments ?? []) {
+      payment.status = PaymentStatus.SETTLING;
+      await this.paymentsRepo.save(payment);
+    }
+
     await this.writeAuditLog({
       actor: adminId,
       action: 'SETTLEMENT_APPROVED',
@@ -83,6 +88,14 @@ export class SettlementsService {
       { settlementId },
       { attempts: this.retryConfig.settlement.maxAttempts + 1 },
     );
+
+    for (const payment of settlement.payments ?? []) {
+      await this.webhooks.dispatch(payment.merchantId, 'payment.settling', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        amount: payment.amountUsd,
+      });
+    }
 
     await this.notifySettlementDecision(settlement, 'approved', adminId);
 
