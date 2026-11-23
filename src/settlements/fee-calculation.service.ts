@@ -14,10 +14,12 @@ interface FeeTier {
   rate: number;
 }
 
+const GROWTH_SCALE_BOUNDARY_USD = 10000;
+
 const FEE_TIERS: FeeTier[] = [
   { name: 'standard', minUsd: 0, maxUsd: 1000, rate: 0.029 },
-  { name: 'growth', minUsd: 1000, maxUsd: 10000, rate: 0.025 },
-  { name: 'scale', minUsd: 10000, maxUsd: 100000, rate: 0.02 },
+  { name: 'growth', minUsd: 1000, maxUsd: GROWTH_SCALE_BOUNDARY_USD, rate: 0.025 },
+  { name: 'scale', minUsd: GROWTH_SCALE_BOUNDARY_USD, maxUsd: 100000, rate: 0.02 },
   { name: 'enterprise', minUsd: 100000, maxUsd: null, rate: 0.015 },
 ];
 
