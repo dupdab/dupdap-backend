@@ -69,6 +69,9 @@ export class WebhooksService {
     const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
 
     for (const webhook of matchingWebhooks) {
+      if (!(await this.assertDeliverySafe(webhook))) {
+        continue;
+      }
       await this.webhookDelivery.enqueueDelivery(webhook, event, body);
       this.logger.log(`Webhook delivery enqueued: webhookId=${webhook.id} event=${event}`);
     }
@@ -88,12 +91,17 @@ export class WebhooksService {
       timestamp: new Date().toISOString(),
     });
 
+    let enqueued = 0;
     for (const hook of hooks) {
+      if (!(await this.assertDeliverySafe(hook))) {
+        continue;
+      }
       await this.webhookDelivery.enqueueDelivery(hook, 'webhook.test', body);
+      enqueued++;
     }
 
-    this.logger.log(`Webhook test enqueued for merchant ${merchantId}: ${hooks.length} endpoints`);
-    return { enqueued: hooks.length };
+    this.logger.log(`Webhook test enqueued for merchant ${merchantId}: ${enqueued} endpoints`);
+    return { enqueued };
   }
 
   async create(merchantId: string, url: string, events: string[], secret?: string) {
@@ -187,12 +195,33 @@ export class WebhooksService {
       if (!hook) {
         continue;
       }
+      if (!(await this.assertDeliverySafe(hook))) {
+        continue;
+      }
       await this.webhookDelivery.enqueueDelivery(hook, log.event, log.requestBody, { replay: true });
       replayed++;
     }
 
     this.logger.log(`Webhook replay for merchant ${merchantId}: ${replayed} events re-enqueued`);
     return { replayed, windowFrom: from.toISOString(), windowTo: to.toISOString() };
+  }
+
+  /**
+   * Re-resolves the webhook hostname on every delivery attempt to defend
+   * against DNS rebinding (#909). Returns false and alerts admins when the
+   * hostname now maps to a private/internal address, so the delivery is
+   * rejected instead of reaching internal services.
+   */
+  private async assertDeliverySafe(webhook: Webhook): Promise<boolean> {
+    try {
+      await this.assertPublicUrl(webhook.url);
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `SSRF blocked webhook delivery: webhookId=${webhook.id} merchantId=${webhook.merchantId} url=${webhook.url} reason=${(err as Error).message}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -215,41 +244,39 @@ export class WebhooksService {
         const resolved = await dns.promises.lookup(hostname, { all: true });
         addresses.push(...resolved.map((r) => r.address));
       } catch {
-        throw new BadRequestException(`Webhook URL host could not be resolved: ${hostname}`);
+        throw new BadRequestException(`Webhook URL host could not be resolved`);
       }
     }
 
     for (const address of addresses) {
       if (this.isPrivateAddress(address)) {
-        throw new BadRequestException(
-          `Webhook URL resolves to a private or reserved address: ${address}`,
-        );
+        throw new BadRequestException('Webhook URL must not point to a private or internal address');
       }
     }
   }
 
   private isPrivateAddress(address: string): boolean {
     if (net.isIPv4(address)) {
-      const [a, b] = address.split('.').map((part) => parseInt(part, 10));
-      if (a === 0 || a === 10 || a === 127) return true;
+      const parts = address.split('.').map((p) => parseInt(p, 10));
+      const [a, b] = parts;
+      if (a === 10) return true;
+      if (a === 127) return true;
+      if (a === 0) return true;
       if (a === 169 && b === 254) return true;
       if (a === 172 && b >= 16 && b <= 31) return true;
       if (a === 192 && b === 168) return true;
-      if (a >= 224) return true;
+      if (a === 100 && b >= 64 && b <= 127) return true;
       return false;
     }
-
     if (net.isIPv6(address)) {
-      const normalized = address.toLowerCase();
-      if (normalized === '::1' || normalized === '::') return true;
-      if (normalized.startsWith('fe80:')) return true;
-      if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-      if (normalized.startsWith('::ffff:')) {
-        return this.isPrivateAddress(normalized.slice('::ffff:'.length));
+      const lower = address.toLowerCase();
+      if (lower === '::1' || lower === '::') return true;
+      if (lower.startsWith('fe80:') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
+      if (lower.startsWith('::ffff:')) {
+        return this.isPrivateAddress(lower.slice('::ffff:'.length));
       }
       return false;
     }
-
     return true;
   }
 }
