@@ -83,6 +83,7 @@ export class Payment {
   @Column({ nullable: true })
   customerEmail: string;
 
+  @Index('IDX_payments_metadata_gin', { synchronize: false })
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, any>;
 
