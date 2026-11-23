@@ -797,13 +797,22 @@ export class AnalyticsService {
 
   clearCacheForMerchant(merchantId: string): void {
     // Invalidate all analytics caches for a specific merchant when their data changes.
-    void this.cache.delPattern(`analytics:${merchantId}:*`);
+    this.invalidatePattern(`analytics:${merchantId}:*`);
     // Also invalidate admin analytics that may aggregate this merchant's data.
-    void this.cache.delPattern('analytics:admin:*');
+    this.invalidatePattern('analytics:admin:*');
   }
 
   clearCache() {
     // Best-effort; used only in tests / debugging.
-    void this.cache.delPattern('analytics:*');
+    this.invalidatePattern('analytics:*');
+  }
+
+  // Fire-and-forget by design, but failures must be logged, not lost as unhandled rejections.
+  private invalidatePattern(pattern: string): void {
+    this.cache.delPattern(pattern).catch((err: unknown) => {
+      this.logger.error(
+        `Cache invalidation failed for ${pattern}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 }
