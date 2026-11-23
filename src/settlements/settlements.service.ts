@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
@@ -23,8 +23,16 @@ interface SettlementDecisionResult {
   settlement: Settlement;
 }
 
+export interface PartnerCallbackPayload {
+  reference: string;
+  status: 'success' | 'failed';
+  failureReason?: string;
+}
+
 @Injectable()
 export class SettlementsService {
+  private readonly logger = new Logger(SettlementsService.name);
+
   constructor(
     settlementsRepo?: Repository<Settlement>,
     paymentsRepo?: Repository<Payment>,
@@ -160,6 +168,61 @@ export class SettlementsService {
       limit: query.limit,
       pages: Math.ceil(total / query.limit),
     };
+  }
+
+  // ── Partner callback ───────────────────────────────────────────────────────
+
+  async handlePartnerCallback(payload: PartnerCallbackPayload): Promise<void> {
+    const settlement = await this.settlementsRepo.findOne({
+      where: { id: payload.reference },
+      relations: ['payments'],
+    });
+    if (!settlement) {
+      this.logger.warn('Partner callback for unknown settlement', { reference: payload.reference });
+      return;
+    }
+    if (
+      settlement.status === SettlementStatus.COMPLETED ||
+      settlement.status === SettlementStatus.FAILED
+    ) {
+      this.logger.warn('Duplicate partner callback ignored', {
+        settlementId: settlement.id,
+        status: settlement.status,
+      });
+      return;
+    }
+
+    if (payload.status === 'success') {
+      settlement.status = SettlementStatus.COMPLETED;
+      settlement.completedAt = new Date();
+      await this.settlementsRepo.save(settlement);
+
+      for (const payment of settlement.payments ?? []) {
+        await this.stellar.invokeContract('settle', [payment.id, settlement.id]);
+        payment.status = PaymentStatus.SETTLED;
+        await this.paymentsRepo.save(payment);
+        await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
+          paymentId: payment.id,
+          settlementId: settlement.id,
+          amount: Number(payment.amountUsd),
+        });
+      }
+      this.analytics.clearCacheForMerchant(settlement.merchantId);
+      return;
+    }
+
+    settlement.status = SettlementStatus.FAILED;
+    settlement.failureReason = payload.failureReason ?? 'Reported failed by partner';
+    await this.settlementsRepo.save(settlement);
+
+    for (const payment of settlement.payments ?? []) {
+      payment.status = PaymentStatus.FAILED;
+      await this.paymentsRepo.save(payment);
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.failed', {
+        paymentId: payment.id,
+        reason: settlement.failureReason,
+      });
+    }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
