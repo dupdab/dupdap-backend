@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -12,6 +13,8 @@ import {
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Settlement } from '../../settlements/entities/settlement.entity';
 import { numericColumnTransformer } from '../../database/numeric-column.transformer';
+import { encryptedColumnTransformer } from '../../security/encrypted-column.transformer';
+import { maskEmail } from '../utils/mask-email.util';
 
 export enum PaymentStatus {
   PENDING = 'pending',
@@ -80,7 +83,8 @@ export class Payment {
   @Column({ nullable: true })
   description: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, transformer: encryptedColumnTransformer('payments.customerEmail') })
+  @Transform(({ value }) => maskEmail(value), { toPlainOnly: true })
   customerEmail: string;
 
   @Column({ type: 'jsonb', nullable: true })
