@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { MerchantsService } from '../merchants/merchants.service';
 
 export interface FeeResult {
   feeUsd: number;
@@ -23,18 +24,23 @@ const FEE_TIERS: FeeTier[] = [
 
 @Injectable()
 export class FeeCalculationService {
+  constructor(private readonly merchantsService: MerchantsService) {}
+
   async calculateFee(merchantId: string, amountUsd: number): Promise<FeeResult> {
     if (!Number.isFinite(amountUsd) || amountUsd < 0) {
       throw new BadRequestException(`Invalid amount for merchant ${merchantId}: ${amountUsd}`);
     }
 
+    const merchant = await this.merchantsService.findOne(merchantId);
     const tier = this.resolveTier(amountUsd);
-    const feeUsd = this.round(amountUsd * tier.rate);
+    // Merchant override wins; null means the tier default applies.
+    const rate = merchant.customFeeRate != null ? Number(merchant.customFeeRate) : tier.rate;
+    const feeUsd = this.round(amountUsd * rate);
     const netUsd = this.round(amountUsd - feeUsd);
 
     return {
       feeUsd,
-      feeRate: tier.rate,
+      feeRate: rate,
       tierName: tier.name,
       netUsd,
     };
