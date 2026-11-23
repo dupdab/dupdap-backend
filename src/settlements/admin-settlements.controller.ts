@@ -86,6 +86,14 @@ export class AdminSettlementsController {
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'merchantId', required: false, type: String })
   @ApiQuery({ name: 'requiresApproval', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'dateField',
+    required: false,
+    enum: ['created', 'completed'],
+    description: 'Date column used for dateFrom/dateTo filtering (default: created)',
+  })
+  @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'ISO 8601 start date (inclusive)' })
+  @ApiQuery({ name: 'dateTo', required: false, type: String, description: 'ISO 8601 end date (inclusive)' })
   @ApiResponse({ status: 200, description: 'Paginated settlements' })
   async list(
     @Query('page') page = '1',
@@ -93,6 +101,9 @@ export class AdminSettlementsController {
     @Query('status') status?: SettlementStatus,
     @Query('merchantId') merchantId?: string,
     @Query('requiresApproval') requiresApproval?: string,
+    @Query('dateField') dateField?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ): Promise<PaginatedSettlementsDto> {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
@@ -107,6 +118,9 @@ export class AdminSettlementsController {
           : requiresApproval === 'false'
           ? false
           : undefined,
+      dateField: dateField === 'completed' ? 'completed' : 'created',
+      dateFrom,
+      dateTo,
     });
   }
 }

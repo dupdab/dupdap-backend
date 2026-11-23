@@ -142,6 +142,9 @@ export class SettlementsService {
     status?: string;
     merchantId?: string;
     requiresApproval?: boolean;
+    dateField?: 'created' | 'completed';
+    dateFrom?: string;
+    dateTo?: string;
   }) {
     const qb = this.settlementsRepo
       .createQueryBuilder('settlement')
@@ -150,6 +153,15 @@ export class SettlementsService {
       .orderBy('settlement.createdAt', 'DESC');
 
     if (query.status) qb.andWhere('settlement.status = :status', { status: query.status });
+
+    const dateColumn =
+      query.dateField === 'completed' ? 'settlement.completedAt' : 'settlement.createdAt';
+    if (query.dateFrom) {
+      qb.andWhere(`${dateColumn} >= :dateFrom`, { dateFrom: new Date(query.dateFrom) });
+    }
+    if (query.dateTo) {
+      qb.andWhere(`${dateColumn} <= :dateTo`, { dateTo: new Date(query.dateTo) });
+    }
     if (query.merchantId)
       qb.andWhere('settlement.merchantId = :merchantId', { merchantId: query.merchantId });
     if (query.requiresApproval !== undefined) {

@@ -12,8 +12,9 @@ Retrieve all settlements with filtering options.
 - `limit` (number): Items per page (default: 20)
 - `status` (string): Filter by settlement status (`pending`, `pending_approval`, `processing`, `completed`, `failed`)
 - `merchantId` (string): Filter by merchant ID
-- `startDate` (string): Filter settlements created after this date (ISO format)
-- `endDate` (string): Filter settlements created before this date (ISO format)
+- `dateField` (string): Column used for date filtering — `created` (default) or `completed`
+- `dateFrom` (string): Filter settlements on/after this date (ISO format)
+- `dateTo` (string): Filter settlements on/before this date (ISO format)
 - `partnerReference` (string): Filter by partner reference
 - `bankReference` (string): Filter by bank reference
 
