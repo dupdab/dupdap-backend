@@ -8,6 +8,7 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  Check,
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Settlement } from '../../settlements/entities/settlement.entity';
@@ -34,6 +35,7 @@ export enum PaymentNetwork {
 @Index(['merchantId', 'createdAt'])
 // GIN index is created by migration 1772500000000; declared here so schema diffs don't drop it
 @Index('IDX_payments_metadata_gin', ['metadata'], { synchronize: false })
+@Check('CHK_payments_amount_usd_positive', '"amountUsd" > 0')
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -70,6 +72,8 @@ export class Payment {
   @Column({ nullable: true })
   stellarDepositAddress: string;
 
+  // Matches IDX_payments_stellar_memo from migration 1772200000011 (partial, non-null memos only).
+  @Index('IDX_payments_stellar_memo', { where: '"stellarMemo" IS NOT NULL' })
   @Column({ nullable: true })
   stellarMemo: string;
 
@@ -128,7 +132,7 @@ export class Payment {
   settlement: Settlement;
 
   @Column({ nullable: true })
-  settlementId: string;
+  settlementId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
