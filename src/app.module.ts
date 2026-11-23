@@ -1,5 +1,5 @@
 import { BullModule } from '@nestjs/bull';
-import { Logger, Module } from '@nestjs/common';
+import { ClassSerializerInterceptor, Logger, Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR, APP_FILTER } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
@@ -197,6 +197,11 @@ import { RateLimitService } from './auth/rate-limit.service';
     {
       provide: APP_INTERCEPTOR,
       useClass: SentryInterceptor,
+    },
+    {
+      // Applies @Exclude()/@Transform() on entities (e.g. Merchant.totpSecret) to every response.
+      provide: APP_INTERCEPTOR,
+      useClass: ClassSerializerInterceptor,
     },
     {
       provide: APP_FILTER,
