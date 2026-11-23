@@ -17,6 +17,8 @@ import { StellarModule } from '../stellar/stellar.module';
 import { BlockchainWalletModule } from '../blockchain-wallet/blockchain-wallet.module';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { EncryptionAdminController } from './encryption-admin.controller';
+import { WebhookDeliveryLog } from '../webhooks/entities/webhook-delivery-log.entity';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -28,12 +30,14 @@ import { EncryptionAdminController } from './encryption-admin.controller';
       FeeHistory,
       AuditLog,
       CronJobLog,
+      WebhookDeliveryLog,
     ]),
     CronModule,
     RatesModule,
     CacheModule,
     StellarModule,
     BlockchainWalletModule,
+    WebhooksModule,
   ],
   controllers: [AdminController, CronAdminController, EncryptionAdminController],
   providers: [AdminService, IpAllowlistGuard],
