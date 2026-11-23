@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Gauge } from 'prom-client';
 import { Repository } from 'typeorm';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
@@ -22,6 +24,13 @@ interface SettlementDecisionResult {
   success: boolean;
   settlement: Settlement;
 }
+
+const DEFAULT_SETTLEMENT_QUEUE_DEPTH_THRESHOLD = 50;
+
+const settlementQueueDepth = new Gauge({
+  name: 'settlement_queue_depth',
+  help: 'Number of jobs waiting in the settlement Bull queue',
+});
 
 @Injectable()
 export class SettlementsService {
@@ -49,6 +58,40 @@ export class SettlementsService {
   private readonly settlementsRepo: Repository<Settlement>;
   private readonly paymentsRepo: Repository<Payment>;
   private readonly auditLogRepo: Repository<AuditLog>;
+  private readonly logger = new Logger(SettlementsService.name);
+
+  // ── Queue depth monitoring (#830) ──────────────────────────────────────────
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async monitorQueueDepth(): Promise<void> {
+    try {
+      const depth = await this.settlementQueue.getWaitingCount();
+      settlementQueueDepth.set(depth);
+
+      const threshold = this.queueDepthThreshold();
+      if (depth <= threshold) return;
+
+      this.logger.warn(`Settlement queue depth ${depth} exceeds threshold ${threshold}`);
+      await this.adminAlerts.raise({
+        type: AdminAlertType.SETTLEMENT_FAILURE,
+        dedupeKey: 'settlement_queue_depth',
+        message: `Settlement queue depth is ${depth}, above the threshold of ${threshold}.`,
+        metadata: { queue: 'settlements', depth, threshold },
+        thresholdValue: depth,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to check settlement queue depth: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+
+  private queueDepthThreshold(): number {
+    const configured = Number(this.config.get<string>('SETTLEMENT_QUEUE_DEPTH_THRESHOLD'));
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_SETTLEMENT_QUEUE_DEPTH_THRESHOLD;
+  }
 
   // ── Admin approval workflow (#445) ─────────────────────────────────────────
 
