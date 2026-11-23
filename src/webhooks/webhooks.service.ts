@@ -12,9 +12,15 @@ import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { UpdateWebhookRetryConfigDto } from './dto/update-webhook-retry-config.dto';
 
+/** Default maximum number of webhook endpoints a single merchant may register (#919). */
+const DEFAULT_MAX_WEBHOOKS_PER_MERCHANT = 10;
+
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
+
+  /** Configurable cap on webhook endpoints per merchant (#919). */
+  private readonly maxWebhooksPerMerchant: number;
 
   constructor(
     @InjectRepository(Webhook)
@@ -28,7 +34,13 @@ export class WebhooksService {
     @Optional()
     @InjectRepository(Merchant)
     private merchantsRepo?: Repository<Merchant>,
-  ) {}
+  ) {
+    const configured = Number(process.env.MAX_WEBHOOKS_PER_MERCHANT);
+    this.maxWebhooksPerMerchant =
+      Number.isFinite(configured) && configured > 0
+        ? Math.floor(configured)
+        : DEFAULT_MAX_WEBHOOKS_PER_MERCHANT;
+  }
 
   /** Admin: close an open webhook circuit and clear the failure streak (#457). */
   async resetCircuit(webhookId: string): Promise<Webhook> {
@@ -98,6 +110,7 @@ export class WebhooksService {
 
   async create(merchantId: string, url: string, events: string[], secret?: string) {
     await this.assertPublicUrl(url);
+    await this.assertUnderEndpointLimit(merchantId);
 
     const webhook = this.webhooksRepo.create({
       merchantId,
@@ -106,6 +119,19 @@ export class WebhooksService {
       secret: secret ?? crypto.randomBytes(24).toString('hex'),
     });
     return this.webhooksRepo.save(webhook);
+  }
+
+  /**
+   * Rejects webhook creation when the merchant already has the maximum number
+   * of registered endpoints (#919).
+   */
+  private async assertUnderEndpointLimit(merchantId: string): Promise<void> {
+    const count = await this.webhooksRepo.count({ where: { merchantId } });
+    if (count >= this.maxWebhooksPerMerchant) {
+      throw new BadRequestException(
+        `Webhook endpoint limit reached: a merchant may register at most ${this.maxWebhooksPerMerchant} webhook endpoints`,
+      );
+    }
   }
 
   async findAll(merchantId: string) {
@@ -215,41 +241,36 @@ export class WebhooksService {
         const resolved = await dns.promises.lookup(hostname, { all: true });
         addresses.push(...resolved.map((r) => r.address));
       } catch {
-        throw new BadRequestException(`Webhook URL host could not be resolved: ${hostname}`);
+        throw new BadRequestException(`Webhook URL host could not be resolved`);
       }
     }
 
     for (const address of addresses) {
       if (this.isPrivateAddress(address)) {
-        throw new BadRequestException(
-          `Webhook URL resolves to a private or reserved address: ${address}`,
-        );
+        throw new BadRequestException('Webhook URL must not point to a private or internal address');
       }
     }
   }
 
   private isPrivateAddress(address: string): boolean {
     if (net.isIPv4(address)) {
-      const [a, b] = address.split('.').map((part) => parseInt(part, 10));
-      if (a === 0 || a === 10 || a === 127) return true;
+      const parts = address.split('.').map((p) => Number(p));
+      const [a, b] = parts;
+      if (a === 10) return true;
+      if (a === 127) return true;
+      if (a === 0) return true;
       if (a === 169 && b === 254) return true;
       if (a === 172 && b >= 16 && b <= 31) return true;
       if (a === 192 && b === 168) return true;
-      if (a >= 224) return true;
       return false;
     }
-
     if (net.isIPv6(address)) {
       const normalized = address.toLowerCase();
       if (normalized === '::1' || normalized === '::') return true;
-      if (normalized.startsWith('fe80:')) return true;
       if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-      if (normalized.startsWith('::ffff:')) {
-        return this.isPrivateAddress(normalized.slice('::ffff:'.length));
-      }
+      if (normalized.startsWith('fe80')) return true;
       return false;
     }
-
-    return true;
+    return false;
   }
 }
