@@ -7,6 +7,7 @@ import { Payment } from './entities/payment.entity';
 import { PaymentEvent } from './entities/payment-event.entity';
 import { PaymentDispute } from './entities/payment-dispute.entity';
 import { DisputesService } from './disputes.service';
+import { PaymentExpiryService } from './payment-expiry.service';
 import { DisputesController } from './disputes.controller';
 import { SettlementsModule } from '../settlements/settlements.module';
 import { StellarModule } from '../stellar/stellar.module';
@@ -38,7 +39,7 @@ import { PrometheusModule } from '../prometheus/prometheus.module';
     SettlementsModule,
   ],
   controllers: [PaymentsController, PublicPaymentController, DisputesController],
-  providers: [PaymentsService, DisputesService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
+  providers: [PaymentsService, DisputesService, PaymentExpiryService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}
