@@ -205,6 +205,73 @@ export class SettlementsService {
     };
   }
 
+  // ── Small payment batching (#831) ──────────────────────────────────────────
+
+  /** Payments below this USD amount are batched instead of settled immediately. */
+  private static readonly SMALL_PAYMENT_THRESHOLD_USD = 10;
+
+  /**
+   * Flushes confirmed small payments per merchant once their combined value
+   * reaches the small-payment threshold.
+   *
+   * `payments.amountUsd` is a `decimal` column mapped to a string, so the
+   * comparison is done numerically in SQL (`amountUsd::numeric < :threshold`)
+   * rather than with TypeORM `LessThan()` on a number, which would compare
+   * against a string literal and mis-order values such as '9.99' vs '10.00'.
+   */
+  async batchSmallConfirmedPayments(): Promise<void> {
+    const threshold = SettlementsService.SMALL_PAYMENT_THRESHOLD_USD;
+
+    const smallPayments = await this.paymentsRepo
+      .createQueryBuilder('payment')
+      .where('payment.status = :status', { status: PaymentStatus.CONFIRMED })
+      .andWhere('payment.settlementId IS NULL')
+      .andWhere('payment.amountUsd::numeric < :threshold', { threshold })
+      .orderBy('payment.confirmedAt', 'ASC')
+      .getMany();
+
+    if (!smallPayments.length) return;
+
+    const byMerchant = new Map<string, Payment[]>();
+    for (const payment of smallPayments) {
+      const group = byMerchant.get(payment.merchantId) ?? [];
+      group.push(payment);
+      byMerchant.set(payment.merchantId, group);
+    }
+
+    for (const [merchantId, payments] of byMerchant) {
+      const total = payments.reduce((sum, p) => sum + Number(p.amountUsd), 0);
+      if (total < threshold) continue;
+
+      const totalAmountUsd = total.toFixed(6);
+      const feeAmountUsd = (total * 0.015).toFixed(6);
+      const netAmountUsd = (total - Number(feeAmountUsd)).toFixed(6);
+
+      const settlement = this.settlementsRepo.create({
+        merchantId,
+        totalAmountUsd,
+        feeAmountUsd,
+        netAmountUsd,
+        fiatCurrency: 'NGN',
+        status: SettlementStatus.PROCESSING,
+        requiresApproval: false,
+      });
+      await this.settlementsRepo.save(settlement);
+
+      for (const payment of payments) {
+        payment.status = PaymentStatus.SETTLING;
+        payment.settlementId = settlement.id;
+        await this.paymentsRepo.save(payment);
+      }
+
+      await this.settlementQueue.add(
+        'dispatch',
+        { settlementId: settlement.id },
+        { attempts: this.retryConfig.settlement.maxAttempts + 1 },
+      );
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private async writeAuditLog(entry: {
