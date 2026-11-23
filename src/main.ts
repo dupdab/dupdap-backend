@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { CookieConfigMiddleware } from './common/middleware/cookie-config.middleware';
 
 async function bootstrap() {
   const nodeEnv = process.env.NODE_ENV ?? 'development';
@@ -25,6 +26,10 @@ async function bootstrap() {
   process.env.TYPEORM_SYNCHRONIZE = synchronize ? 'true' : 'false';
 
   const app = await NestFactory.create(AppModule);
+
+  // Issue #840: enforce Secure/HttpOnly/SameSite=Strict on session cookies.
+  const cookieConfigMiddleware = new CookieConfigMiddleware();
+  app.use(cookieConfigMiddleware.use.bind(cookieConfigMiddleware));
 
   app.useGlobalPipes(
     new ValidationPipe({

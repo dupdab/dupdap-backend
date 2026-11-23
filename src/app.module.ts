@@ -40,6 +40,7 @@ import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
 
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
+import { CookieConfigMiddleware } from './common/middleware/cookie-config.middleware';
 import { MaintenanceModeMiddleware } from './runtime-config/middleware/maintenance-mode.middleware';
 import { TlsEnforcementMiddleware } from './security/tls-enforcement.middleware';
 import { SensitiveAccessLogMiddleware } from './security/sensitive-access.middleware';
@@ -247,6 +248,7 @@ export class AppModule implements NestModule {
     consumer
       .apply(
         CorrelationIdMiddleware,
+        CookieConfigMiddleware,
         MaintenanceModeMiddleware,
         TlsEnforcementMiddleware,
         SensitiveAccessLogMiddleware,
