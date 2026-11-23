@@ -68,6 +68,8 @@ export class Payment {
   @Column({ nullable: true })
   stellarDepositAddress: string;
 
+  // Matches IDX_payments_stellar_memo from migration 1772200000011 (partial, non-null memos only).
+  @Index('IDX_payments_stellar_memo', { where: '"stellarMemo" IS NOT NULL' })
   @Column({ nullable: true })
   stellarMemo: string;
 
