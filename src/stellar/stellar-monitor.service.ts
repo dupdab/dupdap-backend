@@ -1,9 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import Big from 'big.js';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { QUEUE_NAMES } from '../queues/queue.constants';
 import { DataSource, Repository } from 'typeorm';
+import { Gauge } from 'prom-client';
+import { CacheService } from '../cache/cache.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
@@ -18,6 +21,15 @@ import { NotificationPrefsService } from '../notifications/notification-prefs.se
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationChannel, NotificationEventType } from '../notifications/entities/notification-preference.entity';
 import { RetryConfigService } from '../retry/retry-config.service';
+
+const CURSOR_KEY_PREFIX = 'stellar:monitor:horizon-cursor:';
+const CURSOR_TTL_SECONDS = 60 * 60 * 24 * 365;
+
+/** Last Horizon ledger sequence processed by the Stellar monitor. */
+export const stellarMonitorLastProcessedLedger = new Gauge({
+  name: 'stellar_monitor_last_processed_ledger',
+  help: 'Ledger sequence of the last Horizon transaction processed by the Stellar monitor',
+});
 
 @Injectable()
 export class StellarMonitorService implements OnModuleInit {
@@ -45,6 +57,7 @@ export class StellarMonitorService implements OnModuleInit {
     private sorobanMonitor: SorobanMonitorService,
     @InjectQueue(QUEUE_NAMES.stellarMonitor) private monitorQueue: Queue,
     private retryConfig: RetryConfigService,
+    @Optional() private cache?: CacheService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -78,6 +91,7 @@ export class StellarMonitorService implements OnModuleInit {
         return;
       }
 
+      if (!this.cursors.has(depositAddress)) await this.loadCursor(depositAddress);
       const cursor = this.cursors.get(depositAddress);
       this.logger.log(
         `Stellar monitor poll start | address: ${depositAddress} | cursor: ${cursor ?? 'none'}`,
@@ -106,6 +120,7 @@ export class StellarMonitorService implements OnModuleInit {
         const txLedger = this.parseLedger(tx);
         if (txLedger !== null) {
           this.lastProcessedLedger = txLedger;
+          stellarMonitorLastProcessedLedger.set(txLedger);
         }
 
         const paymentMemo = tx.memo;
@@ -139,6 +154,12 @@ export class StellarMonitorService implements OnModuleInit {
             thresholdValue: 1,
           });
         }
+      }
+
+      // Persist only after the batch succeeds, so a mid-batch failure replays
+      // transactions on restart (safe: matching requires PENDING status).
+      if (transactions.length > 0) {
+        await this.persistCursor(depositAddress, this.cursors.get(depositAddress));
       }
 
       await this.expireOldPayments();
@@ -195,6 +216,28 @@ export class StellarMonitorService implements OnModuleInit {
     }
   }
 
+  /** Restore the Horizon paging cursor from Redis so restarts resume where they left off. */
+  private async loadCursor(depositAddress: string): Promise<void> {
+    if (!this.cache) return;
+    try {
+      const cursor = await this.cache.get<string>(CURSOR_KEY_PREFIX + depositAddress);
+      if (cursor) this.cursors.set(depositAddress, cursor);
+    } catch (err) {
+      this.logger.warn(`Failed to load Stellar monitor cursor: ${err.message}`);
+    }
+  }
+
+  private async persistCursor(depositAddress: string, cursor?: string): Promise<void> {
+    if (!this.cache || !cursor) return;
+    try {
+      await this.cache.set(CURSOR_KEY_PREFIX + depositAddress, cursor, {
+        ttlSeconds: CURSOR_TTL_SECONDS,
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to persist Stellar monitor cursor: ${err.message}`);
+    }
+  }
+
   private parseLedger(tx: any): number | null {
     const raw = tx?.ledger ?? tx?.ledger_attr ?? tx?.ledgerAttr;
     const parsed = Number(raw);
@@ -208,7 +251,8 @@ export class StellarMonitorService implements OnModuleInit {
     asset: string,
     from?: string,
   ) {
-    await this.dataSource.transaction(async (manager) => {
+    let contractRejected = false;
+    const confirmed = await this.dataSource.transaction(async (manager) => {
       // Re-fetch with a row-level lock to prevent concurrent double-settlement.
       // If another worker already confirmed this payment, its status will no
       // longer be PENDING and we bail out safely.
@@ -221,16 +265,28 @@ export class StellarMonitorService implements OnModuleInit {
         this.logger.warn(
           `confirmPayment: payment ${payment.reference} is no longer PENDING — skipping (possible concurrent confirm)`,
         );
-        return;
+        return null;
       }
 
-      await this.stellar.invokeContract('confirm', [
-        locked.id,
-        txHash,
-        amount,
-        asset,
-        from ?? null,
-      ]);
+      try {
+        await this.stellar.invokeContract('confirm', [
+          locked.id,
+          txHash,
+          amount,
+          asset,
+          from ?? null,
+        ]);
+      } catch (err) {
+        // Persist FAILED in this transaction; otherwise the rollback leaves the payment PENDING forever
+        this.logger.error(
+          `Soroban confirm failed for payment ${locked.reference} | tx: ${txHash} | ${(err as Error).message}`,
+        );
+        locked.status = PaymentStatus.FAILED;
+        locked.txHash = txHash;
+        await manager.save(locked);
+        contractRejected = true;
+        return;
+      }
 
       this.logger.log(`Payment confirmed: ${locked.reference} | tx: ${txHash}`);
 
@@ -243,21 +299,70 @@ export class StellarMonitorService implements OnModuleInit {
       else locked.amountXlm = amount;
 
       await manager.save(locked);
-
-      // Run side-effects outside the lock to keep the critical section tight.
-      // We capture `locked` in closure — payment is already persisted above.
-      await this.queuePaymentConfirmedEmail(locked, asset);
-      await this.queuePaymentConfirmedSms(locked);
-
-      await this.webhooks.dispatch(locked.merchantId, 'payment.confirmed', {
-        paymentId: locked.id,
-        reference: locked.reference,
-        txHash,
-        amount,
-        asset,
-      });
-
       await this.settlements.initiateSettlement(locked, manager);
+
+      return locked;
+    });
+
+    if (!confirmed) return;
+
+    // Side-effects run only after the transaction has committed, so a rollback
+    // can never leave a webhook or notification for a payment that did not persist.
+    await this.queuePaymentConfirmedEmail(confirmed, asset);
+    await this.queuePaymentConfirmedSms(confirmed);
+
+    await this.webhooks.dispatch(confirmed.merchantId, 'payment.confirmed', {
+      paymentId: confirmed.id,
+      reference: confirmed.reference,
+      txHash,
+      amount,
+      asset,
+    });
+
+    if (contractRejected) {
+      await this.notifyPaymentFailed(payment, txHash);
+    }
+  }
+
+  private async notifyPaymentFailed(
+    payment: Payment & { merchant?: Merchant },
+    txHash: string,
+  ): Promise<void> {
+    // Runs after commit: a delivery failure must not turn into a false "confirm failed" alert
+    try {
+      await this.webhooks.dispatch(payment.merchantId, 'payment.failed', {
+        paymentId: payment.id,
+        reference: payment.reference,
+        txHash,
+      });
+      await this.queuePaymentFailedEmail(payment);
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify merchant of failed payment ${payment.reference}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async queuePaymentFailedEmail(payment: Payment & { merchant?: Merchant }): Promise<void> {
+    const merchant = payment.merchant;
+    if (!merchant?.email) return;
+
+    const emailEnabled = await this.notificationPrefs.isEnabled(
+      merchant.id,
+      NotificationChannel.EMAIL,
+      NotificationEventType.PAYMENT_FAILED,
+    );
+    if (!emailEnabled) return;
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    await this.emailService.queue(merchant.email, 'payment-failed', {
+      merchantName: merchant.businessName,
+      reference: payment.reference,
+      amount: Number(payment.amountUsd ?? 0).toFixed(2),
+      currency: 'USD',
+      reason: 'The on-chain payment could not be confirmed',
+      failedAt: new Date().toISOString(),
+      supportUrl: frontendUrl.replace(/\/$/, ''),
     });
   }
 
@@ -289,7 +394,16 @@ export class StellarMonitorService implements OnModuleInit {
       {
         merchantName: merchant.businessName,
         reference: payment.reference,
-        amountUsd:
+        amountUsd: Number(payment.amountUsd ?? 0).toFixed(2),
+        assetAmount,
+        asset,
+        txHash: payment.txHash,
+        confirmedAt: new Date().toISOString(),
+        txUrl,
+        paymentDetailUrl,
+      },
+    );
+  }
 
   private async queuePaymentConfirmedSms(
     payment: Payment & { merchant?: Merchant },
@@ -306,7 +420,7 @@ export class StellarMonitorService implements OnModuleInit {
 
     await this.notifications.enqueueSms({
       to: merchant.smsPhoneNumber,
-      body: `DupDub: payment ${payment.reference} confirmed for $${Number(payment.amountUsd).toFixed(2)} USD.`,
+      body: `DupDub: payment ${payment.reference} confirmed for $${new Big(payment.amountUsd).toFixed(2)} USD.`,
     });
   }
 

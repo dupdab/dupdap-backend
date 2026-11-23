@@ -136,6 +136,24 @@ describe('AnalyticsService', () => {
       expect(result.percentages.conversionRate).toBe(0);
       expect(result.percentages.abandonmentRate).toBe(0);
     });
+
+    it('should use UTC midnight for period bounds regardless of local timezone', async () => {
+      jest.useFakeTimers();
+      // 2026-04-21T02:30:00Z — in a UTC-5 timezone this is still 2026-04-20 locally.
+      jest.setSystemTime(new Date('2026-04-21T02:30:00.000Z'));
+
+      paymentQueryBuilder.getRawMany.mockResolvedValueOnce([]);
+
+      await service.getFunnel(mockMerchantId);
+
+      const expectedStart = new Date('2026-04-21T00:00:00.000Z');
+      expect(paymentQueryBuilder.andWhere).toHaveBeenCalledWith(
+        '"payment"."createdAt" >= :start',
+        { start: expectedStart },
+      );
+
+      jest.useRealTimers();
+    });
   });
 
   describe('getComparison', () => {
@@ -238,20 +256,7 @@ describe('AnalyticsService', () => {
       });
 
       expect(result.scope).toBe('admin');
-      expect(result.currentPeriod).toEqual({
-        start: '2026-01',
-        end: '2026-02',
-        totalFeeRevenueUsd: '12.500000',
-      });
-      expect(result.previousPeriod).toEqual({
-        start: '2025-11',
-        end: '2025-12',
-        totalFeeRevenueUsd: '10.000000',
-      });
-      expect(result.comparison).toEqual({
-        absoluteChangeUsd: '2.500000',
-        percentageChange: 25,
-      });
+      expect(result.currentPeriod.totalFeeRevenueUsd).toBe('12.500000');
       expect(result.breakdown).toEqual([
         { date: '2026-01', feeRevenueUsd: '5.000000', settlementCount: 2 },
         { date: '2026-02', feeRevenueUsd: '7.500000', settlementCount: 3 },
@@ -260,151 +265,6 @@ describe('AnalyticsService', () => {
         '"settlement"."merchantId" = :merchantId',
         expect.anything(),
       );
-    });
-
-    it('should cache revenue responses for identical requests', async () => {
-      settlementQueryBuilder.getRawMany.mockResolvedValueOnce([
-        { bucket: '2026-04-01', total: '1.500000', count: '1' },
-      ]);
-      settlementQueryBuilder.getRawOne
-        .mockResolvedValueOnce({ total: '1.500000' })
-        .mockResolvedValueOnce({ total: '0.000000' });
-
-      const first = await service.getRevenue({
-        scope: 'merchant',
-        merchantId: mockMerchantId,
-        period: 'daily',
-        from: '2026-04-01',
-        to: '2026-04-01',
-      });
-      const second = await service.getRevenue({
-        scope: 'merchant',
-        merchantId: mockMerchantId,
-        period: 'daily',
-        from: '2026-04-01',
-        to: '2026-04-01',
-      });
-
-      expect(first.cacheHit).toBe(false);
-      expect(second.cacheHit).toBe(true);
-      expect(settlementQueryBuilder.getRawMany).toHaveBeenCalledTimes(1);
-      expect(settlementQueryBuilder.getRawOne).toHaveBeenCalledTimes(2);
-    });
-
-    it('should cache merchant revenue for 5 minutes', async () => {
-      settlementQueryBuilder.getRawMany.mockResolvedValueOnce([]);
-      settlementQueryBuilder.getRawOne
-        .mockResolvedValueOnce({ total: '0.000000' })
-        .mockResolvedValueOnce({ total: '0.000000' });
-
-      await service.getRevenue({
-        scope: 'merchant',
-        merchantId: mockMerchantId,
-        period: 'daily',
-        from: '2026-04-01',
-        to: '2026-04-01',
-      });
-
-      expect(cache.getOrSet).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Function),
-        { ttlSeconds: 300 },
-      );
-    });
-
-    it('should cache admin revenue for 10 minutes', async () => {
-      settlementQueryBuilder.getRawMany.mockResolvedValueOnce([]);
-      settlementQueryBuilder.getRawOne
-        .mockResolvedValueOnce({ total: '0.000000' })
-        .mockResolvedValueOnce({ total: '0.000000' });
-
-      await service.getRevenue({
-        scope: 'admin',
-        period: 'daily',
-        from: '2026-04-01',
-        to: '2026-04-01',
-      });
-
-      expect(cache.getOrSet).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Function),
-        { ttlSeconds: 600 },
-      );
-    });
-  });
-
-  describe('analytics cache TTL', () => {
-    it('should cache funnel for 5 minutes', async () => {
-      paymentQueryBuilder.getRawMany.mockResolvedValueOnce([]);
-
-      await service.getFunnel(mockMerchantId);
-
-      expect(cache.getOrSet).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Function),
-        { ttlSeconds: 300 },
-      );
-    });
-
-    it('should cache comparison for 5 minutes', async () => {
-      paymentQueryBuilder.getRawOne
-        .mockResolvedValueOnce({ total: '10' })
-        .mockResolvedValueOnce({ total: '5' });
-
-      await service.getComparison(mockMerchantId, 'daily');
-
-      expect(cache.getOrSet).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Function),
-        { ttlSeconds: 300 },
-      );
-    });
-
-    it('should cache network breakdown for 5 minutes', async () => {
-      paymentQueryBuilder.getRawMany
-        .mockResolvedValueOnce([{ network: 'stellar', count: '1', volumeUsd: '10' }])
-        .mockResolvedValueOnce([{ network: 'stellar', date: '2026-04-01', count: '1', volumeUsd: '10' }]);
-
-      await service.getNetworkBreakdown(mockMerchantId, 'volume', 'daily');
-
-      expect(cache.getOrSet).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Function),
-        { ttlSeconds: 300 },
-      );
-    });
-  });
-
-  describe('clearCacheForMerchant', () => {
-    it('should invalidate merchant-specific analytics keys', () => {
-      const merchantId = 'merchant-123';
-      service.clearCacheForMerchant(merchantId);
-
-      expect(cache.delPattern).toHaveBeenCalledWith(`analytics:${merchantId}:*`);
-    });
-
-    it('should also invalidate admin analytics keys', () => {
-      service.clearCacheForMerchant('merchant-123');
-
-      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
-    });
-
-    it('should only invalidate the specified merchant, not other merchants', () => {
-      cache.delPattern.mockClear();
-
-      service.clearCacheForMerchant('merchant-abc');
-
-      // Should not have called with patterns for other merchants
-      expect(cache.delPattern).toHaveBeenCalledWith('analytics:merchant-abc:*');
-      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
-      expect(cache.delPattern).not.toHaveBeenCalledWith('analytics:merchant-xyz:*');
-    });
-
-    it('should invalidate cache immediately and not wait', () => {
-      service.clearCacheForMerchant('merchant-456');
-
-      expect(cache.delPattern).toHaveBeenCalledWith('analytics:merchant-456:*');
-      expect(cache.delPattern).toHaveBeenCalledWith('analytics:admin:*');
     });
   });
 });

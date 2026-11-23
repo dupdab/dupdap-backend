@@ -684,7 +684,7 @@ export class AdminService {
     if (query.dateTo)
       qb.andWhere('payment.createdAt <= :dateTo', { dateTo: new Date(query.dateTo) });
     if (query.minAmount)
-      qb.andWhere('payment.amountUsd >= :minAmount', { minAmount: parseFloat(query.minAmount) });
+      qb.andWhere('payment.amountUsd >= :minAmount', { minAmount: query.minAmount });
 
     const [items, total] = await qb
       .skip((query.page - 1) * query.limit)

@@ -72,7 +72,7 @@ export class SettlementQueueProcessor extends BaseQueueProcessor {
     }
 
     try {
-      await this.settlementsService.executeFiatTransfer(settlement);
+      await this.settlementsService.processSettlement(settlementId);
     } finally {
       await this.cacheService.releaseLock(lockKey, lockToken);
     }
