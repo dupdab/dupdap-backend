@@ -22,6 +22,7 @@ import { MerchantsModule } from '../merchants/merchants.module';
 import { NotificationWebhookService } from './notification-webhook.service';
 import { NotificationWebhookController } from './notification-webhook.controller';
 import { PaymentNotificationSubscriber } from './payment-notification.subscriber';
+import { WebhookSsrfGuardService } from './webhook-ssrf-guard.service';
 
 @Module({
   imports: [
@@ -36,7 +37,7 @@ import { PaymentNotificationSubscriber } from './payment-notification.subscriber
     MerchantsModule,
   ],
   controllers: [WebhooksController, WebhookCircuitAdminController, NotificationWebhookController],
-  providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService, NotificationWebhookService, PaymentNotificationSubscriber],
-  exports: [WebhooksService, WebhookDeliveryService, NotificationWebhookService],
+  providers: [WebhooksService, WebhookDeliveryProcessor, WebhookDeliveryService, WebhookFailureAlertService, QueueConfigService, NotificationWebhookService, PaymentNotificationSubscriber, WebhookSsrfGuardService],
+  exports: [WebhooksService, WebhookDeliveryService, NotificationWebhookService, WebhookSsrfGuardService],
 })
 export class WebhooksModule {}

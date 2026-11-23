@@ -209,8 +209,7 @@ export class StellarMonitorService implements OnModuleInit {
     from?: string,
   ) {
     let contractRejected = false;
-
-    await this.dataSource.transaction(async (manager) => {
+    const confirmed = await this.dataSource.transaction(async (manager) => {
       // Re-fetch with a row-level lock to prevent concurrent double-settlement.
       // If another worker already confirmed this payment, its status will no
       // longer be PENDING and we bail out safely.
@@ -223,7 +222,7 @@ export class StellarMonitorService implements OnModuleInit {
         this.logger.warn(
           `confirmPayment: payment ${payment.reference} is no longer PENDING — skipping (possible concurrent confirm)`,
         );
-        return;
+        return null;
       }
 
       try {
@@ -257,21 +256,24 @@ export class StellarMonitorService implements OnModuleInit {
       else locked.amountXlm = amount;
 
       await manager.save(locked);
-
-      // Run side-effects outside the lock to keep the critical section tight.
-      // We capture `locked` in closure — payment is already persisted above.
-      await this.queuePaymentConfirmedEmail(locked, asset);
-      await this.queuePaymentConfirmedSms(locked);
-
-      await this.webhooks.dispatch(locked.merchantId, 'payment.confirmed', {
-        paymentId: locked.id,
-        reference: locked.reference,
-        txHash,
-        amount,
-        asset,
-      });
-
       await this.settlements.initiateSettlement(locked, manager);
+
+      return locked;
+    });
+
+    if (!confirmed) return;
+
+    // Side-effects run only after the transaction has committed, so a rollback
+    // can never leave a webhook or notification for a payment that did not persist.
+    await this.queuePaymentConfirmedEmail(confirmed, asset);
+    await this.queuePaymentConfirmedSms(confirmed);
+
+    await this.webhooks.dispatch(confirmed.merchantId, 'payment.confirmed', {
+      paymentId: confirmed.id,
+      reference: confirmed.reference,
+      txHash,
+      amount,
+      asset,
     });
 
     if (contractRejected) {
