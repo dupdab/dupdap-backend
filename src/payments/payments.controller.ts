@@ -160,6 +160,7 @@ export class PublicPaymentController {
   @ApiResponse({ status: 410, description: 'QR code expired' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   async getByReference(@Param('reference') reference: string): Promise<PublicPaymentViewDto> {
+    // Intentionally unscoped: only the unauthenticated pay page may call this. Authenticated callers must scope by merchantId (#853).
     const payment = await this.paymentsService.findByReference(reference);
     return PublicPaymentViewDto.from(payment);
   }
