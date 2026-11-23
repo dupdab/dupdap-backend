@@ -131,6 +131,7 @@ export class StellarMonitorService implements OnModuleInit {
         try {
           await this.confirmPayment(matched, tx.hash, result.amount, result.asset, result.from);
         } catch (err) {
+          await this.failPayment(matched, err as Error);
           await this.adminAlerts.raise({
             type: AdminAlertType.STELLAR_MONITOR,
             dedupeKey: `stellar-monitor.confirm:${matched.id}`,
@@ -258,6 +259,71 @@ export class StellarMonitorService implements OnModuleInit {
       });
 
       await this.settlements.initiateSettlement(locked, manager);
+    });
+  }
+
+  /**
+   * Marks a payment FAILED after a Soroban confirmation error, then dispatches
+   * the `payment.failed` webhook and notifies the merchant by email.
+   */
+  private async failPayment(payment: Payment & { merchant?: Merchant }, error: Error): Promise<void> {
+    const reason = error?.message ?? 'Soroban confirmation failed';
+
+    try {
+      const locked = await this.paymentsRepo.findOne({
+        where: { id: payment.id, status: PaymentStatus.PENDING },
+      });
+      if (!locked) {
+        this.logger.warn(
+          `failPayment: payment ${payment.reference} is no longer PENDING — skipping failure handling`,
+        );
+        return;
+      }
+
+      locked.status = PaymentStatus.FAILED;
+      locked.failureReason = reason;
+      await this.paymentsRepo.save(locked);
+
+      this.logger.warn(`Payment failed: ${locked.reference} | reason: ${reason}`);
+
+      await this.webhooks.dispatch(locked.merchantId, 'payment.failed', {
+        paymentId: locked.id,
+        reference: locked.reference,
+        reason,
+      });
+
+      await this.queuePaymentFailedEmail(locked, reason);
+    } catch (err) {
+      // Failure side-effects must never break the monitor loop.
+      this.logger.error(`Failed to handle payment failure for ${payment.id}: ${err.message}`);
+    }
+  }
+
+  private async queuePaymentFailedEmail(
+    payment: Payment & { merchant?: Merchant },
+    reason: string,
+  ): Promise<void> {
+    const merchant = payment.merchant;
+    if (!merchant?.email) return;
+
+    const emailEnabled = await this.notificationPrefs.isEnabled(
+      merchant.id,
+      NotificationChannel.EMAIL,
+      NotificationEventType.PAYMENT_FAILED,
+    );
+    if (!emailEnabled) return;
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const supportUrl = `${frontendUrl.replace(/\/$/, '')}/support`;
+
+    await this.emailService.queue(merchant.email, 'payment-failed', {
+      merchantName: merchant.businessName,
+      reference: payment.reference,
+      amount: Number(payment.amountUsd ?? 0).toFixed(2),
+      currency: 'USD',
+      reason,
+      failedAt: new Date().toISOString(),
+      supportUrl,
     });
   }
 
