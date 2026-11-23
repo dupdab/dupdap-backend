@@ -101,6 +101,27 @@ export class AdminController {
     );
   }
 
+  // ── AML Threshold Management (#953) ────────────────────────────────────────
+
+  @Get('aml/thresholds')
+  @ApiOperation({ summary: 'Get AML high-value thresholds (default and per-country)' })
+  getAmlThresholds() {
+    return this.adminService.getAmlThresholds();
+  }
+
+  @Patch('aml/thresholds')
+  @Auditable({ action: 'AML_THRESHOLD_UPDATED', resource: 'aml_config' })
+  @ApiOperation({ summary: 'Update AML high-value thresholds (default and/or per-country)' })
+  updateAmlThresholds(
+    @Body() dto: { defaultThreshold?: number; countryThresholds?: Record<string, number> },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    return this.adminService.updateAmlThresholds(
+      dto,
+      req.user?.id ?? req.user?.merchantId ?? 'system',
+    );
+  }
+
   // ── Cache Management ──────────────────────────────────────────────────────
 
   @Post('cache/rates/refresh')
@@ -224,129 +245,5 @@ export class AdminController {
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
     return this.adminService.resetSandboxData(id, req.user?.id ?? req.user?.merchantId);
-  }
-
-  // ── Audit Log Viewer ───────────────────────────────────────────────────────
-
-  @Get('audit-log')
-  @ApiOperation({ summary: 'Get paginated audit log with filtering' })
-  async getAuditLogs(
-    @Query() query: any,
-    @Query() pagination: PaginationDto,
-    @Res() res: Response,
-    @Query('export') exportType?: string,
-    @Headers('accept') accept?: string,
-  ) {
-    const exportCsv = exportType === 'csv' || accept === 'text/csv';
-    const result = await this.adminService.getAuditLogs(query, pagination, exportCsv);
-    if (exportCsv) {
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="audit-log.csv"');
-      res.send(result);
-    } else {
-      res.json(result);
-    }
-  }
-
-  // ── Platform-wide Payment Oversight ──────────────────────────────────────
-
-  @Get('payments')
-  @ApiOperation({ summary: 'Get all payments across all merchants (paginated, filterable)' })
-  getAdminPayments(@Query() query: QueryAdminPaymentsDto) {
-    return this.adminService.getAdminPayments({
-      page: query.page ?? 1,
-      limit: query.limit ?? 20,
-      merchantId: query.merchantId,
-      status: query.status,
-      network: query.network,
-      dateFrom: query.dateFrom,
-      dateTo: query.dateTo,
-      minAmount: query.minAmount,
-    });
-  }
-
-  @Get('payments/:id')
-  @ApiOperation({ summary: 'Get full payment detail by ID' })
-  @ApiParam({ name: 'id', description: 'Payment ID' })
-  getAdminPaymentById(@Param('id') id: string) {
-    return this.adminService.getAdminPaymentById(id);
-  }
-
-  // ── Generic Soft/Hard Delete and Restore ───────────────────────────────────
-
-  @Post(':entity/:id/restore')
-  @Auditable({ action: 'RECORD_RESTORED', resource: 'record' })
-  @ApiOperation({ summary: 'Restore a soft-deleted record' })
-  restoreRecord(
-    @Param('entity') entity: string,
-    @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
-    return this.adminService.restoreRecord(entity, id, req.user?.id ?? req.user?.merchantId);
-  }
-
-  @Delete(':entity/:id')
-  @Auditable({ action: 'RECORD_DELETED', resource: 'record' })
-  @ApiOperation({ summary: 'Soft or hard delete a record' })
-  deleteRecord(
-    @Param('entity') entity: string,
-    @Param('id') id: string,
-    @Query('hard') hard: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
-  ) {
-    const isHard = hard === 'true';
-    return this.adminService.deleteRecord(entity, id, isHard, req.user.role, req.user?.id);
-  }
-
-  // ── PCI-DSS Compliance Reports (#704) ─────────────────────────────────────
-
-  @Get('reports/compliance')
-  @ApiOperation({ summary: 'Generate PCI-DSS compliance report' })
-  async getComplianceReport(
-    @Query('from') from: string,
-    @Query('to') to: string,
-    @Query('type') type: string = 'full',
-    @Query('format') format: string = 'json',
-    @Res() res: Response,
-  ) {
-    const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const toDate = to ? new Date(to) : new Date();
-
-    let data: any;
-    switch (type) {
-      case 'access-control':
-        data = await this.adminService.getAccessControlReport(fromDate, toDate);
-        break;
-      case 'failed-auth':
-        data = await this.adminService.getFailedAuthReport(fromDate, toDate);
-        break;
-      case 'data-retention':
-        data = await this.adminService.getDataRetentionReport(fromDate, toDate);
-        break;
-      case 'settlements':
-        data = await this.adminService.getSettlementReconciliationReport(fromDate, toDate);
-        break;
-      default:
-        data = await this.adminService.getFullComplianceReport(fromDate, toDate);
-    }
-
-    if (format === 'pdf') {
-      const PDFDocument = require('pdfkit');
-      const doc = new PDFDocument({ margin: 50 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="compliance-report-${type}-${fromDate.toISOString().split('T')[0]}.pdf"`);
-      doc.pipe(res);
-      doc.fontSize(20).text('PCI-DSS Compliance Report', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12).text(`Report Type: ${type}`);
-      doc.text(`Generated: ${new Date().toISOString()}`);
-      doc.text(`Period: ${fromDate.toISOString()} — ${toDate.toISOString()}`);
-      doc.moveDown();
-      doc.fontSize(10).text(JSON.stringify(data, null, 2), { lineGap: 2 });
-      doc.end();
-      return;
-    }
-
-    return res.json({ status: 'success', data });
   }
 }

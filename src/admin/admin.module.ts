@@ -17,6 +17,7 @@ import { StellarModule } from '../stellar/stellar.module';
 import { BlockchainWalletModule } from '../blockchain-wallet/blockchain-wallet.module';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { EncryptionAdminController } from './encryption-admin.controller';
+import { AmlModule } from '../aml/aml.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { EncryptionAdminController } from './encryption-admin.controller';
     CacheModule,
     StellarModule,
     BlockchainWalletModule,
+    AmlModule,
   ],
   controllers: [AdminController, CronAdminController, EncryptionAdminController],
   providers: [AdminService, IpAllowlistGuard],
