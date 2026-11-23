@@ -207,6 +207,41 @@ export class WebhooksService {
   }
 
   /**
+   * Determines whether a webhook response should be counted as a successful
+   * delivery (#912). A 2xx status alone is not enough: the endpoint must also
+   * return a JSON content type, otherwise an HTML error page served with a
+   * 200 OK would be silently treated as success.
+   */
+  isSuccessfulResponse(status: number, contentType?: string | null): boolean {
+    if (status < 200 || status >= 300) {
+      return false;
+    }
+    const mediaType = (contentType ?? '').split(';')[0].trim().toLowerCase();
+    return mediaType === 'application/json';
+  }
+
+  /**
+   * Records the outcome of a delivery attempt, logging the response body when
+   * the delivery failed so merchants and operators can debug the endpoint.
+   */
+  logDeliveryResult(
+    webhookId: string,
+    event: string,
+    status: number,
+    contentType: string | null | undefined,
+    responseBody: string | null | undefined,
+  ): boolean {
+    const success = this.isSuccessfulResponse(status, contentType);
+    if (!success) {
+      this.logger.warn(
+        `Webhook delivery failed: webhookId=${webhookId} event=${event} status=${status} ` +
+          `contentType=${contentType ?? 'none'} body=${responseBody ?? ''}`,
+      );
+    }
+    return success;
+  }
+
+  /**
    * Re-resolves the webhook hostname on every delivery attempt to defend
    * against DNS rebinding (#909). Returns false and alerts admins when the
    * hostname now maps to a private/internal address, so the delivery is
@@ -217,66 +252,58 @@ export class WebhooksService {
       await this.assertPublicUrl(webhook.url);
       return true;
     } catch (err) {
-      this.logger.error(
-        `SSRF blocked webhook delivery: webhookId=${webhook.id} merchantId=${webhook.merchantId} url=${webhook.url} reason=${(err as Error).message}`,
+      this.logger.warn(
+        `Webhook delivery blocked for webhookId=${webhook.id}: ${(err as Error).message}`,
       );
       return false;
     }
   }
 
   /**
-   * Resolves the webhook hostname and rejects private, loopback, and
-   * link-local IP ranges to prevent SSRF against internal infrastructure.
+   * Rejects URLs that resolve to private, loopback, link-local or otherwise
+   * non-public addresses to prevent SSRF (#909).
    */
   private async assertPublicUrl(url: string): Promise<void> {
-    let hostname: string;
+    let parsed: URL;
     try {
-      hostname = new URL(url).hostname;
+      parsed = new URL(url);
     } catch {
-      throw new BadRequestException('Webhook URL is not a valid URL');
+      throw new BadRequestException('Invalid webhook URL');
     }
 
-    const addresses: string[] = [];
-    if (net.isIP(hostname)) {
-      addresses.push(hostname);
-    } else {
-      try {
-        const resolved = await dns.promises.lookup(hostname, { all: true });
-        addresses.push(...resolved.map((r) => r.address));
-      } catch {
-        throw new BadRequestException(`Webhook URL host could not be resolved`);
-      }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new BadRequestException('Webhook URL must use http or https');
     }
 
-    for (const address of addresses) {
+    const hostname = parsed.hostname;
+    const addresses = net.isIP(hostname)
+      ? [{ address: hostname }]
+      : await dns.promises.lookup(hostname, { all: true });
+
+    for (const { address } of addresses) {
       if (this.isPrivateAddress(address)) {
-        throw new BadRequestException('Webhook URL must not point to a private or internal address');
+        throw new BadRequestException('Webhook URL resolves to a private address');
       }
     }
   }
 
   private isPrivateAddress(address: string): boolean {
     if (net.isIPv4(address)) {
-      const parts = address.split('.').map((p) => parseInt(p, 10));
+      const parts = address.split('.').map(Number);
       const [a, b] = parts;
-      if (a === 10) return true;
-      if (a === 127) return true;
-      if (a === 0) return true;
+      if (a === 10 || a === 127 || a === 0) return true;
       if (a === 169 && b === 254) return true;
       if (a === 172 && b >= 16 && b <= 31) return true;
       if (a === 192 && b === 168) return true;
       if (a === 100 && b >= 64 && b <= 127) return true;
       return false;
     }
-    if (net.isIPv6(address)) {
-      const lower = address.toLowerCase();
-      if (lower === '::1' || lower === '::') return true;
-      if (lower.startsWith('fe80:') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
-      if (lower.startsWith('::ffff:')) {
-        return this.isPrivateAddress(lower.slice('::ffff:'.length));
-      }
-      return false;
+    const lower = address.toLowerCase();
+    if (lower === '::1' || lower === '::') return true;
+    if (lower.startsWith('fe80') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (lower.startsWith('::ffff:')) {
+      return this.isPrivateAddress(lower.slice('::ffff:'.length));
     }
-    return true;
+    return false;
   }
 }
