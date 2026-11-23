@@ -196,6 +196,19 @@ export class Merchant {
   @Column({ default: false })
   sandboxMode: boolean;
 
+  /** True once the merchant has confirmed ownership of `email` (#844). */
+  @Column({ name: 'email_verified', default: false })
+  emailVerified: boolean;
+
+  /** SHA-256 hash of the outstanding email-verification token; null when none is pending. */
+  @Exclude()
+  @Column({ name: 'email_verification_token_hash', type: 'text', nullable: true, default: null })
+  emailVerificationTokenHash: string | null;
+
+  /** Expiry of the outstanding email-verification token (24h after issue). */
+  @Column({ name: 'email_verification_expires_at', type: 'timestamptz', nullable: true, default: null })
+  emailVerificationExpiresAt: Date | null;
+
   @Exclude()
   @Column({ nullable: true })
   totpSecret: string | null;
