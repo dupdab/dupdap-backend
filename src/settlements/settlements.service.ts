@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -160,6 +161,83 @@ export class SettlementsService {
       limit: query.limit,
       pages: Math.ceil(total / query.limit),
     };
+  }
+
+  // ── Fiat transfer ──────────────────────────────────────────────────────────
+
+  private static readonly PARTNER_TIMEOUT_MS = 30_000;
+  private static readonly TIMEOUT_ALERT_THRESHOLD = 3;
+  // shortcut: in-memory per-process counter, resets on restart; persist if workers are scaled out.
+  private readonly consecutiveTimeouts = new Map<string, number>();
+
+  async executeFiatTransfer(settlement: Settlement): Promise<void> {
+    const payments = settlement.payments ?? [];
+    try {
+      const { data } = await axios.post(
+        `${this.config.get<string>('PARTNER_API_URL')}/transfers`,
+        {
+          reference: settlement.id,
+          amount: settlement.netAmountUsd,
+          currency: settlement.fiatCurrency,
+        },
+        {
+          headers: { Authorization: `Bearer ${this.config.get<string>('PARTNER_API_KEY')}` },
+          timeout: SettlementsService.PARTNER_TIMEOUT_MS,
+        },
+      );
+
+      this.consecutiveTimeouts.delete(settlement.id);
+      settlement.partnerReference = data?.reference;
+      settlement.status = SettlementStatus.COMPLETED;
+      settlement.completedAt = new Date();
+      await this.settlementsRepo.save(settlement);
+
+      for (const payment of payments) {
+        payment.status = PaymentStatus.SETTLED;
+        await this.paymentsRepo.save(payment);
+        await this.stellar.invokeContract('settle', [payment.id, settlement.id]);
+        await this.webhooks.dispatch(settlement.merchantId, 'payment.settled', {
+          paymentId: payment.id,
+          settlementId: settlement.id,
+          amount: Number(payment.amountUsd),
+        });
+      }
+      this.analytics.clearCacheForMerchant(settlement.merchantId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      if (axios.isAxiosError?.(err) && err.code === 'ECONNABORTED') {
+        const count = (this.consecutiveTimeouts.get(settlement.id) ?? 0) + 1;
+        this.consecutiveTimeouts.set(settlement.id, count);
+        if (count >= SettlementsService.TIMEOUT_ALERT_THRESHOLD) {
+          await this.adminAlerts.raise({
+            type: AdminAlertType.SETTLEMENT_FAILURE,
+            dedupeKey: `settlement-timeout:${settlement.id}`,
+            message: `Partner API timed out ${count} consecutive times for settlement ${settlement.id}`,
+            metadata: { settlementId: settlement.id, consecutiveTimeouts: count },
+            thresholdValue: count,
+          });
+        }
+        // Rethrow so Bull retries; settlement stays PROCESSING.
+        throw new Error(`Partner API timeout for settlement ${settlement.id}: ${message}`);
+      }
+
+      this.consecutiveTimeouts.delete(settlement.id);
+      settlement.status = SettlementStatus.FAILED;
+      settlement.failureReason = message;
+      await this.settlementsRepo.save(settlement);
+      for (const payment of payments) {
+        payment.status = PaymentStatus.FAILED;
+        await this.paymentsRepo.save(payment);
+      }
+      await this.adminAlerts.raise({
+        type: AdminAlertType.SETTLEMENT_FAILURE,
+        dedupeKey: `settlement:${settlement.id}`,
+        message: `Settlement ${settlement.id} failed: ${message}`,
+        metadata: { settlementId: settlement.id },
+        thresholdValue: 1,
+      });
+    }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
