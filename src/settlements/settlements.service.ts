@@ -78,6 +78,17 @@ export class SettlementsService {
       details: { status: settlement.status, requiresApproval: settlement.requiresApproval },
     });
 
+    const payments = await this.paymentsRepo.find({ where: { settlementId: settlement.id } });
+    for (const payment of payments) {
+      payment.status = PaymentStatus.SETTLING;
+      await this.paymentsRepo.save(payment);
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.settling', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        amount: Number(payment.amountUsd),
+      });
+    }
+
     await this.settlementQueue.add(
       'dispatch',
       { settlementId },
