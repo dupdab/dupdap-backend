@@ -3,11 +3,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { AnalyticsRefreshService } from './analytics-refresh.service';
 import { DailyPaymentVolume } from './entities/daily-payment-volume.view';
 import { CronJobService } from '../cron/cron-job.service';
+import { CacheService } from '../cache/cache.service';
 
 const mockViewRepo = { query: jest.fn() };
 const mockCronJobService = {
   run: jest.fn((name: string, fn: () => Promise<void>) => fn()),
 };
+const mockCache = { set: jest.fn(), get: jest.fn() };
 
 describe('AnalyticsRefreshService', () => {
   let service: AnalyticsRefreshService;
@@ -19,6 +21,7 @@ describe('AnalyticsRefreshService', () => {
         AnalyticsRefreshService,
         { provide: getRepositoryToken(DailyPaymentVolume), useValue: mockViewRepo },
         { provide: CronJobService, useValue: mockCronJobService },
+        { provide: CacheService, useValue: mockCache },
       ],
     }).compile();
     service = module.get(AnalyticsRefreshService);

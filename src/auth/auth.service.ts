@@ -1,10 +1,14 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomUUID, createHash } from 'crypto';
 import { Merchant, MerchantStatus } from '../merchants/entities/merchant.entity';
-import { CacheService } from '../cache/cache.service';
+import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import type { AuthTokenResponseDto } from './dto/auth-token-response.dto';
+import { CacheService } from '../cache/cache.service';
 
 /** Failed login attempts allowed before the account is locked. */
 export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
@@ -18,8 +22,30 @@ export class AuthService {
   constructor(
     @InjectRepository(Merchant)
     private readonly merchants: Repository<Merchant>,
+    private readonly jwtService: JwtService,
     private readonly cache: CacheService,
   ) {}
+
+  async register(dto: RegisterDto): Promise<AuthTokenResponseDto> {
+    const existing = await this.merchants.findOne({ where: { email: dto.email } });
+    if (existing) throw new ConflictException('Email already registered');
+
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+
+    const merchant = this.merchants.create({
+      email: dto.email,
+      passwordHash,
+      businessName: dto.businessName,
+      businessType: dto.businessType,
+      country: dto.country,
+      status: MerchantStatus.ACTIVE,
+    });
+
+    const saved = await this.merchants.save(merchant);
+    const token = this.signToken(saved.id, saved.email, saved.role);
+
+    return { accessToken: token, merchant: saved };
+  }
 
   private failedAttemptsKey(email: string): string {
     return `auth:failed-attempts:${email.toLowerCase()}`;
@@ -41,7 +67,7 @@ export class AuthService {
     ]);
   }
 
-  async login(dto: LoginDto): Promise<{ accessToken: string; merchant: Merchant }> {
+  async login(dto: LoginDto): Promise<AuthTokenResponseDto> {
     const email = dto.email.toLowerCase();
 
     if (await this.cache.get<boolean>(this.lockoutKey(email))) {
@@ -64,7 +90,26 @@ export class AuthService {
 
     await this.clearFailedLogin(email);
 
-    return { accessToken: this.signToken(merchant), merchant };
+    return { accessToken: this.signToken(merchant.id, merchant.email, merchant.role), merchant };
+  }
+
+  async logout(jti: string, ttlSeconds: number): Promise<void> {
+    await this.cache.set(`session:blacklist:${jti}`, true, { ttlSeconds });
+  }
+
+  async isBlacklisted(jti: string): Promise<boolean> {
+    const entry = await this.cache.get<boolean>(`session:blacklist:${jti}`);
+    return entry === true;
+  }
+
+  async findMerchantByApiKey(rawKey: string): Promise<Merchant | null> {
+    const lookupHash = createHash('sha256').update(rawKey).digest('hex');
+    const merchant = await this.merchants.findOne({
+      where: { apiKeyLookupHash: lookupHash },
+    });
+
+    if (!merchant?.apiKeyHash) return null;
+    return (await bcrypt.compare(rawKey, merchant.apiKeyHash)) ? merchant : null;
   }
 
   private async registerFailedLogin(email: string): Promise<void> {
@@ -81,8 +126,7 @@ export class AuthService {
     await this.cache.set(key, attempts, { ttlSeconds: LOGIN_LOCKOUT_SECONDS });
   }
 
-  private signToken(merchant: Merchant): string {
-    // Token issuance is handled by the JWT strategy/signing helper.
-    return Buffer.from(JSON.stringify({ sub: merchant.id, email: merchant.email })).toString('base64');
+  private signToken(sub: string, email: string, role?: string): string {
+    return this.jwtService.sign({ sub, email, role, jti: randomUUID() });
   }
 }

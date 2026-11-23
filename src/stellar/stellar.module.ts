@@ -8,6 +8,7 @@ import { StellarMonitorService } from './stellar-monitor.service';
 import { SorobanMonitorService } from './soroban-monitor.service';
 import { SorobanEventIndexer } from './soroban-event-indexer.service';
 import { Payment } from '../payments/entities/payment.entity';
+import { SorobanIndexerCursor } from './entities/soroban-indexer-cursor.entity';
 import { SettlementsModule } from '../settlements/settlements.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { QUEUE_NAMES } from '../queues/queue.constants';
@@ -19,7 +20,7 @@ import { RetryModule } from '../retry/retry.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment]),
+    TypeOrmModule.forFeature([Payment, SorobanIndexerCursor]),
     AdminAlertModule,
     forwardRef(() => SettlementsModule),
     WebhooksModule,

@@ -114,7 +114,14 @@ describe('PaymentsController', () => {
           { amountUsd: 20, memo: 'second' },
         ],
       };
-      const result = { paymentIds: ['p1', 'p2'], count: 2 };
+      const result = {
+        paymentIds: ['p1', 'p2'],
+        count: 2,
+        items: [
+          { paymentId: 'p1', reference: 'PAY-1', stellarUri: 'web+stellar:pay?destination=GABC', qrCode: 'data:image/png;base64,AAA' },
+          { paymentId: 'p2', reference: 'PAY-2', stellarUri: 'web+stellar:pay?destination=GABC', qrCode: 'data:image/png;base64,BBB' },
+        ],
+      };
       jest.spyOn(service, 'createBatch').mockResolvedValue(result);
 
       await expect(controller.createBatch(REQ as any, dto)).resolves.toBe(result);
