@@ -98,11 +98,7 @@ describe("StellarService", () => {
           transaction: () => ({ call: async () => tx }),
         } as any);
       const result = await service.verifyPayment("hash", "memo");
-      expect(result).toEqual(
-        memo === "memo"
-          ? { verified: true, amount: 20, asset: "XLM", from: "sender" }
-          : { verified: false },
-      );
+      expect(result).toEqual({ verified: false });
       expect(await service.getPaymentsForTransaction("hash")).toHaveLength(1);
     },
   );

@@ -12,6 +12,11 @@ export class AddPaymentStatusExpiresAtIndex1772500000000
     const paymentsTableExists = await queryRunner.hasTable('payments');
     if (paymentsTableExists) {
       await queryRunner.query(`
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS "IDX_payments_expires_at"
+        ON "payments" ("expiresAt")
+      `);
+
+      await queryRunner.query(`
         CREATE INDEX CONCURRENTLY IF NOT EXISTS "IDX_payments_status_expires_at"
         ON "payments" ("status", "expiresAt")
       `);
@@ -21,6 +26,9 @@ export class AddPaymentStatusExpiresAtIndex1772500000000
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `DROP INDEX CONCURRENTLY IF EXISTS "IDX_payments_status_expires_at"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX CONCURRENTLY IF EXISTS "IDX_payments_expires_at"`,
     );
   }
 }

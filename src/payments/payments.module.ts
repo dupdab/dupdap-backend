@@ -22,6 +22,7 @@ import { AmlModule } from '../aml/aml.module';
 import { PaymentsSorobanListener } from './payments-soroban.listener';
 import { TransactionLimitsService } from './transaction-limits.service';
 import { AdminAlertModule } from '../alerts/admin-alert.module';
+import { AnalyticsModule } from '../analytics/analytics.module';
 import { PrometheusModule } from '../prometheus/prometheus.module';
 
 @Module({
@@ -37,6 +38,8 @@ import { PrometheusModule } from '../prometheus/prometheus.module';
     PrometheusModule,
     forwardRef(() => AmlModule),
     SettlementsModule,
+    SorobanModule,
+    AnalyticsModule,
   ],
   controllers: [PaymentsController, PublicPaymentController, DisputesController],
   providers: [PaymentsService, DisputesService, PaymentExpiryService, IdempotencyInterceptor, PaymentEscrowService, PaymentsSorobanListener, TransactionLimitsService],
