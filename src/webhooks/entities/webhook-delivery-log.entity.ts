@@ -14,6 +14,9 @@ export class WebhookDeliveryLog {
   @Column()
   webhookId: string;
 
+  @Column({ nullable: true })
+  eventId: string;
+
   @Column()
   event: string;
 

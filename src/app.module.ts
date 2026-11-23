@@ -53,6 +53,39 @@ import { CacheModule } from './cache/cache.module';
 import { ApiKeyRateLimitGuard } from './auth/guards/api-key-rate-limit.guard';
 import { RateLimitService } from './auth/rate-limit.service';
 
+/**
+ * Resolve the effective TypeORM `synchronize` flag.
+ *
+ * `synchronize` is hard-disabled outside development regardless of any env
+ * var, so a misconfigured staging/production deploy can never let TypeORM
+ * silently drop columns that don't match entities (#943). In development it
+ * may still be enabled via `DB_SYNCHRONIZE`.
+ */
+function resolveSynchronize(config: ConfigService): boolean {
+  const nodeEnv = config.get<string>('NODE_ENV', 'development');
+  if (nodeEnv !== 'development') {
+    return false;
+  }
+  return config.get<string>('DB_SYNCHRONIZE', 'false') === 'true';
+}
+
+/**
+ * Startup assertion: refuse to boot if synchronize is enabled in production.
+ * Throws (and exits) rather than letting TypeORM mutate the schema.
+ */
+function assertSynchronizeSafe(config: ConfigService): void {
+  const nodeEnv = config.get<string>('NODE_ENV', 'development');
+  const requested = config.get<string>('DB_SYNCHRONIZE', 'false') === 'true';
+  if (nodeEnv === 'production' && requested) {
+    new Logger('AppModule').error(
+      'FATAL: DB_SYNCHRONIZE=true is not allowed in production. Refusing to start (#943).',
+    );
+    throw new Error(
+      'DB_SYNCHRONIZE must be false in production; TypeORM synchronize is hard-disabled (#943).',
+    );
+  }
+}
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -130,29 +163,32 @@ import { RateLimitService } from './auth/rate-limit.service';
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        host: config.get('DB_HOST', 'localhost'),
-        port: config.get<number>('DB_PORT', 5432),
-        username: config.get('DB_USER', 'postgres'),
-        password: config.get('DB_PASSWORD'),
-        database: config.get('DB_NAME', 'dupdub'),
-        entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: false,
-        logging: config.get('NODE_ENV') === 'development',
-        // Slow-query profiler (#533): queries slower than this log a WARN
-        // with full text + params and bump db_slow_query_total{table}.
-        maxQueryExecutionTime: config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
-        logger: new SlowQueryLogger(
-          config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
-        ),
-        extra: {
-          max: config.get<number>('DB_POOL_MAX', 10),
-          min: config.get<number>('DB_POOL_MIN', 2),
-          connectionTimeoutMillis: config.get<number>('DB_ACQUIRE_TIMEOUT_MS', 10000),
-          idleTimeoutMillis: config.get<number>('DB_IDLE_TIMEOUT_MS', 60000),
-        },
-      }),
+      useFactory: (config: ConfigService) => {
+        assertSynchronizeSafe(config);
+        return {
+          type: 'postgres',
+          host: config.get('DB_HOST', 'localhost'),
+          port: config.get<number>('DB_PORT', 5432),
+          username: config.get('DB_USER', 'postgres'),
+          password: config.get('DB_PASSWORD'),
+          database: config.get('DB_NAME', 'dupdub'),
+          entities: [__dirname + '/**/*.entity{.ts,.js}'],
+          synchronize: resolveSynchronize(config),
+          logging: config.get('NODE_ENV') === 'development',
+          // Slow-query profiler (#533): queries slower than this log a WARN
+          // with full text + params and bump db_slow_query_total{table}.
+          maxQueryExecutionTime: config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
+          logger: new SlowQueryLogger(
+            config.get<number>('DB_SLOW_QUERY_THRESHOLD_MS', 500),
+          ),
+          extra: {
+            max: config.get<number>('DB_POOL_MAX', 10),
+            min: config.get<number>('DB_POOL_MIN', 2),
+            connectionTimeoutMillis: config.get<number>('DB_ACQUIRE_TIMEOUT_MS', 10000),
+            idleTimeoutMillis: config.get<number>('DB_IDLE_TIMEOUT_MS', 60000),
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     HealthModule,
@@ -208,8 +244,13 @@ import { RateLimitService } from './auth/rate-limit.service';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
-    consumer.apply(MaintenanceModeMiddleware).forRoutes('*');
-    consumer.apply(TlsEnforcementMiddleware, SensitiveAccessLogMiddleware).forRoutes('*');
+    consumer
+      .apply(
+        CorrelationIdMiddleware,
+        MaintenanceModeMiddleware,
+        TlsEnforcementMiddleware,
+        SensitiveAccessLogMiddleware,
+      )
+      .forRoutes('*');
   }
 }

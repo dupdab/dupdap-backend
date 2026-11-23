@@ -1,18 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 @Injectable()
 export class MetricsService {
-  readonly registry: Registry;
+  readonly registry = new Registry();
 
-  readonly httpRequestsTotal: Counter<string>;
-  readonly httpRequestDurationSeconds: Histogram<string>;
-  readonly settlementBatchSize: Histogram<string>;
-  readonly settlementBatchAmountUsd: Histogram<string>;
-  readonly settlementSmallPaymentQueuedTotal: Counter<string>;
+  private readonly httpRequestsTotal: Counter<string>;
+  private readonly httpRequestDuration: Histogram<string>;
+  private readonly dbPoolUtilization: Gauge<string>;
 
-  constructor() {
-    this.registry = new Registry();
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {
     collectDefaultMetrics({ register: this.registry });
 
     this.httpRequestsTotal = new Counter({
@@ -22,7 +21,7 @@ export class MetricsService {
       registers: [this.registry],
     });
 
-    this.httpRequestDurationSeconds = new Histogram({
+    this.httpRequestDuration = new Histogram({
       name: 'http_request_duration_seconds',
       help: 'HTTP request duration in seconds',
       labelNames: ['method', 'route', 'status'],
@@ -30,41 +29,62 @@ export class MetricsService {
       registers: [this.registry],
     });
 
-    this.settlementBatchSize = new Histogram({
-      name: 'settlement_batch_size',
-      help: 'Number of payments included in each settlement batch',
-      buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+    this.dbPoolUtilization = new Gauge({
+      name: 'db_pool_utilization_ratio',
+      help: 'Database connection pool utilization (active / max connections)',
       registers: [this.registry],
     });
 
-    this.settlementBatchAmountUsd = new Histogram({
-      name: 'settlement_batch_amount_usd',
-      help: 'Total USD amount settled per settlement batch',
-      buckets: [1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000],
-      registers: [this.registry],
-    });
+    this.registry.registerMetric(
+      new Gauge({
+        name: 'db_pool_connections',
+        help: 'Database connection pool connection counts by state',
+        labelNames: ['state'],
+        registers: [this.registry],
+        collect: (gauge) => {
+          const pool = this.getPoolStats();
+          gauge.set({ state: 'active' }, pool.active);
+          gauge.set({ state: 'idle' }, pool.idle);
+          gauge.set({ state: 'total' }, pool.total);
+          gauge.set({ state: 'max' }, pool.max);
+        },
+      }),
+    );
 
-    this.settlementSmallPaymentQueuedTotal = new Counter({
-      name: 'settlement_small_payment_queued_total',
-      help: 'Total number of small payments queued for batching',
-      registers: [this.registry],
-    });
+    this.dbPoolUtilization.collect = () => {
+      const pool = this.getPoolStats();
+      const ratio = pool.max > 0 ? pool.active / pool.max : 0;
+      this.dbPoolUtilization.set(ratio);
+    };
   }
 
-  recordSettlementBatch(paymentCount: number, totalAmountUsd: number): void {
-    this.settlementBatchSize.observe(paymentCount);
-    this.settlementBatchAmountUsd.observe(totalAmountUsd);
+  private getPoolStats(): { active: number; idle: number; total: number; max: number } {
+    const driver = (this.dataSource as unknown as { driver?: { master?: any } }).driver;
+    const pool = driver?.master;
+    const max = Number(process.env.DB_POOL_MAX ?? 20);
+
+    if (!pool) {
+      return { active: 0, idle: 0, total: 0, max };
+    }
+
+    const total = typeof pool.totalCount === 'number' ? pool.totalCount : 0;
+    const idle = typeof pool.idleCount === 'number' ? pool.idleCount : 0;
+    const active = typeof pool.activeCount === 'number' ? pool.activeCount : Math.max(total - idle, 0);
+
+    return { active, idle, total, max };
   }
 
-  recordSmallPaymentQueued(): void {
-    this.settlementSmallPaymentQueuedTotal.inc();
+  observeHttpRequest(method: string, route: string, status: number, durationSeconds: number): void {
+    const labels = { method, route, status: String(status) };
+    this.httpRequestsTotal.inc(labels);
+    this.httpRequestDuration.observe(labels, durationSeconds);
   }
 
   async getMetrics(): Promise<string> {
     return this.registry.metrics();
   }
 
-  getContentType(): string {
+  get contentType(): string {
     return this.registry.contentType;
   }
 }
