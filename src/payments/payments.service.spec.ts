@@ -67,6 +67,7 @@ describe('PaymentsService', () => {
           provide: NotificationsService,
           useValue: {
             enqueueEmail: jest.fn(),
+            notifyMerchant: jest.fn(),
           },
         },
         {
@@ -249,6 +250,80 @@ describe('PaymentsService', () => {
       jest.spyOn(aml, 'checkAndFlag').mockRejectedValue(new Error('aml down'));
 
       const result = await service.confirmPayment('payment-654', 'GABCXYZ');
+      expect(result.status).toBe(PaymentStatus.CONFIRMED);
+    });
+
+    it('should notify the merchant when paymentConfirmedEmailEnabled is true', async () => {
+      const payment = {
+        id: 'payment-777',
+        merchantId: 'merchant-777',
+        reference: 'PAY-777',
+        amountUsd: '42.000000',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+      jest.spyOn(merchants, 'findOne').mockResolvedValue({
+        ...mockMerchant,
+        id: 'merchant-777',
+        paymentConfirmedEmailEnabled: true,
+      } as any);
+
+      await service.confirmPayment('payment-777', 'GABC777');
+
+      expect(notifications.notifyMerchant).toHaveBeenCalledTimes(1);
+      expect(notifications.notifyMerchant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          merchantEmail: mockMerchant.email,
+          paymentId: 'payment-777',
+          reference: 'PAY-777',
+        }),
+      );
+    });
+
+    it('should not notify the merchant when paymentConfirmedEmailEnabled is false', async () => {
+      const payment = {
+        id: 'payment-888',
+        merchantId: 'merchant-888',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+      jest.spyOn(merchants, 'findOne').mockResolvedValue({
+        ...mockMerchant,
+        id: 'merchant-888',
+        paymentConfirmedEmailEnabled: false,
+      } as any);
+
+      await service.confirmPayment('payment-888', 'GABC888');
+
+      expect(notifications.notifyMerchant).not.toHaveBeenCalled();
+    });
+
+    it('should not block confirmation if the merchant notification throws', async () => {
+      const payment = {
+        id: 'payment-999',
+        merchantId: 'merchant-999',
+        status: PaymentStatus.PENDING,
+        customerWalletAddress: null,
+      } as any;
+
+      jest.spyOn(repo, 'findOne').mockResolvedValue(payment);
+      jest.spyOn(repo, 'save').mockImplementation(async (p) => p);
+      jest.spyOn(merchants, 'findOne').mockResolvedValue({
+        ...mockMerchant,
+        id: 'merchant-999',
+        paymentConfirmedEmailEnabled: true,
+      } as any);
+      jest
+        .spyOn(notifications, 'notifyMerchant')
+        .mockRejectedValue(new Error('queue down'));
+
+      const result = await service.confirmPayment('payment-999', 'GABC999');
       expect(result.status).toBe(PaymentStatus.CONFIRMED);
     });
   });
