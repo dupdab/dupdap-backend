@@ -3,7 +3,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
@@ -40,6 +40,7 @@ export class SettlementsService {
     private readonly stellar: StellarService,
     private readonly cronJobService: CronJobService,
     private readonly retryConfig: RetryConfigService,
+    private readonly dataSource?: DataSource,
   ) {
     this.settlementsRepo = settlementsRepo as Repository<Settlement>;
     this.paymentsRepo = paymentsRepo as Repository<Payment>;
@@ -49,6 +50,72 @@ export class SettlementsService {
   private readonly settlementsRepo: Repository<Settlement>;
   private readonly paymentsRepo: Repository<Payment>;
   private readonly auditLogRepo: Repository<AuditLog>;
+
+  // ── Settlement initiation (#820) ───────────────────────────────────────────
+
+  /**
+   * Creates the settlement and moves the payment to SETTLING atomically.
+   * The webhook is dispatched only after the transaction has committed, so a
+   * crash mid-operation can never leave partial writes or a phantom webhook.
+   */
+  async initiateSettlement(payment: Payment, manager?: EntityManager): Promise<Settlement | null> {
+    if (manager) {
+      const settlement = await this.createSettlementInTransaction(payment, manager);
+      await this.dispatchSettlementInitiated(payment, settlement);
+      return settlement;
+    }
+
+    const settlement = await this.runInTransaction((tx) =>
+      this.createSettlementInTransaction(payment, tx),
+    );
+
+    // Only reached once the transaction has committed.
+    await this.dispatchSettlementInitiated(payment, settlement);
+
+    return settlement;
+  }
+
+  private async dispatchSettlementInitiated(
+    payment: Payment,
+    settlement: Settlement,
+  ): Promise<void> {
+    await this.webhooks.dispatch(payment.merchantId, 'settlement.initiated', {
+      settlementId: settlement.id,
+      paymentId: payment.id,
+      status: settlement.status,
+    });
+  }
+
+  private async runInTransaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
+    if (!this.dataSource) {
+      throw new Error('DataSource is required to initiate a settlement');
+    }
+    return this.dataSource.transaction(work);
+  }
+
+  private async createSettlementInTransaction(
+    payment: Payment,
+    manager: EntityManager,
+  ): Promise<Settlement> {
+    const settlementsRepo = manager.getRepository(Settlement);
+    const paymentsRepo = manager.getRepository(Payment);
+
+    const settlement = settlementsRepo.create({
+      merchantId: payment.merchantId,
+      totalAmountUsd: payment.amountUsd,
+      feeAmountUsd: '0.000000',
+      netAmountUsd: payment.amountUsd,
+      status: SettlementStatus.PENDING,
+    });
+
+    const saved = await settlementsRepo.save(settlement);
+
+    payment.status = PaymentStatus.SETTLING;
+    payment.settlement = saved;
+    await paymentsRepo.save(payment);
+
+    return saved;
+  }
 
   // ── Admin approval workflow (#445) ─────────────────────────────────────────
 
