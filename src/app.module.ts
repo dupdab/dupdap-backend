@@ -1,5 +1,5 @@
 import { BullModule } from '@nestjs/bull';
-import { Logger, Module } from '@nestjs/common';
+import { ClassSerializerInterceptor, Logger, Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR, APP_FILTER } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
@@ -40,6 +40,7 @@ import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
 
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
+import { CookieConfigMiddleware } from './common/middleware/cookie-config.middleware';
 import { MaintenanceModeMiddleware } from './runtime-config/middleware/maintenance-mode.middleware';
 import { TlsEnforcementMiddleware } from './security/tls-enforcement.middleware';
 import { SensitiveAccessLogMiddleware } from './security/sensitive-access.middleware';
@@ -235,6 +236,11 @@ function assertSynchronizeSafe(config: ConfigService): void {
       useClass: SentryInterceptor,
     },
     {
+      // Applies @Exclude()/@Transform() on entities (e.g. Merchant.totpSecret) to every response.
+      provide: APP_INTERCEPTOR,
+      useClass: ClassSerializerInterceptor,
+    },
+    {
       provide: APP_FILTER,
       useClass: AllExceptionsFilter,
     },
@@ -247,6 +253,7 @@ export class AppModule implements NestModule {
     consumer
       .apply(
         CorrelationIdMiddleware,
+        CookieConfigMiddleware,
         MaintenanceModeMiddleware,
         TlsEnforcementMiddleware,
         SensitiveAccessLogMiddleware,

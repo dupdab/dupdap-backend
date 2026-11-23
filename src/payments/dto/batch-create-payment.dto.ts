@@ -71,10 +71,30 @@ export class BatchCreatePaymentDto {
   payments: BatchPaymentItemDto[];
 }
 
+export class BatchPaymentResultItemDto {
+  @ApiProperty({ description: 'ID of the created payment' })
+  paymentId: string;
+
+  @ApiProperty({ description: 'Public reference of the created payment' })
+  reference: string;
+
+  @ApiProperty({ description: 'SEP-0007 Stellar payment URI for this payment' })
+  stellarUri: string;
+
+  @ApiProperty({ description: 'QR code (data URL) encoding the Stellar URI' })
+  qrCode: string;
+}
+
 export class BatchPaymentResultDto {
   @ApiProperty({ description: 'IDs of all created payments in order' })
   paymentIds: string[];
 
   @ApiProperty({ description: 'Total number of payments created' })
   count: number;
+
+  @ApiProperty({
+    type: [BatchPaymentResultItemDto],
+    description: 'Per-item results, including the Stellar URI and QR code of each payment',
+  })
+  items: BatchPaymentResultItemDto[];
 }

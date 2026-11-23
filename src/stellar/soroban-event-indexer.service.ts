@@ -1,13 +1,15 @@
 import { InjectQueue } from '@nestjs/bull';
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { InjectRepository } from '@nestjs/typeorm';
 import type { Queue } from 'bull';
-import { CacheService } from '../cache/cache.service';
+import { Repository } from 'typeorm';
 import { DEFAULT_QUEUE_JOB, QUEUE_NAMES } from '../queues/queue.constants';
 import { CronJobService } from '../cron/cron-job.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
+import { SorobanIndexerCursor } from './entities/soroban-indexer-cursor.entity';
 import {
   PaymentConfirmedEventDto,
   SettlementCompletedEventDto,
@@ -25,8 +27,7 @@ interface SorobanRpcEventsResponse {
   result?: { events?: SorobanRpcEvent[]; latestLedger?: number | string };
 }
 
-const CURSOR_KEY = 'soroban:indexer:last-ledger';
-const CURSOR_TTL_SECONDS = 60 * 60 * 24 * 365;
+const CURSOR_NAME = 'soroban-event-indexer';
 const PAGE_LIMIT = 200;
 const RPC_TIMEOUT_MS = 10_000;
 const MAX_SKIPPED_POLLS = 3;
@@ -41,11 +42,12 @@ export class SorobanEventIndexer {
 
   constructor(
     private readonly config: ConfigService,
-    private readonly cache: CacheService,
     private readonly eventEmitter: EventEmitter2,
     @InjectQueue(QUEUE_NAMES.sorobanEventDlq) private readonly dlq: Queue,
     private readonly cronJobService: CronJobService,
     private readonly adminAlertService: AdminAlertService,
+    @InjectRepository(SorobanIndexerCursor)
+    private readonly cursorRepo: Repository<SorobanIndexerCursor>,
   ) {
     this.rpcUrl = this.config.get<string>(
       'SOROBAN_RPC_URL',
@@ -80,7 +82,7 @@ export class SorobanEventIndexer {
     this.polling = true;
     try {
       await this.cronJobService.run('soroban-event-indexer', async () => {
-          const lastLedger = (await this.cache.get<number>(CURSOR_KEY)) ?? 0;
+          const lastLedger = await this.readCursor();
           let startLedger = lastLedger > 0 ? lastLedger + 1 : undefined;
           let cursorLedger = lastLedger;
           let pageCursor: string | undefined;
@@ -112,9 +114,7 @@ export class SorobanEventIndexer {
           }
 
           if (cursorLedger > lastLedger) {
-            await this.cache.set(CURSOR_KEY, cursorLedger, {
-              ttlSeconds: CURSOR_TTL_SECONDS,
-            });
+            await this.writeCursor(cursorLedger);
           }
 
           return eventCount;
@@ -123,6 +123,24 @@ export class SorobanEventIndexer {
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Rewinds the persisted cursor to fromLedger and re-indexes from there. Already-dispatched events are dispatched again. */
+  async replayFrom(fromLedger: number): Promise<void> {
+    if (this.polling) {
+      throw new ConflictException('Soroban event indexer is already polling; retry shortly');
+    }
+    await this.writeCursor(fromLedger - 1);
+    await this.pollEvents();
+  }
+
+  private async readCursor(): Promise<number> {
+    const row = await this.cursorRepo.findOne({ where: { name: CURSOR_NAME } });
+    return row?.ledger ?? 0;
+  }
+
+  private async writeCursor(ledger: number): Promise<void> {
+    await this.cursorRepo.upsert({ name: CURSOR_NAME, ledger }, ['name']);
   }
 
   private async dispatch(dto: SorobanContractEventDto): Promise<void> {

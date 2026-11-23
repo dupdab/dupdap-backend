@@ -12,6 +12,7 @@ import {
   ApiSecurity,
 } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
+import { instanceToPlain } from 'class-transformer';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
 import { UpdateSettlementPreferenceDto } from './dto/update-settlement-preference.dto';
 import { GenerateApiKeyDto } from './dto/generate-api-key.dto';
@@ -51,8 +52,9 @@ export class MerchantsController {
   @ApiForbiddenResponse({ description: 'Requires interactive JWT session — not reachable via API key' })
   @ApiBadRequestResponse({ description: 'Validation failed' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  update(@Request() req: { user: { merchantId: string } }, @Body() dto: UpdateMerchantDto) {
-    return this.merchantsService.update(req.user.merchantId, dto);
+  async update(@Request() req: { user: { merchantId: string } }, @Body() dto: UpdateMerchantDto) {
+    const merchant = await this.merchantsService.update(req.user.merchantId, dto);
+    return instanceToPlain(merchant);
   }
 
   @Get('audit-log')

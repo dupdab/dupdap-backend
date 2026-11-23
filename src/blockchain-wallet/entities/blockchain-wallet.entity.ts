@@ -10,6 +10,10 @@ import { encryptedColumnTransformer } from '../../security/encrypted-column.tran
 
 @Entity('blockchain_wallets')
 @Index('IDX_BLOCKCHAIN_WALLET_LAST_SYNCED_AT', ['lastSyncedAt'])
+@Index('IDX_BLOCKCHAIN_WALLET_IV', ['iv'], {
+  unique: true,
+  where: '"iv" IS NOT NULL',
+})
 export class BlockchainWallet {
   @PrimaryGeneratedColumn('uuid')
   id: string;

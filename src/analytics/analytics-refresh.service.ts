@@ -1,12 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron, CronExpression, Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Gauge } from 'prom-client';
 import { Repository } from 'typeorm';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
 import { AdminAlertService } from '../alerts/admin-alert.service';
+import { CacheService } from '../cache/cache.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { DailyPaymentVolume } from './entities/daily-payment-volume.view';
+
+/** Redis key for the ISO timestamp of the last successful refresh. Not under `analytics:*`, which admin cache flushes delete. */
+export const ANALYTICS_VIEW_LAST_REFRESHED_KEY = 'mv-meta:mv_daily_payment_volume:last_refreshed_at';
+
+/** Volume data older than this since its last refresh is flagged `isStale`. */
+export const ANALYTICS_STALE_AFTER_MS = 10 * 60 * 1000;
+
+/** Seconds since the last successful refresh, read from the shared cache. */
+export const analyticsViewLastRefreshAgeSeconds = new Gauge({
+  name: 'analytics_view_last_refresh_age_seconds',
+  help: 'Seconds since the last successful analytics materialized view refresh',
+  labelNames: ['view'],
+});
 
 /** Duration of the most recent materialized view refresh. */
 export const analyticsRefreshDurationSeconds = new Gauge({
@@ -38,6 +52,7 @@ export class AnalyticsRefreshService {
     private readonly viewRepo: Repository<DailyPaymentVolume>,
     private readonly cronJobService: CronJobService,
     private readonly adminAlerts: AdminAlertService,
+    private readonly cache: CacheService,
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR)
@@ -45,6 +60,18 @@ export class AnalyticsRefreshService {
     await this.cronJobService.run('refresh-mv-daily-payment-volume', async () => {
       await this.refresh('cron');
     });
+  }
+
+  /** Keeps the age gauge current between refreshes, so alerts fire even when nobody reads volume data. */
+  @Interval(60_000)
+  async updateRefreshAgeMetric(): Promise<void> {
+    const lastRefreshedAt = await this.cache.get<string>(ANALYTICS_VIEW_LAST_REFRESHED_KEY);
+    if (lastRefreshedAt) {
+      analyticsViewLastRefreshAgeSeconds.set(
+        { view: VIEW_NAME },
+        (Date.now() - Date.parse(lastRefreshedAt)) / 1000,
+      );
+    }
   }
 
   /**
@@ -68,6 +95,7 @@ export class AnalyticsRefreshService {
 
     try {
       await this.viewRepo.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${VIEW_NAME}`);
+      await this.cache.set(ANALYTICS_VIEW_LAST_REFRESHED_KEY, new Date().toISOString());
 
       const durationMs = Date.now() - startedAt;
       analyticsRefreshDurationSeconds.set({ view: VIEW_NAME, status: 'success' }, durationMs / 1000);
