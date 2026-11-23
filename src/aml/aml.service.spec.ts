@@ -82,6 +82,45 @@ describe('AmlService', () => {
       expect(notifications.enqueueEmail).not.toHaveBeenCalled();
     });
 
+    it('counts payments in a rolling 24h window across the UTC midnight boundary', async () => {
+      config.get.mockReturnValue(undefined);
+      paymentsRepo.count.mockResolvedValue(51);
+
+      const beforeMidnight = new Date('2024-01-01T23:59:00.000Z');
+      jest.useFakeTimers().setSystemTime(beforeMidnight);
+      try {
+        await service.checkAndFlag({ ...payment, amountUsd: 100 } as Payment);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      const afterMidnight = new Date('2024-01-02T00:01:00.000Z');
+      jest.useFakeTimers().setSystemTime(afterMidnight);
+      try {
+        await service.checkAndFlag({ ...payment, amountUsd: 100 } as Payment);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      expect(paymentsRepo.count).toHaveBeenCalledTimes(2);
+      for (const call of paymentsRepo.count.mock.calls) {
+        const where = (call[0] as { where: { createdAt: unknown } }).where;
+        expect(where.createdAt).toBeDefined();
+        expect(where.createdAt).not.toEqual(expect.objectContaining({ _type: 'moreThanOrEqual' }));
+      }
+
+      const firstWhere = (paymentsRepo.count.mock.calls[0][0] as { where: { createdAt: { _type: string; _value: Date } } }).where;
+      const secondWhere = (paymentsRepo.count.mock.calls[1][0] as { where: { createdAt: { _type: string; _value: Date } } }).where;
+      expect(firstWhere.createdAt._type).toBe('moreThanOrEqual');
+      expect(secondWhere.createdAt._type).toBe('moreThanOrEqual');
+      expect(firstWhere.createdAt._value.toISOString()).toBe('2023-12-31T23:59:00.000Z');
+      expect(secondWhere.createdAt._value.toISOString()).toBe('2024-01-01T00:01:00.000Z');
+
+      expect(amlRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+        reason: AmlFlagReason.HIGH_VELOCITY,
+      }));
+    });
+
     it('does not create a flag when neither threshold is reached', async () => {
       paymentsRepo.count.mockResolvedValue(50);
 

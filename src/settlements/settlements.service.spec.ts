@@ -135,6 +135,12 @@ describe('SettlementsService batching', () => {
     ] as Payment[];
 
     paymentsRepo.find = jest.fn().mockResolvedValue(payments);
+    paymentsRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue(payments),
+    });
 
     await service.batchSmallConfirmedPayments();
 
@@ -163,6 +169,59 @@ describe('SettlementsService batching', () => {
     expect((payments[3] as Payment).status).toBe(PaymentStatus.CONFIRMED);
   });
 
+  it('compares amountUsd numerically in SQL instead of via LessThan()', async () => {
+    const qb: any = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    paymentsRepo.createQueryBuilder = jest.fn().mockReturnValue(qb);
+
+    await service.batchSmallConfirmedPayments();
+
+    expect(paymentsRepo.createQueryBuilder).toHaveBeenCalledWith('payment');
+    const [sql, params] = qb.andWhere.mock.calls.find(([clause]: [string]) =>
+      clause.includes('amountUsd'),
+    ) as [string, { threshold: number }];
+    expect(sql).toContain('::numeric');
+    expect(params.threshold).toBe(10);
+    expect(settlementsRepo.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['9.99', false],
+    ['10.00', true],
+    ['10.01', true],
+  ])('treats a single %s payment as flushable=%s', async (amountUsd, flushable) => {
+    const payment = {
+      id: 'p1',
+      merchantId: 'merchant-1',
+      amountUsd,
+      status: PaymentStatus.CONFIRMED,
+      confirmedAt: new Date('2026-04-27T09:55:00Z'),
+      createdAt: new Date('2026-04-27T09:55:00Z'),
+    } as Payment;
+
+    paymentsRepo.find = jest.fn().mockResolvedValue([payment]);
+    paymentsRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([payment]),
+    });
+
+    await service.batchSmallConfirmedPayments();
+
+    if (flushable) {
+      expect(settlementsRepo.create).toHaveBeenCalledTimes(1);
+      expect(settlementQueue.add).toHaveBeenCalledTimes(1);
+    } else {
+      expect(settlementsRepo.create).not.toHaveBeenCalled();
+      expect(settlementQueue.add).not.toHaveBeenCalled();
+    }
+  });
+
   it('does not flush a merchant batch that is still below the $10 threshold', async () => {
     const payments = [
       {
@@ -184,6 +243,12 @@ describe('SettlementsService batching', () => {
     ] as Payment[];
 
     paymentsRepo.find = jest.fn().mockResolvedValue(payments);
+    paymentsRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue(payments),
+    });
 
     await service.batchSmallConfirmedPayments();
 

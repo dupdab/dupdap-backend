@@ -222,7 +222,7 @@ export class AnalyticsExportService {
   private async buildMetrics(exportRecord: AnalyticsExport): Promise<ExportMetrics> {
     const period = exportRecord.period;
     const merchantName = exportRecord.merchantBusinessName;
-    const volumeSeries = await this.analyticsService.getVolume({
+    const { series: volumeSeries } = await this.analyticsService.getVolume({
       scope:
         exportRecord.scope === AnalyticsExportScope.ADMIN ? 'admin' : 'merchant',
       merchantId: exportRecord.merchantId ?? undefined,

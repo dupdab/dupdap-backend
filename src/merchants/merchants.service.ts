@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import Big from 'big.js';
+import { instanceToPlain } from 'class-transformer';
 import { Merchant, MerchantStatus, SettlementFrequency } from './entities/merchant.entity';
 import { ApiScope, API_KEY_SCOPES } from '../auth/scopes';
 import { UpdateMerchantDto } from './dto/create-merchant.dto';
@@ -120,6 +121,10 @@ export class MerchantsService {
     scopes?: ApiScope[],
     expiresAt?: Date,
   ): Promise<{ apiKey: string; expiresAt: Date | null }> {
+    const invalidScopes = (scopes ?? []).filter((scope) => !API_KEY_SCOPES.includes(scope));
+    if (invalidScopes.length > 0) {
+      throw new BadRequestException(`Invalid API key scopes: ${invalidScopes.join(', ')}`);
+    }
     if (expiresAt != null) {
       const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
       if (expiresAt <= new Date()) {
@@ -212,8 +217,14 @@ export class MerchantsService {
     return merchant;
   }
 
-  async getProfile(id: string) {
-    return this.findOne(id);
+  /**
+   * Merchant profile response (#838). Serialized through class-transformer so
+   * `@Exclude()` fields (totpSecret, passwordHash, apiKeyHash, …) are stripped
+   * even when no global ClassSerializerInterceptor is registered.
+   */
+  async getProfile(id: string): Promise<Record<string, unknown>> {
+    const merchant = await this.findOne(id);
+    return instanceToPlain(merchant);
   }
 
   async updateMerchantFee(

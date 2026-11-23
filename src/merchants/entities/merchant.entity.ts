@@ -196,7 +196,7 @@ export class Merchant {
   @Column({ default: false })
   sandboxMode: boolean;
 
-  /** True once the merchant has confirmed ownership of `email` (#844). */
+  /** True once the merchant has confirmed ownership of `email` (#844). Unverified merchants are restricted to sandbox mode (#888). */
   @Column({ name: 'email_verified', default: false })
   emailVerified: boolean;
 

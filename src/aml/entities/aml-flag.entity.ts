@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 
 export enum AmlFlagReason {
@@ -18,6 +19,7 @@ export enum AmlFlagStatus {
 }
 
 @Entity('aml_flags')
+@Index(['status', 'createdAt'])
 export class AmlFlag {
   @PrimaryGeneratedColumn('uuid')
   id: string;
