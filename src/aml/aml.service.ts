@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import Big from 'big.js';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository, MoreThanOrEqual, LessThanOrEqual, In } from 'typeorm';
@@ -10,6 +11,7 @@ import { MetricsService } from '../prometheus/metrics.service';
 
 const HIGH_VALUE_THRESHOLD_USD = 10_000;
 const HIGH_VELOCITY_LIMIT = 50;
+const VELOCITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class AmlService {
@@ -27,22 +29,23 @@ export class AmlService {
   ) {}
 
   async checkAndFlag(payment: Payment): Promise<void> {
-    if (Number(payment.amountUsd) >= HIGH_VALUE_THRESHOLD_USD) {
+    if (new Big(payment.amountUsd).gte(HIGH_VALUE_THRESHOLD_USD)) {
       await this.createFlag(payment.merchantId, payment.id, AmlFlagReason.HIGH_VALUE, {
         amountUsd: payment.amountUsd,
       });
     }
 
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
+    // Rolling 24h window (not UTC midnight) so a burst straddling midnight is
+    // still counted together. Equivalent to createdAt >= NOW() - INTERVAL '24 hours'.
+    const windowStart = new Date(Date.now() - VELOCITY_WINDOW_MS);
 
-    const dailyCount = await this.paymentsRepo.count({
-      where: { merchantId: payment.merchantId, createdAt: MoreThanOrEqual(startOfDay) },
+    const rollingCount = await this.paymentsRepo.count({
+      where: { merchantId: payment.merchantId, createdAt: MoreThanOrEqual(windowStart) },
     });
 
-    if (dailyCount > HIGH_VELOCITY_LIMIT) {
+    if (rollingCount > HIGH_VELOCITY_LIMIT) {
       await this.createFlag(payment.merchantId, payment.id, AmlFlagReason.HIGH_VELOCITY, {
-        dailyCount,
+        rollingCount,
       });
     }
   }

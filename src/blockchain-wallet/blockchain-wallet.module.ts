@@ -14,6 +14,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { SorobanModule } from '../soroban/soroban.module';
 import { EncryptionService } from '../security/encryption.service';
 import { InternalServiceGuard } from '../auth/guards/internal-service.guard';
+import { RuntimeConfigModule } from '../runtime-config/runtime-config.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { InternalServiceGuard } from '../auth/guards/internal-service.guard';
     TypeOrmModule.forFeature([BlockchainWallet, SlippageConfig]),
     NotificationsModule,
     SorobanModule,
+    RuntimeConfigModule,
   ],
   providers: [
     EncryptionService,

@@ -10,6 +10,10 @@ import { StellarService } from '../stellar/stellar.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { AmlService } from '../aml/aml.service';
+import { PaymentEscrowService } from '../blockchain-wallet/payment-escrow.service';
+import { TransactionLimitsService } from './transaction-limits.service';
 import { BatchCreatePaymentDto, BatchPaymentItemDto } from './dto/batch-create-payment.dto';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,6 +78,13 @@ describe('PaymentsService — createBatch', () => {
           provide: MerchantsService,
           useValue: { findOne: jest.fn() },
         },
+        { provide: AnalyticsService, useValue: { clearCacheForMerchant: jest.fn() } },
+        { provide: AmlService, useValue: { checkAndFlag: jest.fn() } },
+        {
+          provide: PaymentEscrowService,
+          useValue: { createPayment: jest.fn().mockReturnValue({ expiryLedger: 1360 }) },
+        },
+        { provide: TransactionLimitsService, useValue: { checkAndIncrement: jest.fn() } },
       ],
     }).compile();
 
@@ -184,6 +195,23 @@ describe('PaymentsService — createBatch', () => {
   });
 
   // ── PaymentCreated events ─────────────────────────────────────────────────
+
+  it('generates a Stellar URI and QR code for every batch item', async () => {
+    const result = await service.createBatch('merchant-1', makeDto(3));
+
+    expect(result.items).toHaveLength(3);
+    for (const item of result.items) {
+      expect(item.qrCode).not.toBeNull();
+      expect(item.qrCode).toBe('data:image/png;base64,mock');
+      expect(item.stellarUri).toContain('web+stellar:pay?');
+      expect(item.stellarUri).toContain('destination=GDEPOSITADDR');
+    }
+
+    const savedRecords: Payment[] = repoSave.mock.calls[0][0];
+    for (const p of savedRecords) {
+      expect(p.qrCode).not.toBeNull();
+    }
+  });
 
   it('logs a PaymentCreated event for each item in the batch', async () => {
     const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => {});
