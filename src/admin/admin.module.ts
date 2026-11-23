@@ -10,6 +10,7 @@ import { FeeHistory } from '../fee-config/entities/fee-history.entity';
 import { CronModule } from '../cron/cron.module';
 import { CronJobLog } from '../cron/entities/cron-job-log.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
+import { AuditService } from '../audit/audit.service';
 import { RatesModule } from '../rates/rates.module';
 import { CacheModule } from '../cache/cache.module';
 import { Settlement } from '../settlements/entities/settlement.entity';
@@ -17,6 +18,11 @@ import { StellarModule } from '../stellar/stellar.module';
 import { BlockchainWalletModule } from '../blockchain-wallet/blockchain-wallet.module';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { EncryptionAdminController } from './encryption-admin.controller';
+import { WebhookDeliveryLog } from '../webhooks/entities/webhook-delivery-log.entity';
+import { WebhooksModule } from '../webhooks/webhooks.module';
+import { AmlModule } from '../aml/aml.module';
+import { AnalyticsExportService } from './analytics-export.service';
+import { AnalyticsExportController } from './analytics-export.controller';
 
 @Module({
   imports: [
@@ -28,15 +34,19 @@ import { EncryptionAdminController } from './encryption-admin.controller';
       FeeHistory,
       AuditLog,
       CronJobLog,
+      WebhookDeliveryLog,
+      MonthlyPaymentVolume,
     ]),
     CronModule,
     RatesModule,
     CacheModule,
     StellarModule,
     BlockchainWalletModule,
+    WebhooksModule,
+    AmlModule,
   ],
-  controllers: [AdminController, CronAdminController, EncryptionAdminController],
-  providers: [AdminService, IpAllowlistGuard],
-  exports: [AdminService, TypeOrmModule],
+  controllers: [AdminController, CronAdminController, EncryptionAdminController, AnalyticsExportController],
+  providers: [AdminService, AuditService, IpAllowlistGuard, AnalyticsExportService],
+  exports: [AdminService, TypeOrmModule, IpAllowlistGuard],
 })
 export class AdminModule {}

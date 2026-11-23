@@ -91,8 +91,13 @@ export class BlockchainWalletService {
         this.sorobanService.getStakeBalance(wallet.stellarAddress),
       ]);
 
-      wallet.balanceUsdc = balanceUsdc;
-      wallet.stakedBalance = stakedBalance;
+      if (!balanceUsdc) {
+        // No USDC entry (e.g. trustline never established): default to zero rather than store an empty value.
+        this.logger.warn(`No USDC balance found for ${userId}; defaulting to 0 (trustline may not be established)`);
+      }
+
+      wallet.balanceUsdc = balanceUsdc || '0';
+      wallet.stakedBalance = stakedBalance || '0';
       wallet.lastSyncedAt = new Date();
 
       return this.walletRepo.save(wallet);

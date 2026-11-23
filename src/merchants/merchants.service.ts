@@ -120,6 +120,10 @@ export class MerchantsService {
     scopes?: ApiScope[],
     expiresAt?: Date,
   ): Promise<{ apiKey: string; expiresAt: Date | null }> {
+    const invalidScopes = (scopes ?? []).filter((scope) => !API_KEY_SCOPES.includes(scope));
+    if (invalidScopes.length > 0) {
+      throw new BadRequestException(`Invalid API key scopes: ${invalidScopes.join(', ')}`);
+    }
     if (expiresAt != null) {
       const maxExpiry = new Date(Date.now() + MAX_EXPIRY_MS);
       if (expiresAt <= new Date()) {
