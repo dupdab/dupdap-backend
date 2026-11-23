@@ -18,6 +18,7 @@ import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { BatchCreatePaymentDto, BatchPaymentResultDto } from './dto/batch-create-payment.dto';
 import { PublicPaymentViewDto } from './dto/public-payment-view.dto';
+import { PaymentStatsDto } from './dto/payment-stats.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Scopes } from '../auth/decorators/scopes.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
@@ -86,7 +87,7 @@ export class PaymentsController {
   @Get('stats')
   @Scopes('payments:read')
   @ApiOperation({ summary: 'Payment statistics' })
-  @ApiOkResponse({ description: 'Aggregated stats' })
+  @ApiOkResponse({ type: PaymentStatsDto, isArray: true, description: 'Aggregated stats' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
   @ApiForbiddenResponse({ description: 'API key missing payments:read scope' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
