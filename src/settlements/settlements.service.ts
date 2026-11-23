@@ -3,7 +3,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
@@ -17,6 +17,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { CronJobService } from '../cron/cron-job.service';
 import { RetryConfigService } from '../retry/retry-config.service';
+import { FeeCalculationService } from './fee-calculation.service';
 
 interface SettlementDecisionResult {
   success: boolean;
@@ -49,6 +50,43 @@ export class SettlementsService {
   private readonly settlementsRepo: Repository<Settlement>;
   private readonly paymentsRepo: Repository<Payment>;
   private readonly auditLogRepo: Repository<AuditLog>;
+
+  private readonly fees = new FeeCalculationService();
+
+  /**
+   * Settles all confirmed, unsettled payments of a merchant in one batch.
+   * The settlement insert and every payment update share one transaction,
+   * so a mid-way failure can't leave payments without a settlementId.
+   */
+  async createBatchSettlement(merchantId: string): Promise<Settlement | null> {
+    return this.settlementsRepo.manager.transaction(async (manager) => {
+      const payments = await manager.find(Payment, {
+        where: { merchantId, status: PaymentStatus.CONFIRMED, settlementId: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!payments.length) return null;
+
+      const total = payments.reduce((sum, p) => sum + Number(p.amountUsd), 0);
+      const { feeUsd, netUsd } = await this.fees.calculateFee(merchantId, total);
+
+      const settlement = await manager.save(
+        manager.create(Settlement, {
+          merchantId,
+          totalAmountUsd: String(total),
+          feeAmountUsd: String(feeUsd),
+          netAmountUsd: String(netUsd),
+        }),
+      );
+
+      await manager.update(
+        Payment,
+        payments.map((p) => p.id),
+        { settlementId: settlement.id },
+      );
+
+      return settlement;
+    });
+  }
 
   // ── Admin approval workflow (#445) ─────────────────────────────────────────
 
