@@ -11,6 +11,8 @@ import {
   UseGuards,
   Headers,
   Res,
+  BadRequestException,
+  UnauthorizedException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -30,10 +32,24 @@ import { PaginationDto } from '../common/dto/pagination.dto';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
+import { WebhooksService } from '../webhooks/webhooks.service';
+import { AuditService } from '../audit/audit.service';
+import { TokenBlacklistService } from '../auth/services/token-blacklist.service';
 
 const EXPORT_DAILY_LIMIT = Number(process.env.ANALYTICS_EXPORT_DAILY_LIMIT ?? 5);
 const EXPORT_SYNC_MAX_DAYS = 30;
 const EXPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const MIN_FEE_RATE = 0;
+const MAX_FEE_RATE = 0.1;
+
+// AML flag review state machine (#932): PENDING → REVIEWING → RESOLVED | ESCALATED
+const AML_FLAG_STATUS_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ['REVIEWING'],
+  REVIEWING: ['RESOLVED', 'ESCALATED'],
+  RESOLVED: [],
+  ESCALATED: [],
+};
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -46,6 +62,9 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly ratesService: RatesService,
+    private readonly webhooksService: WebhooksService,
+    private readonly auditService: AuditService,
+    private readonly tokenBlacklistService: TokenBlacklistService,
   ) {}
 
   @Get('merchants')
@@ -65,23 +84,56 @@ export class AdminController {
   @Patch('merchants/:id/status')
   @Auditable({ action: 'MERCHANT_STATUS_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Update merchant status' })
-  updateStatus(
+  async updateStatus(
     @Param('id') id: string,
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.updateMerchantStatus(id, status, req.user?.id ?? req.user?.merchantId);
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const before = await this.adminService.findOneMerchant(id);
+    const result = await this.adminService.updateMerchantStatus(id, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await this.tokenBlacklistService.blacklistAllForMerchant(id);
+    }
+    await this.auditService.log({
+      actorId,
+      action: 'MERCHANT_STATUS_UPDATED',
+      resourceType: 'merchant',
+      resourceId: id,
+      before: { status: before?.status },
+      after: { status },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Patch('merchants/bulk/status')
   @Auditable({ action: 'MERCHANT_STATUS_BULK_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Bulk update merchant status' })
-  bulkUpdateStatus(
+  async bulkUpdateStatus(
     @Body('ids') ids: string[],
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id ?? req.user?.merchantId);
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const result = await this.adminService.bulkUpdateMerchantStatus(ids, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await Promise.all(
+        ids.map((merchantId) =>
+          this.tokenBlacklistService.blacklistAllForMerchant(merchantId),
+        ),
+      );
+    }
+    await this.auditService.log({
+      actorId,
+      action: 'MERCHANT_STATUS_BULK_UPDATED',
+      resourceType: 'merchant',
+      resourceId: ids.join(','),
+      before: null,
+      after: { ids, status },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Get('stats')
@@ -99,16 +151,146 @@ export class AdminController {
   @Patch('fees')
   @Auditable({ action: 'FEE_UPDATED', resource: 'fee_config' })
   @ApiOperation({ summary: 'Update a global fee rate' })
-  updateFee(
+  async updateFee(
     @Body() dto: UpdateFeeDto,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.updateGlobalFee(
+    this.assertFeeRateInBounds(dto.newRate);
+    const actorId = req.user.id ?? req.user?.merchantId ?? 'system';
+    const before = await this.adminService.getGlobalFees();
+    const result = await this.adminService.updateGlobalFee(
       dto.feeType,
       dto.newRate,
-      req.user.id ?? req.user?.merchantId ?? 'system',
+      actorId,
       dto.reason,
     );
+    await this.auditService.log({
+      actorId,
+      action: 'FEE_UPDATED',
+      resourceType: 'fee_config',
+      resourceId: dto.feeType,
+      before: { feeType: dto.feeType, rate: before?.[dto.feeType] },
+      after: { feeType: dto.feeType, rate: dto.newRate, reason: dto.reason },
+      ip: req.ip,
+    });
+    return result;
+  }
+
+  // ── Audit Log Query (#925) ─────────────────────────────────────────────────
+
+  @Get('audit-log')
+  @ApiOperation({ summary: 'Query the admin audit log with filters' })
+  queryAuditLog(
+    @Query('actorId') actorId?: string,
+    @Query('action') action?: string,
+    @Query('resourceType') resourceType?: string,
+    @Query('resourceId') resourceId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.auditService.query({
+      actorId,
+      action,
+      resourceType,
+      resourceId,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+      page: +page,
+      limit: +limit,
+    });
+  }
+
+  // ── AML Threshold Management (#953) ────────────────────────────────────────
+
+  @Get('aml/thresholds')
+  @ApiOperation({ summary: 'Get AML high-value thresholds (default and per-country)' })
+  getAmlThresholds() {
+    return this.adminService.getAmlThresholds();
+  }
+
+  @Patch('aml/thresholds')
+  @Auditable({ action: 'AML_THRESHOLD_UPDATED', resource: 'aml_config' })
+  @ApiOperation({ summary: 'Update AML high-value thresholds (default and/or per-country)' })
+  updateAmlThresholds(
+    @Body() dto: { defaultThreshold?: number; countryThresholds?: Record<string, number> },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    return this.adminService.updateAmlThresholds(
+      dto,
+      req.user?.id ?? req.user?.merchantId ?? 'system',
+    );
+  }
+
+  private assertFeeRateInBounds(rate: number): void {
+    if (
+      typeof rate !== 'number' ||
+      Number.isNaN(rate) ||
+      rate < MIN_FEE_RATE ||
+      rate > MAX_FEE_RATE
+    ) {
+      throw new BadRequestException(
+        `Fee rate must be between ${MIN_FEE_RATE} and ${MAX_FEE_RATE} (inclusive)`,
+      );
+    }
+  }
+
+  // ── AML Flag Review (#932) ─────────────────────────────────────────────────
+
+  @Patch('aml-flags/:id/review')
+  @Auditable({ action: 'AML_FLAG_REVIEWED', resource: 'aml_flag' })
+  @ApiOperation({ summary: 'Review an AML flag and transition its status' })
+  reviewAmlFlag(
+    @Param('id') id: string,
+    @Body('status') status: string,
+    @Body('currentStatus') currentStatus: string,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    this.assertValidAmlFlagTransition(currentStatus, status);
+    return this.adminService.reviewAmlFlag(
+      id,
+      status,
+      req.user?.id ?? req.user?.merchantId,
+    );
+  }
+
+  private assertValidAmlFlagTransition(from: string, to: string): void {
+    const allowed = AML_FLAG_STATUS_TRANSITIONS[from];
+    if (!allowed) {
+      throw new BadRequestException(`Unknown AML flag status: ${from}`);
+    }
+    if (!allowed.includes(to)) {
+      throw new BadRequestException(
+        `Invalid AML flag status transition: ${from} → ${to}. ` +
+          `Allowed from ${from}: ${allowed.length ? allowed.join(', ') : 'none'}`,
+      );
+    }
+  }
+
+  // ── Metrics (#936) ─────────────────────────────────────────────────────────
+
+  @Get('metrics')
+  @ApiOperation({ summary: 'Prometheus metrics (admin IP allowlist + bearer token required)' })
+  getMetrics(@Headers('authorization') authorization?: string) {
+    this.assertMetricsBearerToken(authorization);
+    return this.adminService.getMetrics();
+  }
+
+  private assertMetricsBearerToken(authorization?: string): void {
+    const expected = process.env.METRICS_BEARER_TOKEN;
+    if (!expected) {
+      // Fail closed: without a configured token, metrics must not be served.
+      throw new UnauthorizedException('Metrics access is not configured');
+    }
+    const prefix = 'Bearer ';
+    const provided =
+      authorization && authorization.startsWith(prefix)
+        ? authorization.slice(prefix.length).trim()
+        : undefined;
+    if (!provided || provided !== expected) {
+      throw new UnauthorizedException('Invalid or missing metrics bearer token');
+    }
   }
 
   // ── Cache Management ──────────────────────────────────────────────────────
@@ -214,21 +396,57 @@ export class AdminController {
     return Math.ceil((end - start) / (24 * 60 * 60 * 1000));
   }
 
+  // ── Webhook Delivery Logs (#914) ───────────────────────────────────────────
+
+  @Get('webhooks/delivery-logs')
+  @ApiOperation({
+    summary: 'Query webhook delivery logs with pagination',
+    description:
+      'Returns paginated webhook delivery log entries. Optionally filter by ' +
+      'merchantId, webhookId, and delivery status.',
+  })
+  getWebhookDeliveryLogs(
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+    @Query('merchantId') merchantId?: string,
+    @Query('webhookId') webhookId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.webhooksService.findDeliveryLogs({
+      page: +page,
+      limit: +limit,
+      merchantId,
+      webhookId,
+      status,
+    });
+  }
+
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
 
   @Post('users')
   @ApiOperation({ summary: 'Create a new admin user (SUPERADMIN only)' })
-  createAdmin(
+  async createAdmin(
     @Body() dto: { email: string; password: string; businessName: string },
     @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
-    return this.adminService.createAdmin(
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const result = await this.adminService.createAdmin(
       dto.email,
       dto.password,
       dto.businessName,
       req.user.role,
-      req.user?.id ?? req.user?.merchantId,
+      actorId,
     );
+    await this.auditService.log({
+      actorId,
+      action: 'ADMIN_USER_CREATED',
+      resourceType: 'admin_user',
+      resourceId: (result as { id?: string })?.id ?? dto.email,
+      before: null,
+      after: { email: dto.email, businessName: dto.businessName },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Delete('users/:id')
@@ -245,9 +463,14 @@ export class AdminController {
   updateAdminRole(
     @Param('id') id: string,
     @Body('role') role: MerchantRole,
-    @Req() req: Request & { user: { id: string; merchantId: string; role: MerchantRole } },
+    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
-    return this.adminService.updateAdminRole(id, role, req.user.role, req.user.id ?? req.user.merchantId);
+    return this.adminService.updateAdminRole(
+      id,
+      role,
+      req.user.role,
+      req.user?.id ?? req.user?.merchantId,
+    );
   }
 
   @Post('users/:id/2fa/setup')

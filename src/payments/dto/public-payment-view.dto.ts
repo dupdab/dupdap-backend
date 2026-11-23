@@ -2,6 +2,17 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Payment, PaymentNetwork, PaymentStatus } from '../entities/payment.entity';
 
 /**
+ * Masks an email address for API responses, e.g. `customer@example.com` -> `c***@example.com`.
+ * Returns null/undefined unchanged so nullable columns stay nullable.
+ */
+export function maskEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return '***';
+  return `${email[0]}***${email.slice(at)}`;
+}
+
+/**
  * Public-safe view of a payment for the unauthenticated GET /pay/:reference page.
  * Deliberately excludes PII and internal fields (customerEmail, customerWalletAddress,
  * merchant-supplied metadata, merchantId, settlementId, fee/settlement figures, tx hashes).
