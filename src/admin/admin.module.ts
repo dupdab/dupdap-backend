@@ -37,6 +37,6 @@ import { EncryptionAdminController } from './encryption-admin.controller';
   ],
   controllers: [AdminController, CronAdminController, EncryptionAdminController],
   providers: [AdminService, IpAllowlistGuard],
-  exports: [AdminService, TypeOrmModule],
+  exports: [AdminService, TypeOrmModule, IpAllowlistGuard],
 })
 export class AdminModule {}

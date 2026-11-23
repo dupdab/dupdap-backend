@@ -12,6 +12,7 @@ import {
   Headers,
   Res,
   BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { QueryAdminPaymentsDto } from './dto/query-admin-payments.dto';
@@ -159,6 +160,31 @@ export class AdminController {
     }
   }
 
+  // ── Metrics (#936) ─────────────────────────────────────────────────────────
+
+  @Get('metrics')
+  @ApiOperation({ summary: 'Prometheus metrics (admin IP allowlist + bearer token required)' })
+  getMetrics(@Headers('authorization') authorization?: string) {
+    this.assertMetricsBearerToken(authorization);
+    return this.adminService.getMetrics();
+  }
+
+  private assertMetricsBearerToken(authorization?: string): void {
+    const expected = process.env.METRICS_BEARER_TOKEN;
+    if (!expected) {
+      // Fail closed: without a configured token, metrics must not be served.
+      throw new UnauthorizedException('Metrics access is not configured');
+    }
+    const prefix = 'Bearer ';
+    const provided =
+      authorization && authorization.startsWith(prefix)
+        ? authorization.slice(prefix.length).trim()
+        : undefined;
+    if (!provided || provided !== expected) {
+      throw new UnauthorizedException('Invalid or missing metrics bearer token');
+    }
+  }
+
   // ── Cache Management ──────────────────────────────────────────────────────
 
   @Post('cache/rates/refresh')
@@ -232,48 +258,12 @@ export class AdminController {
   updateAdminRole(
     @Param('id') id: string,
     @Body('role') role: MerchantRole,
-    @Req() req: Request & { user: { id: string; merchantId: string; role: MerchantRole } },
+    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
-    return this.adminService.updateAdminRole(id, role, req.user.role, req.user.id ?? req.user.merchantId);
-  }
-
-  @Post('users/:id/2fa/setup')
-  @ApiOperation({ summary: 'Generate a TOTP secret for an admin user' })
-  setupAdminTotp(@Param('id') id: string) {
-    return this.adminService.setupAdminTotp(id);
-  }
-
-  @Post('users/:id/2fa/verify')
-  @ApiOperation({ summary: 'Verify a TOTP token and enable 2FA for an admin user' })
-  verifyAdminTotp(
-    @Param('id') id: string,
-    @Body('token') token: string,
-  ) {
-    return this.adminService.verifyAdminTotp(id, token);
-  }
-
-  @Patch('users/:id/allowed-ips')
-  @ApiOperation({ summary: 'Update the IP allowlist for an admin user' })
-  updateAdminAllowedIps(
-    @Param('id') id: string,
-    @Body('ips') ips: string[],
-  ) {
-    return this.adminService.updateAdminAllowedIps(id, ips);
-  }
-
-  // ── Sandbox Environment Management (#708) ──────────────────────────────────
-
-  @Patch('merchants/:id/sandbox')
-  @Auditable({ action: 'SANDBOX_MODE_TOGGLED', resource: 'merchant' })
-  @ApiOperation({ summary: 'Enable or disable sandbox mode for a merchant' })
-  toggleSandboxMode(
-    @Param('id') id: string,
-    @Body('enabled') enabled: boolean,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
-    return this.adminService.toggleSandboxMode(
+    return this.adminService.updateAdminRole(
       id,
-      enabled,
+      role,
+      req.user.role,
       req.user?.id ?? req.user?.merchantId,
     );
   }
