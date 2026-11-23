@@ -118,8 +118,17 @@ export class SettlementsService {
     });
 
     for (const payment of settlement.payments ?? []) {
-      payment.status = PaymentStatus.FAILED;
+      if (payment.status === PaymentStatus.SETTLING) {
+        payment.status = PaymentStatus.CONFIRMED;
+      }
+      payment.settlementId = null;
       await this.paymentsRepo.save(payment);
+
+      await this.webhooks.dispatch(settlement.merchantId, 'payment.settlement_rejected', {
+        paymentId: payment.id,
+        settlementId: settlement.id,
+        reason: settlement.failureReason,
+      });
     }
 
     await this.notifySettlementDecision(settlement, 'rejected', adminId);
