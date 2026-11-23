@@ -68,6 +68,7 @@ export class Payment {
   @Column({ nullable: true })
   stellarDepositAddress: string;
 
+  @Index('IDX_payments_stellar_memo')
   @Column({ nullable: true })
   stellarMemo: string;
 
