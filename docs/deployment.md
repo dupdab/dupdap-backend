@@ -8,6 +8,7 @@
 - [ ] Rotate secrets scheduled for rotation (see Secret rotation on deploy).
 - [ ] Announce deploy window and freeze non-emergency merges.
 - [ ] Snapshot database (automated backup verified within last 24h).
+- [ ] Verify WAL archiving is healthy: `archive_mode = on`, no `pg_stat_archiver` failures, and the latest archived segment is recent (see WAL archiving and point-in-time recovery).
 - [ ] Verify health probes: `/health` (liveness) and `/health/ready` (readiness, post cache warm-up).
 
 ## Deploy
@@ -24,6 +25,7 @@
 - [ ] Verify Sentry has no new release-tagged issues.
 - [ ] Verify Prometheus `admin_alerts_open` and settlement metrics are reporting.
 - [ ] Confirm backup job ran successfully after deploy.
+- [ ] Confirm WAL archiving is still healthy (`pg_stat_archiver.failed_count` not increasing, `last_archived_time` recent).
 - [ ] Announce completion and unfreeze merges.
 
 ## Rollback procedure
@@ -55,4 +57,74 @@
 Backups are written to S3 by the scheduled backup job. Restore procedures, RTO/RPO targets, tested-restore timings, and the quarterly drill schedule are documented in `src/backup/RECOVERY_DRILL.md`. Follow that runbook for any disaster-recovery restore; this section only summarizes the deploy-time expectations.
 
 - [ ] Confirm the most recent S3 backup is within the RPO target before declaring a deploy complete.
+- [ ] Confirm WAL archiving is healthy so point-in-time recovery is available (see below).
 - [ ] After any restore, re-run the smoke tests above and verify `/health/ready` before resuming traffic.
+
+## WAL archiving and point-in-time recovery (PITR)
+
+Daily base backups alone limit recovery granularity to the last backup. To recover to an arbitrary point in time (e.g. just before a bad migration or data corruption), PostgreSQL must continuously archive its write-ahead log (WAL) segments. WAL archiving is required for PITR; without it, RPO is effectively the daily backup interval.
+
+### PostgreSQL configuration
+
+Set the following in `postgresql.conf` (or via `ALTER SYSTEM`) on the primary and restart/reload as noted:
+
+```conf
+# Enable WAL archiving. wal_level=replica is the minimum that supports archiving.
+wal_level = replica
+archive_mode = on
+
+# Push each completed WAL segment to S3. %p = path to segment, %f = segment filename.
+# The command must exit 0 only after the segment is durably stored; a non-zero exit
+# causes PostgreSQL to retry the segment (it will not recycle it until archived).
+archive_command = 'aws s3 cp %p s3://$WAL_ARCHIVE_BUCKET/wal/%f --only-show-errors'
+
+# Force a WAL switch at least every 60s so low-traffic periods still bound RPO.
+archive_timeout = 60s
+
+# Keep enough WAL for replicas / crash recovery.
+max_wal_senders = 10
+wal_keep_size = 1GB
+```
+
+Notes:
+
+- `archive_mode` requires a restart; `archive_command` and `archive_timeout` can be reloaded.
+- The archiving role needs `s3:PutObject` on `s3://$WAL_ARCHIVE_BUCKET/wal/*`. Prefer an instance role over static keys; never inline credentials in `archive_command`.
+- Use a dedicated bucket/prefix per environment (e.g. `prod`, `staging`) and enable S3 versioning + lifecycle rules so WAL is retained at least as long as the base-backup retention window.
+- `archive_command` must be idempotent: re-uploading the same `%f` is safe and expected on retry.
+
+### Verifying archiving health
+
+```sql
+SELECT archived_count, failed_count, last_archived_wal, last_archived_time, last_failed_wal, last_failed_time
+FROM pg_stat_archiver;
+```
+
+- `failed_count` must not be increasing; investigate `last_failed_wal` immediately if it is.
+- `last_archived_time` should be recent (within `archive_timeout` under load, or shortly after the last write burst).
+- Alert if `now() - last_archived_time` exceeds a few minutes, or if `failed_count` increases between scrapes.
+
+### Restore / PITR procedure
+
+1. Restore the most recent base backup to the target data directory (see `src/backup/RECOVERY_DRILL.md`).
+2. Configure recovery in `postgresql.conf` (or `postgresql.auto.conf`):
+
+   ```conf
+   restore_command = 'aws s3 cp s3://$WAL_ARCHIVE_BUCKET/wal/%f %p --only-show-errors'
+   recovery_target_time = '2024-01-01 12:00:00+00'   # desired point in time
+   recovery_target_action = 'promote'
+   ```
+
+3. Start PostgreSQL; it replays archived WAL up to `recovery_target_time`, then promotes.
+4. Verify data integrity, re-run smoke tests, and confirm `/health/ready` before resuming traffic.
+
+### Recovery drill (updated for WAL-based PITR)
+
+The quarterly drill in `src/backup/RECOVERY_DRILL.md` must now exercise WAL-based PITR, not just base-backup restore:
+
+- [ ] Restore the latest base backup into an isolated environment.
+- [ ] Apply archived WAL via `restore_command` and recover to a chosen `recovery_target_time` (e.g. 5 minutes before a simulated incident).
+- [ ] Confirm the recovered database reflects writes up to the target time and excludes later writes.
+- [ ] Record measured RTO and the achieved RPO (time between target and last archived WAL).
+- [ ] Verify `pg_stat_archiver` shows no failures and that WAL segments exist in S3 for the full retention window.
+- [ ] Update the drill log with timings and any gaps found.

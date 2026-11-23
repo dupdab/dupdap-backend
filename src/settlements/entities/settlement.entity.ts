@@ -9,6 +9,7 @@ import {
   JoinColumn,
   OneToMany,
   Index,
+  Check,
 } from 'typeorm';
 import { Merchant } from '../../merchants/entities/merchant.entity';
 import { Payment } from '../../payments/entities/payment.entity';
@@ -26,6 +27,9 @@ export enum SettlementStatus {
 @Index('IDX_SETTLEMENT_MERCHANT_ID', ['merchantId'])
 @Index('IDX_SETTLEMENT_STATUS', ['status'])
 @Index('IDX_SETTLEMENT_MERCHANT_STATUS', ['merchantId', 'status'])
+@Index('IDX_SETTLEMENT_STATUS_CREATED_AT', ['status', 'createdAt'])
+@Index('IDX_SETTLEMENT_MERCHANT_STATUS_CREATED_AT', ['merchantId', 'status', 'createdAt'])
+@Check('CHK_SETTLEMENT_FEE_AMOUNT_USD', '"feeAmountUsd" >= 0')
 export class Settlement {
   @PrimaryGeneratedColumn('uuid')
   id: string;

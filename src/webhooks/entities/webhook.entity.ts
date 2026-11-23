@@ -43,6 +43,21 @@ export class Webhook {
   })
   secret: string;
 
+  /**
+   * Previous secret kept valid during the rotation grace period (#907).
+   * Signature verification accepts this secret until `previousSecretExpiresAt`.
+   */
+  @Exclude()
+  @Column({
+    nullable: true,
+    transformer: encryptedColumnTransformer('webhooks.previousSecret'),
+  })
+  previousSecret: string | null;
+
+  /** When the previous secret stops being accepted; null when no rotation is pending. */
+  @Column({ type: 'timestamptz', nullable: true })
+  previousSecretExpiresAt: Date | null;
+
   @Column({ default: true })
   isActive: boolean;
 

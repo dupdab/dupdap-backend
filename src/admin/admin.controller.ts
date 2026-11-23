@@ -13,6 +13,8 @@ import {
   Res,
   BadRequestException,
   UnauthorizedException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { QueryAdminPaymentsDto } from './dto/query-admin-payments.dto';
@@ -30,6 +32,13 @@ import { PaginationDto } from '../common/dto/pagination.dto';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
+import { WebhooksService } from '../webhooks/webhooks.service';
+import { AuditService } from '../audit/audit.service';
+import { TokenBlacklistService } from '../auth/services/token-blacklist.service';
+
+const EXPORT_DAILY_LIMIT = Number(process.env.ANALYTICS_EXPORT_DAILY_LIMIT ?? 5);
+const EXPORT_SYNC_MAX_DAYS = 30;
+const EXPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const MIN_FEE_RATE = 0;
 const MAX_FEE_RATE = 0.1;
@@ -48,15 +57,22 @@ const AML_FLAG_STATUS_TRANSITIONS: Record<string, string[]> = {
 @Roles(MerchantRole.ADMIN, MerchantRole.SUPERADMIN)
 @Controller('admin')
 export class AdminController {
+  private readonly exportCounters = new Map<string, { count: number; windowStart: number }>();
+
   constructor(
     private readonly adminService: AdminService,
     private readonly ratesService: RatesService,
+    private readonly webhooksService: WebhooksService,
+    private readonly auditService: AuditService,
+    private readonly tokenBlacklistService: TokenBlacklistService,
   ) {}
 
   @Get('merchants')
-  @ApiOperation({ summary: 'List all merchants' })
-  findAllMerchants(@Query('page') page = 1, @Query('limit') limit = 20) {
-    return this.adminService.findAllMerchants(+page, +limit);
+  @ApiOperation({ summary: 'List all merchants (paginated)' })
+  findAllMerchants(@Query() pagination: PaginationDto) {
+    const page = pagination.page ?? 1;
+    const limit = Math.min(pagination.limit ?? 20, 100);
+    return this.adminService.findAllMerchants(page, limit);
   }
 
   @Get('merchants/:id')
@@ -68,23 +84,56 @@ export class AdminController {
   @Patch('merchants/:id/status')
   @Auditable({ action: 'MERCHANT_STATUS_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Update merchant status' })
-  updateStatus(
+  async updateStatus(
     @Param('id') id: string,
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.updateMerchantStatus(id, status, req.user?.id ?? req.user?.merchantId);
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const before = await this.adminService.findOneMerchant(id);
+    const result = await this.adminService.updateMerchantStatus(id, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await this.tokenBlacklistService.blacklistAllForMerchant(id);
+    }
+    await this.auditService.log({
+      actorId,
+      action: 'MERCHANT_STATUS_UPDATED',
+      resourceType: 'merchant',
+      resourceId: id,
+      before: { status: before?.status },
+      after: { status },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Patch('merchants/bulk/status')
   @Auditable({ action: 'MERCHANT_STATUS_BULK_UPDATED', resource: 'merchant' })
   @ApiOperation({ summary: 'Bulk update merchant status' })
-  bulkUpdateStatus(
+  async bulkUpdateStatus(
     @Body('ids') ids: string[],
     @Body('status') status: MerchantStatus,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
-    return this.adminService.bulkUpdateMerchantStatus(ids, status, req.user?.id ?? req.user?.merchantId);
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const result = await this.adminService.bulkUpdateMerchantStatus(ids, status, actorId);
+    if (status === MerchantStatus.SUSPENDED) {
+      await Promise.all(
+        ids.map((merchantId) =>
+          this.tokenBlacklistService.blacklistAllForMerchant(merchantId),
+        ),
+      );
+    }
+    await this.auditService.log({
+      actorId,
+      action: 'MERCHANT_STATUS_BULK_UPDATED',
+      resourceType: 'merchant',
+      resourceId: ids.join(','),
+      before: null,
+      after: { ids, status },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Get('stats')
@@ -102,16 +151,75 @@ export class AdminController {
   @Patch('fees')
   @Auditable({ action: 'FEE_UPDATED', resource: 'fee_config' })
   @ApiOperation({ summary: 'Update a global fee rate' })
-  updateFee(
+  async updateFee(
     @Body() dto: UpdateFeeDto,
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
     this.assertFeeRateInBounds(dto.newRate);
-    return this.adminService.updateGlobalFee(
+    const actorId = req.user.id ?? req.user?.merchantId ?? 'system';
+    const before = await this.adminService.getGlobalFees();
+    const result = await this.adminService.updateGlobalFee(
       dto.feeType,
       dto.newRate,
-      req.user.id ?? req.user?.merchantId ?? 'system',
+      actorId,
       dto.reason,
+    );
+    await this.auditService.log({
+      actorId,
+      action: 'FEE_UPDATED',
+      resourceType: 'fee_config',
+      resourceId: dto.feeType,
+      before: { feeType: dto.feeType, rate: before?.[dto.feeType] },
+      after: { feeType: dto.feeType, rate: dto.newRate, reason: dto.reason },
+      ip: req.ip,
+    });
+    return result;
+  }
+
+  // ── Audit Log Query (#925) ─────────────────────────────────────────────────
+
+  @Get('audit-log')
+  @ApiOperation({ summary: 'Query the admin audit log with filters' })
+  queryAuditLog(
+    @Query('actorId') actorId?: string,
+    @Query('action') action?: string,
+    @Query('resourceType') resourceType?: string,
+    @Query('resourceId') resourceId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.auditService.query({
+      actorId,
+      action,
+      resourceType,
+      resourceId,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+      page: +page,
+      limit: +limit,
+    });
+  }
+
+  // ── AML Threshold Management (#953) ────────────────────────────────────────
+
+  @Get('aml/thresholds')
+  @ApiOperation({ summary: 'Get AML high-value thresholds (default and per-country)' })
+  getAmlThresholds() {
+    return this.adminService.getAmlThresholds();
+  }
+
+  @Patch('aml/thresholds')
+  @Auditable({ action: 'AML_THRESHOLD_UPDATED', resource: 'aml_config' })
+  @ApiOperation({ summary: 'Update AML high-value thresholds (default and/or per-country)' })
+  updateAmlThresholds(
+    @Body() dto: { defaultThreshold?: number; countryThresholds?: Record<string, number> },
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    return this.adminService.updateAmlThresholds(
+      dto,
+      req.user?.id ?? req.user?.merchantId ?? 'system',
     );
   }
 
@@ -220,28 +328,125 @@ export class AdminController {
     description:
       'Returns merchants ranked by total settled USD volume for the given period. ' +
       'Supports cursor-based pagination — pass the `nextCursor` from the previous ' +
-      'response as the `cursor` query parameter to get the next page.',
+      'response as the `cursor` query parameter to get the next page. ' +
+      'The `limit` parameter defaults to 20 and is capped at 100.',
   })
   @ApiResponse({ status: 200, type: TopMerchantsResponseDto })
   getTopMerchants(@Query() query: TopMerchantsQueryDto): Promise<TopMerchantsResponseDto> {
-    return this.adminService.getTopMerchants(query);
+    const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+    return this.adminService.getTopMerchants({ ...query, limit });
+  }
+
+  // ── Analytics Export (#905) ────────────────────────────────────────────────
+
+  @Get('analytics/export')
+  @ApiOperation({
+    summary: 'Export analytics data',
+    description:
+      'Rate limited to a configurable number of exports per merchant per day ' +
+      '(ANALYTICS_EXPORT_DAILY_LIMIT, default 5). Ranges longer than 30 days are ' +
+      'queued as a background job. Returns 429 with Retry-After when the limit is exceeded.',
+  })
+  @ApiResponse({ status: 200, description: 'Export data or queued job reference' })
+  @ApiResponse({ status: 429, description: 'Daily export limit exceeded' })
+  async exportAnalytics(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const merchantId = req.user?.merchantId ?? req.user?.id ?? 'anonymous';
+    const now = Date.now();
+    const counter = this.exportCounters.get(merchantId);
+
+    if (!counter || now - counter.windowStart >= EXPORT_WINDOW_MS) {
+      this.exportCounters.set(merchantId, { count: 1, windowStart: now });
+    } else if (counter.count >= EXPORT_DAILY_LIMIT) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((counter.windowStart + EXPORT_WINDOW_MS - now) / 1000),
+      );
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Analytics export limit of ${EXPORT_DAILY_LIMIT} per day exceeded`,
+          retryAfter: retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    } else {
+      counter.count += 1;
+    }
+
+    const rangeDays = this.computeRangeDays(from, to);
+    if (rangeDays > EXPORT_SYNC_MAX_DAYS) {
+      const job = await this.adminService.queueAnalyticsExport(merchantId, from, to);
+      return { status: 'queued', jobId: job?.id ?? null, from, to };
+    }
+
+    return this.adminService.exportAnalytics(merchantId, from, to);
+  }
+
+  private computeRangeDays(from?: string, to?: string): number {
+    if (!from || !to) return 0;
+    const start = new Date(from).getTime();
+    const end = new Date(to).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return 0;
+    return Math.ceil((end - start) / (24 * 60 * 60 * 1000));
+  }
+
+  // ── Webhook Delivery Logs (#914) ───────────────────────────────────────────
+
+  @Get('webhooks/delivery-logs')
+  @ApiOperation({
+    summary: 'Query webhook delivery logs with pagination',
+    description:
+      'Returns paginated webhook delivery log entries. Optionally filter by ' +
+      'merchantId, webhookId, and delivery status.',
+  })
+  getWebhookDeliveryLogs(
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+    @Query('merchantId') merchantId?: string,
+    @Query('webhookId') webhookId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.webhooksService.findDeliveryLogs({
+      page: +page,
+      limit: +limit,
+      merchantId,
+      webhookId,
+      status,
+    });
   }
 
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
 
   @Post('users')
   @ApiOperation({ summary: 'Create a new admin user (SUPERADMIN only)' })
-  createAdmin(
+  async createAdmin(
     @Body() dto: { email: string; password: string; businessName: string },
     @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
   ) {
-    return this.adminService.createAdmin(
+    const actorId = req.user?.id ?? req.user?.merchantId;
+    const result = await this.adminService.createAdmin(
       dto.email,
       dto.password,
       dto.businessName,
       req.user.role,
-      req.user?.id ?? req.user?.merchantId,
+      actorId,
     );
+    await this.auditService.log({
+      actorId,
+      action: 'ADMIN_USER_CREATED',
+      resourceType: 'admin_user',
+      resourceId: (result as { id?: string })?.id ?? dto.email,
+      before: null,
+      after: { email: dto.email, businessName: dto.businessName },
+      ip: req.ip,
+    });
+    return result;
   }
 
   @Delete('users/:id')
@@ -266,5 +471,52 @@ export class AdminController {
       req.user.role,
       req.user?.id ?? req.user?.merchantId,
     );
+  }
+
+  @Post('users/:id/2fa/setup')
+  @ApiOperation({ summary: 'Generate a TOTP secret for an admin user' })
+  setupAdminTotp(@Param('id') id: string) {
+    return this.adminService.setupAdminTotp(id);
+  }
+
+  @Post('users/:id/2fa/verify')
+  @ApiOperation({ summary: 'Verify a TOTP token and enable 2FA for an admin user' })
+  verifyAdminTotp(
+    @Param('id') id: string,
+    @Body('token') token: string,
+  ) {
+    return this.adminService.verifyAdminTotp(id, token);
+  }
+
+  @Patch('users/:id/allowed-ips')
+  @ApiOperation({ summary: 'Update the IP allowlist for an admin user' })
+  updateAdminAllowedIps(
+    @Param('id') id: string,
+    @Body('ips') ips: string[],
+  ) {
+    return this.adminService.updateAdminAllowedIps(id, ips);
+  }
+
+  // ── Sandbox Environment Management (#708) ──────────────────────────────────
+
+  @Patch('merchants/:id/sandbox')
+  @Auditable({ action: 'SANDBOX_MODE_TOGGLED', resource: 'merchant' })
+  @ApiOperation({ summary: 'Enable or disable sandbox mode for a merchant' })
+  toggleSandboxMode(
+    @Param('id') id: string,
+    @Body('enabled') enabled: boolean,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    return this.adminService.toggleSandboxMode(id, enabled, req.user?.id ?? req.user?.merchantId);
+  }
+
+  @Post('merchants/:id/sandbox/reset')
+  @Auditable({ action: 'DATA_PURGED', resource: 'merchant' })
+  @ApiOperation({ summary: 'Delete all sandbox payment data for a merchant' })
+  resetSandboxData(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+  ) {
+    return this.adminService.resetSandboxData(id, req.user?.id ?? req.user?.merchantId);
   }
 }
