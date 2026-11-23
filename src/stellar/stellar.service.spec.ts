@@ -30,7 +30,7 @@ describe("StellarService", () => {
   it("exposes configured deposit address, USDC asset and memo", () => {
     expect(service.getDepositAddress()).toBe("GDEPOSIT");
     expect(service.getUsdcAsset().getCode()).toBe("USDC");
-    expect(service.generateMemo()).toMatch(/^[A-Z0-9]{1,8}$/);
+    expect(service.generateMemo()).toMatch(/^[0-9a-f]{16}$/);
     expect(sdk.scValToNative(service.buildAssetTypeScVal("XLM"))).toEqual([
       "XLM",
     ]);

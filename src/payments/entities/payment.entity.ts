@@ -32,6 +32,7 @@ export enum PaymentNetwork {
 @Entity('payments')
 @Index(['merchantId', 'status'])
 @Index(['merchantId', 'createdAt'])
+@Index('UQ_payments_stellar_memo', ['stellarMemo'], { unique: true, where: '"stellarMemo" IS NOT NULL' })
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
