@@ -10,6 +10,7 @@ export const SETTLEMENT_CONFIG_DEFAULTS = {
   'settlements.batch_fee_rate': 0.015,
   'settlements.batch_window_minutes': 15,
   'settlements.large_settlement_threshold': 10000,
+  'settlements.country_currency_map': {},
 } as const;
 
 @Injectable()
