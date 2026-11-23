@@ -1,58 +1,59 @@
-# Database Index Strategy
+# Database
 
-This document lists the indexes on the high-traffic tables (`payments`, `settlements`), the query patterns they serve, and how new indexes are added. Schema changes follow [`migrations.md`](./migrations.md).
+This document describes the database schema, materialized views, and refresh scheduling used by the analytics layer.
 
----
+## Tables
 
-## Indexed query patterns
+- `payments` — raw payment records (one row per charge).
+- `merchants` — merchant accounts.
+- `refunds` — refund records linked to payments.
 
-### `payments`
+## Materialized views
 
-| Index | Columns | Serves |
-|---|---|---|
-| `IDX_payments_merchantId` | `(merchantId)` | Merchant-scoped lookups (`payments.service.ts`, `analytics.service.ts`) |
-| `IDX_payments_merchantId_status` | `(merchantId, status)` | Merchant payment lists filtered by status |
-| `IDX_payments_merchantId_createdAt` | `(merchantId, createdAt)` | Merchant payment history by date |
-| `IDX_payments_merchant_created_at` | `(merchantId, createdAt DESC)` | Newest-first merchant payment lists |
-| `IDX_payments_merchant_status_created_at` | `(merchantId, status, createdAt)` | Merchant analytics: `status = settled` within a date range |
-| `IDX_payments_status` | `(status)` | Status-only filters in admin views |
-| `IDX_payments_status_expires_at` | `(status, expiresAt)` | Expiry sweep: `status = pending AND expiresAt < now` (`stellar-monitor.service.ts`) |
-| `IDX_payments_created_at` | `(createdAt)` | Cross-merchant date-range filters in admin and dashboard queries |
-| `IDX_payments_stellar_memo` | `(stellarMemo)` partial, `WHERE stellarMemo IS NOT NULL` | Memo lookups for incoming Stellar transactions |
+### `daily_payment_volume`
 
-### `settlements`
+Aggregates payment volume per merchant per day. Daily analytics queries read from this view instead of scanning `payments` directly.
 
-| Index | Columns | Serves |
-|---|---|---|
-| `IDX_SETTLEMENT_MERCHANT_ID` | `(merchantId)` | Merchant-scoped settlement lists |
-| `IDX_SETTLEMENT_STATUS` | `(status)` | Status-only filters in admin views |
-| `IDX_SETTLEMENT_MERCHANT_STATUS` | `(merchantId, status)` | Merchant settlement lists filtered by status |
+```sql
+CREATE MATERIALIZED VIEW daily_payment_volume AS
+SELECT
+    merchant_id,
+    date_trunc('day', created_at) AS day,
+    COUNT(*)                     AS payment_count,
+    SUM(amount)                  AS total_amount
+FROM payments
+GROUP BY merchant_id, date_trunc('day', created_at);
 
----
+CREATE UNIQUE INDEX daily_payment_volume_pkey
+    ON daily_payment_volume (merchant_id, day);
+```
 
-## Audit of `WHERE` clauses
+### `monthly_payment_volume`
 
-Repository and query-builder filters were reviewed in `src/**` (excluding specs and migrations). The table records how each hot pattern is covered:
+Aggregates payment volume per merchant per month. Monthly analytics queries read from this view instead of scanning `payments` directly, which is prohibitively slow for high-volume merchants.
 
-| Pattern | Location | Covered by |
-|---|---|---|
-| `payment.merchantId = ?` | `payments.service.ts`, `analytics.service.ts` | `IDX_payments_merchantId` |
-| `payment.status = ? AND payment.expiresAt < ?` | `stellar-monitor.service.ts` | `IDX_payments_status_expires_at` |
-| `payment.merchantId = ? AND status = ? AND createdAt` range | `analytics.service.ts` | `IDX_payments_merchant_status_created_at` |
-| `payment.createdAt` range without merchant | `admin.service.ts` | `IDX_payments_created_at` |
-| `settlement.merchantId = ?` | `analytics-export.service.ts`, `settlements.service.ts` | `IDX_SETTLEMENT_MERCHANT_ID` |
-| `settlement.status = ?` | `analytics-export.service.ts`, `analytics.service.ts` | `IDX_SETTLEMENT_STATUS` |
+```sql
+CREATE MATERIALIZED VIEW monthly_payment_volume AS
+SELECT
+    merchant_id,
+    date_trunc('month', created_at) AS month,
+    COUNT(*)                        AS payment_count,
+    SUM(amount)                     AS total_amount
+FROM payments
+GROUP BY merchant_id, date_trunc('month', created_at);
 
----
+CREATE UNIQUE INDEX monthly_payment_volume_pkey
+    ON monthly_payment_volume (merchant_id, month);
+```
 
-## Adding an index
+## Refresh scheduling
 
-1. Add the `@Index` decorator to the entity with an explicit `IDX_*` name, so the entity and migration agree.
-2. Add a migration in `src/database/migrations/` with one index per file. Use `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and set `public transaction = false`, so writes are not blocked during the build.
-3. Guard with `queryRunner.hasTable(...)` and implement `down()` with `DROP INDEX CONCURRENTLY IF EXISTS`.
-4. Run `pnpm migration:check` and `pnpm migration:rollback:check`. CI runs both on any PR that touches migrations or entities.
+Both materialized views are refreshed daily. The refresh runs after the daily aggregation job and uses `REFRESH MATERIALIZED VIEW CONCURRENTLY` (enabled by the unique indexes above) so reads are not blocked during refresh.
 
-### Index design rules
+```sql
+REFRESH MATERIALIZED VIEW CONCURRENTLY daily_payment_volume;
+REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_payment_volume;
+```
 
 - Put equality columns first, then the range or sort column (for example `(merchantId, status, createdAt)`).
 - Do not add an index whose leading columns are already covered by an existing one, such as a second `(merchantId)` index.
@@ -104,3 +105,5 @@ Run this drill quarterly against a scratch instance to confirm WAL-based PITR wo
 4. **Start and replay.** Start PostgreSQL; it replays archived WAL up to `recovery_target_time`, then promotes. Watch the log for `archive recovery complete`.
 5. **Validate.** Run a known query (for example, a payment created just before the target time) and confirm the row exists while later changes do not. Record the achieved RPO (time between target and last archived segment).
 6. **Record results.** Note the drill date, target time, achieved RPO, and any `pg_stat_archiver` failures in the ops runbook. Investigate any `failed_count > 0` before the next drill.
+
+Schedule these statements in the same daily job that refreshes `daily_payment_volume`.

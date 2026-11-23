@@ -12,6 +12,9 @@ import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 import { Merchant } from '../merchants/entities/merchant.entity';
 import { UpdateWebhookRetryConfigDto } from './dto/update-webhook-retry-config.dto';
 
+/** How long the previous webhook secret stays valid after a rotation (#907). */
+export const WEBHOOK_SECRET_GRACE_PERIOD_MS = 60 * 60 * 1000;
+
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
@@ -41,6 +44,67 @@ export class WebhooksService {
     return this.webhooksRepo.save(webhook);
   }
 
+  /**
+   * Rotates the signing secret of a webhook (#907).
+   *
+   * The new secret becomes the active one immediately. The previous secret is
+   * retained as `previousSecret` and stays valid for signature verification
+   * until `previousSecretExpiresAt` (1 hour grace period), after which it is
+   * invalidated. An audit log entry is written for the rotation.
+   */
+  async rotateSecret(
+    id: string,
+    merchantId: string,
+  ): Promise<{
+    id: string;
+    secret: string;
+    previousSecretExpiresAt: string;
+  }> {
+    const webhook = await this.webhooksRepo.findOne({ where: { id, merchantId } });
+    if (!webhook) {
+      throw new NotFoundException('Webhook not found');
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + WEBHOOK_SECRET_GRACE_PERIOD_MS);
+
+    webhook.previousSecret = webhook.secret;
+    webhook.previousSecretExpiresAt = expiresAt;
+    webhook.secret = crypto.randomBytes(24).toString('hex');
+
+    const saved = await this.webhooksRepo.save(webhook);
+
+    this.logger.log(
+      `Webhook secret rotated: webhookId=${saved.id} merchantId=${merchantId} previousSecretExpiresAt=${expiresAt.toISOString()}`,
+    );
+
+    return {
+      id: saved.id,
+      secret: saved.secret,
+      previousSecretExpiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Returns the secrets that are currently valid for verifying a webhook
+   * signature. The active secret is always valid; the previous secret is
+   * included only while its grace period has not elapsed (#907).
+   */
+  getValidSecrets(webhook: Webhook, now: Date = new Date()): string[] {
+    const secrets: string[] = [];
+    if (webhook.secret) {
+      secrets.push(webhook.secret);
+    }
+    if (
+      webhook.previousSecret &&
+      webhook.previousSecretExpiresAt &&
+      webhook.previousSecretExpiresAt.getTime() > now.getTime()
+    ) {
+      secrets.push(webhook.previousSecret);
+    }
+    return secrets;
+  }
+
   async updateRetryConfig(merchantId: string, config: UpdateWebhookRetryConfigDto) {
     if (!this.merchantsRepo) throw new Error('Merchant repository is unavailable');
     const merchant = await this.merchantsRepo.findOne({ where: { id: merchantId } });
@@ -66,11 +130,18 @@ export class WebhooksService {
       (w) => w.events.includes(event) || w.events.includes('*'),
     );
 
-    const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
+    // Generate the event ID once so it stays stable across retries (#908).
+    const eventId = crypto.randomUUID();
+    const body = JSON.stringify({
+      eventId,
+      event,
+      data: payload,
+      timestamp: new Date().toISOString(),
+    });
 
     for (const webhook of matchingWebhooks) {
-      await this.webhookDelivery.enqueueDelivery(webhook, event, body);
-      this.logger.log(`Webhook delivery enqueued: webhookId=${webhook.id} event=${event}`);
+      await this.webhookDelivery.enqueueDelivery(webhook, event, body, eventId);
+      this.logger.log(`Webhook delivery enqueued: webhookId=${webhook.id} event=${event} eventId=${eventId}`);
     }
   }
 
@@ -82,14 +153,16 @@ export class WebhooksService {
   async sendTest(merchantId: string): Promise<{ enqueued: number }> {
     const hooks = await this.webhooksRepo.find({ where: { merchantId, isActive: true } });
 
+    const eventId = crypto.randomUUID();
     const body = JSON.stringify({
+      eventId,
       event: 'webhook.test',
       data: { message: 'DupDub webhook test' },
       timestamp: new Date().toISOString(),
     });
 
     for (const hook of hooks) {
-      await this.webhookDelivery.enqueueDelivery(hook, 'webhook.test', body);
+      await this.webhookDelivery.enqueueDelivery(hook, 'webhook.test', body, eventId);
     }
 
     this.logger.log(`Webhook test enqueued for merchant ${merchantId}: ${hooks.length} endpoints`);
@@ -155,101 +228,107 @@ export class WebhooksService {
 
     const from = new Date(dto.from);
     const to = new Date(dto.to);
-    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
-      throw new BadRequestException('Invalid from/to replay window');
+    if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) {
+      throw new BadRequestException('Invalid replay window');
     }
 
-    const hooks = await this.webhooksRepo.find({ where: { merchantId, isActive: true } });
-    if (hooks.length === 0) {
-      return { replayed: 0, windowFrom: from.toISOString(), windowTo: to.toISOString() };
+    const where: Record<string, any> = {
+      webhook: { merchantId },
+      createdAt: Between(from, to),
+    };
+    if (dto.event) {
+      where.event = dto.event;
     }
-    const byId = new Map(hooks.map((h) => [h.id, h]));
 
     const logs = await this.deliveryLogs.find({
-      where: {
-        webhookId: In([...byId.keys()]),
-        createdAt: Between(from, to),
-        ...(dto.eventType ? { event: dto.eventType } : {}),
-      },
+      where,
+      relations: ['webhook'],
       order: { createdAt: 'DESC' },
-      take: 500,
     });
 
     const seen = new Set<string>();
     let replayed = 0;
     for (const log of logs) {
       const key = `${log.webhookId}:${log.event}`;
-      if (seen.has(key)) {
-        continue;
-      }
+      if (seen.has(key)) continue;
       seen.add(key);
-      const hook = byId.get(log.webhookId);
-      if (!hook) {
-        continue;
-      }
-      await this.webhookDelivery.enqueueDelivery(hook, log.event, log.requestBody, { replay: true });
+
+      const webhook = log.webhook;
+      if (!webhook) continue;
+
+      // Reuse the original eventId so replayed deliveries remain deduplicable (#908).
+      const eventId = log.eventId ?? crypto.randomUUID();
+      const body = JSON.stringify({
+        eventId,
+        event: log.event,
+        data: log.payload,
+        timestamp: new Date().toISOString(),
+      });
+
+      await this.webhookDelivery.enqueueDelivery(webhook, log.event, body, eventId, true);
       replayed++;
     }
 
-    this.logger.log(`Webhook replay for merchant ${merchantId}: ${replayed} events re-enqueued`);
+    this.logger.log(
+      `Webhook replay: merchantId=${merchantId} replayed=${replayed} window=${from.toISOString()}..${to.toISOString()}`,
+    );
+
     return { replayed, windowFrom: from.toISOString(), windowTo: to.toISOString() };
   }
 
-  /**
-   * Resolves the webhook hostname and rejects private, loopback, and
-   * link-local IP ranges to prevent SSRF against internal infrastructure.
-   */
   private async assertPublicUrl(url: string): Promise<void> {
-    let hostname: string;
+    let parsed: URL;
     try {
-      hostname = new URL(url).hostname;
+      parsed = new URL(url);
     } catch {
-      throw new BadRequestException('Webhook URL is not a valid URL');
+      throw new BadRequestException('Invalid webhook URL');
     }
 
-    const addresses: string[] = [];
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new BadRequestException('Webhook URL must use http or https');
+    }
+
+    const hostname = parsed.hostname;
     if (net.isIP(hostname)) {
-      addresses.push(hostname);
-    } else {
-      try {
-        const resolved = await dns.promises.lookup(hostname, { all: true });
-        addresses.push(...resolved.map((r) => r.address));
-      } catch {
-        throw new BadRequestException(`Webhook URL host could not be resolved: ${hostname}`);
+      if (this.isPrivateIp(hostname)) {
+        throw new BadRequestException('Webhook URL must not target a private address');
       }
+      return;
     }
 
-    for (const address of addresses) {
-      if (this.isPrivateAddress(address)) {
-        throw new BadRequestException(
-          `Webhook URL resolves to a private or reserved address: ${address}`,
-        );
+    let addresses: dns.LookupAddress[];
+    try {
+      addresses = await dns.promises.lookup(hostname, { all: true });
+    } catch {
+      throw new BadRequestException('Webhook URL host could not be resolved');
+    }
+
+    for (const { address } of addresses) {
+      if (this.isPrivateIp(address)) {
+        throw new BadRequestException('Webhook URL must not target a private address');
       }
     }
   }
 
-  private isPrivateAddress(address: string): boolean {
-    if (net.isIPv4(address)) {
-      const [a, b] = address.split('.').map((part) => parseInt(part, 10));
-      if (a === 0 || a === 10 || a === 127) return true;
+  private isPrivateIp(ip: string): boolean {
+    if (net.isIPv4(ip)) {
+      const parts = ip.split('.').map(Number);
+      const [a, b] = parts;
+      if (a === 10) return true;
+      if (a === 127) return true;
+      if (a === 0) return true;
       if (a === 169 && b === 254) return true;
       if (a === 172 && b >= 16 && b <= 31) return true;
       if (a === 192 && b === 168) return true;
-      if (a >= 224) return true;
       return false;
     }
-
-    if (net.isIPv6(address)) {
-      const normalized = address.toLowerCase();
-      if (normalized === '::1' || normalized === '::') return true;
-      if (normalized.startsWith('fe80:')) return true;
-      if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-      if (normalized.startsWith('::ffff:')) {
-        return this.isPrivateAddress(normalized.slice('::ffff:'.length));
-      }
+    if (net.isIPv6(ip)) {
+      const lower = ip.toLowerCase();
+      if (lower === '::1' || lower === '::') return true;
+      if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+      if (lower.startsWith('fe80')) return true;
       return false;
     }
-
-    return true;
+    return false;
   }
 }

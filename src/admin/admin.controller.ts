@@ -11,6 +11,8 @@ import {
   UseGuards,
   Headers,
   Res,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { QueryAdminPaymentsDto } from './dto/query-admin-payments.dto';
@@ -29,21 +31,29 @@ import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { Auditable } from '../audit/decorators/auditable.decorator';
 import { AdminTwoFactorGuard } from '../auth/guards/admin-two-factor.guard';
 
+const EXPORT_DAILY_LIMIT = Number(process.env.ANALYTICS_EXPORT_DAILY_LIMIT ?? 5);
+const EXPORT_SYNC_MAX_DAYS = 30;
+const EXPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(IpAllowlistGuard, JwtAuthGuard, AdminTwoFactorGuard, RolesGuard)
 @Roles(MerchantRole.ADMIN, MerchantRole.SUPERADMIN)
 @Controller('admin')
 export class AdminController {
+  private readonly exportCounters = new Map<string, { count: number; windowStart: number }>();
+
   constructor(
     private readonly adminService: AdminService,
     private readonly ratesService: RatesService,
   ) {}
 
   @Get('merchants')
-  @ApiOperation({ summary: 'List all merchants' })
-  findAllMerchants(@Query('page') page = 1, @Query('limit') limit = 20) {
-    return this.adminService.findAllMerchants(+page, +limit);
+  @ApiOperation({ summary: 'List all merchants (paginated)' })
+  findAllMerchants(@Query() pagination: PaginationDto) {
+    const page = pagination.page ?? 1;
+    const limit = Math.min(pagination.limit ?? 20, 100);
+    return this.adminService.findAllMerchants(page, limit);
   }
 
   @Get('merchants/:id')
@@ -136,11 +146,72 @@ export class AdminController {
     description:
       'Returns merchants ranked by total settled USD volume for the given period. ' +
       'Supports cursor-based pagination — pass the `nextCursor` from the previous ' +
-      'response as the `cursor` query parameter to get the next page.',
+      'response as the `cursor` query parameter to get the next page. ' +
+      'The `limit` parameter defaults to 20 and is capped at 100.',
   })
   @ApiResponse({ status: 200, type: TopMerchantsResponseDto })
   getTopMerchants(@Query() query: TopMerchantsQueryDto): Promise<TopMerchantsResponseDto> {
-    return this.adminService.getTopMerchants(query);
+    const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+    return this.adminService.getTopMerchants({ ...query, limit });
+  }
+
+  // ── Analytics Export (#905) ────────────────────────────────────────────────
+
+  @Get('analytics/export')
+  @ApiOperation({
+    summary: 'Export analytics data',
+    description:
+      'Rate limited to a configurable number of exports per merchant per day ' +
+      '(ANALYTICS_EXPORT_DAILY_LIMIT, default 5). Ranges longer than 30 days are ' +
+      'queued as a background job. Returns 429 with Retry-After when the limit is exceeded.',
+  })
+  @ApiResponse({ status: 200, description: 'Export data or queued job reference' })
+  @ApiResponse({ status: 429, description: 'Daily export limit exceeded' })
+  async exportAnalytics(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Req() req: Request & { user: { id: string; merchantId?: string } },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const merchantId = req.user?.merchantId ?? req.user?.id ?? 'anonymous';
+    const now = Date.now();
+    const counter = this.exportCounters.get(merchantId);
+
+    if (!counter || now - counter.windowStart >= EXPORT_WINDOW_MS) {
+      this.exportCounters.set(merchantId, { count: 1, windowStart: now });
+    } else if (counter.count >= EXPORT_DAILY_LIMIT) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((counter.windowStart + EXPORT_WINDOW_MS - now) / 1000),
+      );
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Analytics export limit of ${EXPORT_DAILY_LIMIT} per day exceeded`,
+          retryAfter: retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    } else {
+      counter.count += 1;
+    }
+
+    const rangeDays = this.computeRangeDays(from, to);
+    if (rangeDays > EXPORT_SYNC_MAX_DAYS) {
+      const job = await this.adminService.queueAnalyticsExport(merchantId, from, to);
+      return { status: 'queued', jobId: job?.id ?? null, from, to };
+    }
+
+    return this.adminService.exportAnalytics(merchantId, from, to);
+  }
+
+  private computeRangeDays(from?: string, to?: string): number {
+    if (!from || !to) return 0;
+    const start = new Date(from).getTime();
+    const end = new Date(to).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return 0;
+    return Math.ceil((end - start) / (24 * 60 * 60 * 1000));
   }
 
   // ── Admin User Management with 2FA (#707) ──────────────────────────────────
@@ -224,129 +295,5 @@ export class AdminController {
     @Req() req: Request & { user: { id: string; merchantId?: string } },
   ) {
     return this.adminService.resetSandboxData(id, req.user?.id ?? req.user?.merchantId);
-  }
-
-  // ── Audit Log Viewer ───────────────────────────────────────────────────────
-
-  @Get('audit-log')
-  @ApiOperation({ summary: 'Get paginated audit log with filtering' })
-  async getAuditLogs(
-    @Query() query: any,
-    @Query() pagination: PaginationDto,
-    @Res() res: Response,
-    @Query('export') exportType?: string,
-    @Headers('accept') accept?: string,
-  ) {
-    const exportCsv = exportType === 'csv' || accept === 'text/csv';
-    const result = await this.adminService.getAuditLogs(query, pagination, exportCsv);
-    if (exportCsv) {
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="audit-log.csv"');
-      res.send(result);
-    } else {
-      res.json(result);
-    }
-  }
-
-  // ── Platform-wide Payment Oversight ──────────────────────────────────────
-
-  @Get('payments')
-  @ApiOperation({ summary: 'Get all payments across all merchants (paginated, filterable)' })
-  getAdminPayments(@Query() query: QueryAdminPaymentsDto) {
-    return this.adminService.getAdminPayments({
-      page: query.page ?? 1,
-      limit: query.limit ?? 20,
-      merchantId: query.merchantId,
-      status: query.status,
-      network: query.network,
-      dateFrom: query.dateFrom,
-      dateTo: query.dateTo,
-      minAmount: query.minAmount,
-    });
-  }
-
-  @Get('payments/:id')
-  @ApiOperation({ summary: 'Get full payment detail by ID' })
-  @ApiParam({ name: 'id', description: 'Payment ID' })
-  getAdminPaymentById(@Param('id') id: string) {
-    return this.adminService.getAdminPaymentById(id);
-  }
-
-  // ── Generic Soft/Hard Delete and Restore ───────────────────────────────────
-
-  @Post(':entity/:id/restore')
-  @Auditable({ action: 'RECORD_RESTORED', resource: 'record' })
-  @ApiOperation({ summary: 'Restore a soft-deleted record' })
-  restoreRecord(
-    @Param('entity') entity: string,
-    @Param('id') id: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string } },
-  ) {
-    return this.adminService.restoreRecord(entity, id, req.user?.id ?? req.user?.merchantId);
-  }
-
-  @Delete(':entity/:id')
-  @Auditable({ action: 'RECORD_DELETED', resource: 'record' })
-  @ApiOperation({ summary: 'Soft or hard delete a record' })
-  deleteRecord(
-    @Param('entity') entity: string,
-    @Param('id') id: string,
-    @Query('hard') hard: string,
-    @Req() req: Request & { user: { id: string; merchantId?: string; role: MerchantRole } },
-  ) {
-    const isHard = hard === 'true';
-    return this.adminService.deleteRecord(entity, id, isHard, req.user.role, req.user?.id);
-  }
-
-  // ── PCI-DSS Compliance Reports (#704) ─────────────────────────────────────
-
-  @Get('reports/compliance')
-  @ApiOperation({ summary: 'Generate PCI-DSS compliance report' })
-  async getComplianceReport(
-    @Query('from') from: string,
-    @Query('to') to: string,
-    @Query('type') type: string = 'full',
-    @Query('format') format: string = 'json',
-    @Res() res: Response,
-  ) {
-    const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const toDate = to ? new Date(to) : new Date();
-
-    let data: any;
-    switch (type) {
-      case 'access-control':
-        data = await this.adminService.getAccessControlReport(fromDate, toDate);
-        break;
-      case 'failed-auth':
-        data = await this.adminService.getFailedAuthReport(fromDate, toDate);
-        break;
-      case 'data-retention':
-        data = await this.adminService.getDataRetentionReport(fromDate, toDate);
-        break;
-      case 'settlements':
-        data = await this.adminService.getSettlementReconciliationReport(fromDate, toDate);
-        break;
-      default:
-        data = await this.adminService.getFullComplianceReport(fromDate, toDate);
-    }
-
-    if (format === 'pdf') {
-      const PDFDocument = require('pdfkit');
-      const doc = new PDFDocument({ margin: 50 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="compliance-report-${type}-${fromDate.toISOString().split('T')[0]}.pdf"`);
-      doc.pipe(res);
-      doc.fontSize(20).text('PCI-DSS Compliance Report', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12).text(`Report Type: ${type}`);
-      doc.text(`Generated: ${new Date().toISOString()}`);
-      doc.text(`Period: ${fromDate.toISOString()} — ${toDate.toISOString()}`);
-      doc.moveDown();
-      doc.fontSize(10).text(JSON.stringify(data, null, 2), { lineGap: 2 });
-      doc.end();
-      return;
-    }
-
-    return res.json({ status: 'success', data });
   }
 }
