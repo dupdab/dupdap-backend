@@ -10,6 +10,10 @@ import { StellarService } from '../stellar/stellar.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MerchantsService } from '../merchants/merchants.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { AmlService } from '../aml/aml.service';
+import { PaymentEscrowService } from '../blockchain-wallet/payment-escrow.service';
+import { TransactionLimitsService } from './transaction-limits.service';
 import { BatchCreatePaymentDto, BatchPaymentItemDto } from './dto/batch-create-payment.dto';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,6 +78,13 @@ describe('PaymentsService — createBatch', () => {
           provide: MerchantsService,
           useValue: { findOne: jest.fn() },
         },
+        { provide: AnalyticsService, useValue: { clearCacheForMerchant: jest.fn() } },
+        { provide: AmlService, useValue: { checkAndFlag: jest.fn() } },
+        {
+          provide: PaymentEscrowService,
+          useValue: { createPayment: jest.fn().mockReturnValue({ expiryLedger: 1360 }) },
+        },
+        { provide: TransactionLimitsService, useValue: { checkAndIncrement: jest.fn() } },
       ],
     }).compile();
 
