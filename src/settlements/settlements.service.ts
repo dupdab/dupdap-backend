@@ -295,6 +295,39 @@ export class SettlementsService {
     await this.auditLogRepo.save(log);
   }
 
+  /**
+   * Sends the settlement status email to the merchant (#832).
+   * Used by the non-callback completion path so it matches the partner
+   * callback path. Never throws: email failures must not fail a settlement.
+   */
+  private async sendSettlementCompletionEmail(settlement: Settlement): Promise<void> {
+    try {
+      const merchant =
+        settlement.merchant ??
+        (settlement.merchantId
+          ? await this.merchantsService.findOne(settlement.merchantId)
+          : undefined);
+      if (!merchant?.email) return;
+
+      await this.emailService.sendSettlementStatusEmail(
+        merchant.email,
+        {
+          id: settlement.id,
+          status: settlement.status,
+          totalAmountUsd: settlement.totalAmountUsd,
+          netAmountUsd: settlement.netAmountUsd,
+        },
+        {
+          totalAmountUsd: settlement.totalAmountUsd,
+          feeAmountUsd: settlement.feeAmountUsd,
+          netAmountUsd: settlement.netAmountUsd,
+        },
+      );
+    } catch {
+      // Swallow: notification is best-effort and must not break settlement.
+    }
+  }
+
   private async notifySettlementDecision(
     settlement: Settlement,
     decision: 'approved' | 'rejected',
