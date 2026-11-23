@@ -185,6 +185,23 @@ describe('PaymentsService — createBatch', () => {
 
   // ── PaymentCreated events ─────────────────────────────────────────────────
 
+  it('generates a Stellar URI and QR code for every batch item', async () => {
+    const result = await service.createBatch('merchant-1', makeDto(3));
+
+    expect(result.items).toHaveLength(3);
+    for (const item of result.items) {
+      expect(item.qrCode).not.toBeNull();
+      expect(item.qrCode).toBe('data:image/png;base64,mock');
+      expect(item.stellarUri).toContain('web+stellar:pay?');
+      expect(item.stellarUri).toContain('destination=GDEPOSITADDR');
+    }
+
+    const savedRecords: Payment[] = repoSave.mock.calls[0][0];
+    for (const p of savedRecords) {
+      expect(p.qrCode).not.toBeNull();
+    }
+  });
+
   it('logs a PaymentCreated event for each item in the batch', async () => {
     const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => {});
     await service.createBatch('merchant-1', makeDto(3));
