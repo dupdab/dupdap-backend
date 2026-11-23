@@ -116,9 +116,20 @@ export class SettlementsService {
       details: { status: settlement.status, failureReason: settlement.failureReason },
     });
 
-    for (const payment of settlement.payments ?? []) {
-      payment.status = PaymentStatus.FAILED;
+    // Release linked payments back to CONFIRMED so they can be reprocessed in a new settlement.
+    const payments = settlement.payments ?? [];
+    for (const payment of payments) {
+      payment.status = PaymentStatus.CONFIRMED;
+      payment.settlementId = null;
       await this.paymentsRepo.save(payment);
+    }
+
+    for (const payment of payments) {
+      await this.webhooks.dispatch(payment.merchantId, 'payment.settlement_rejected', {
+        paymentId: payment.id,
+        reference: payment.reference,
+        settlementId: settlement.id,
+      });
     }
 
     await this.notifySettlementDecision(settlement, 'rejected', adminId);

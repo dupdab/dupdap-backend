@@ -126,7 +126,7 @@ export class Payment {
   settlement: Settlement;
 
   @Column({ nullable: true })
-  settlementId: string;
+  settlementId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
