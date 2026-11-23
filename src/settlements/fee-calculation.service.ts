@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import Big from 'big.js';
 
 export interface FeeResult {
   feeUsd: number;
@@ -23,33 +24,39 @@ const FEE_TIERS: FeeTier[] = [
 
 @Injectable()
 export class FeeCalculationService {
-  async calculateFee(merchantId: string, amountUsd: number): Promise<FeeResult> {
-    if (!Number.isFinite(amountUsd) || amountUsd < 0) {
+  async calculateFee(merchantId: string, amountUsd: string | number): Promise<FeeResult> {
+    let amount: Big;
+    try {
+      amount = new Big(amountUsd);
+    } catch {
+      throw new BadRequestException(`Invalid amount for merchant ${merchantId}: ${amountUsd}`);
+    }
+    if (amount.lt(0)) {
       throw new BadRequestException(`Invalid amount for merchant ${merchantId}: ${amountUsd}`);
     }
 
-    const tier = this.resolveTier(amountUsd);
-    const feeUsd = this.round(amountUsd * tier.rate);
-    const netUsd = this.round(amountUsd - feeUsd);
+    const tier = this.resolveTier(amount);
+    const feeUsd = this.round(amount.times(tier.rate));
+    const netUsd = this.round(amount.minus(feeUsd));
 
     return {
-      feeUsd,
+      feeUsd: feeUsd.toNumber(),
       feeRate: tier.rate,
       tierName: tier.name,
-      netUsd,
+      netUsd: netUsd.toNumber(),
     };
   }
 
-  private resolveTier(amountUsd: number): FeeTier {
+  private resolveTier(amount: Big): FeeTier {
     for (const tier of FEE_TIERS) {
-      if (amountUsd >= tier.minUsd && (tier.maxUsd === null || amountUsd < tier.maxUsd)) {
+      if (amount.gte(tier.minUsd) && (tier.maxUsd === null || amount.lt(tier.maxUsd))) {
         return tier;
       }
     }
     return FEE_TIERS[FEE_TIERS.length - 1];
   }
 
-  private round(value: number): number {
-    return Math.round(value * 100) / 100;
+  private round(value: Big): Big {
+    return value.round(2, Big.roundHalfUp);
   }
 }

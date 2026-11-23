@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import Big from 'big.js';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository, MoreThanOrEqual, LessThanOrEqual, In } from 'typeorm';
@@ -27,7 +28,7 @@ export class AmlService {
   ) {}
 
   async checkAndFlag(payment: Payment): Promise<void> {
-    if (Number(payment.amountUsd) >= HIGH_VALUE_THRESHOLD_USD) {
+    if (new Big(payment.amountUsd).gte(HIGH_VALUE_THRESHOLD_USD)) {
       await this.createFlag(payment.merchantId, payment.id, AmlFlagReason.HIGH_VALUE, {
         amountUsd: payment.amountUsd,
       });

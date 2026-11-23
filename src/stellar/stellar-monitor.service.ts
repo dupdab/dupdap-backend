@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import Big from 'big.js';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -306,7 +307,7 @@ export class StellarMonitorService implements OnModuleInit {
 
     await this.notifications.enqueueSms({
       to: merchant.smsPhoneNumber,
-      body: `DupDub: payment ${payment.reference} confirmed for $${Number(payment.amountUsd).toFixed(2)} USD.`,
+      body: `DupDub: payment ${payment.reference} confirmed for $${new Big(payment.amountUsd).toFixed(2)} USD.`,
     });
   }
 
