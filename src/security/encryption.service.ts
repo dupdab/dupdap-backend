@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { setEncryptionServiceInstance } from './encrypted-column.transformer';
 
 const ENCRYPTED_PREFIX = 'env1';
 const GCM_IV_BYTES = 12;
@@ -56,6 +57,7 @@ export class EncryptionService {
       process.env.ENCRYPTION_KEY_VERSION ?? 1,
     );
     diManagedInstance = this;
+    setEncryptionServiceInstance(this);
   }
 
   static getInstance(): EncryptionService {

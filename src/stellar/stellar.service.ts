@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { randomBytes } from 'crypto';
 import { CacheService } from '../cache/cache.service';
 import { AdminAlertService } from '../alerts/admin-alert.service';
 import { AdminAlertType } from '../alerts/admin-alert.entity';
@@ -153,7 +154,7 @@ export class StellarService implements OnModuleInit {
   }
 
   generateMemo(): string {
-    return Math.random().toString(36).substring(2, 10).toUpperCase();
+    return randomBytes(8).toString('hex');
   }
 
   async getXlmUsdRate(): Promise<XlmUsdRate> {

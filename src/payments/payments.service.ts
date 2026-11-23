@@ -19,6 +19,7 @@ import { PaginatedResponseDto } from '../common/dto/pagination.dto';
 import { PaymentEscrowService, PaymentExpiredError } from '../blockchain-wallet/payment-escrow.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { TransactionLimitsService } from './transaction-limits.service';
+import { PaymentConfirmedEventDto } from '../stellar/soroban-event.dto';
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -451,5 +452,7 @@ export class PaymentsService {
       count: Number(row.count),
       totalUsd: Number(row.totalUsd),
     }));
+  }
+}
   }
 }

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayUnique, IsArray, IsDate, IsIn, IsOptional, IsString, MaxDate } from 'class-validator';
+import { ArrayUnique, IsArray, IsDate, IsOptional, IsString, MaxDate } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiScope, API_KEY_SCOPES } from '../../auth/scopes';
 
@@ -20,7 +20,6 @@ export class GenerateApiKeyDto {
   @IsArray()
   @ArrayUnique()
   @IsString({ each: true })
-  @IsIn(API_KEY_SCOPES, { each: true })
   scopes?: ApiScope[];
 
   @ApiPropertyOptional({

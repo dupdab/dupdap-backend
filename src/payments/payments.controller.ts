@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Query, UseGuards, UseFilters, Request, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Query, UseGuards, UseFilters, Request, UseInterceptors, ParseUUIDPipe, ClassSerializerInterceptor } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -37,7 +37,8 @@ export class PaymentsController {
 
   @Post()
   @Scopes('payments:write')
-  @UseInterceptors(IdempotencyInterceptor)
+  // Serializer must sit inside IdempotencyInterceptor so cached replays hold masked bodies
+  @UseInterceptors(IdempotencyInterceptor, ClassSerializerInterceptor)
   @Auditable({ action: 'PAYMENT_CREATED', resource: 'payment' })
   @ApiOperation({ summary: 'Create a payment request' })
   @ApiOkResponse({ description: 'Payment created' })
@@ -73,6 +74,7 @@ export class PaymentsController {
 
   @Get()
   @Scopes('payments:read')
+  @UseInterceptors(ClassSerializerInterceptor)
   @ApiOperation({ summary: 'List all payments' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
@@ -107,6 +109,7 @@ export class PaymentsController {
 
   @Get(':id')
   @Scopes('payments:read')
+  @UseInterceptors(ClassSerializerInterceptor)
   @ApiOperation({ summary: 'Get payment by ID' })
   @ApiParam({ name: 'id', description: 'Payment UUID' })
   @ApiOkResponse({ description: 'Payment detail' })
@@ -120,6 +123,7 @@ export class PaymentsController {
 
   @Post(':id/cancel')
   @Scopes('payments:write')
+  @UseInterceptors(ClassSerializerInterceptor)
   @Auditable({ action: 'PAYMENT_CANCELLED', resource: 'payment' })
   @ApiOperation({ summary: 'Cancel a pending payment' })
   @ApiParam({ name: 'id', description: 'Payment UUID' })
@@ -130,6 +134,7 @@ export class PaymentsController {
 
   @Post(':id/refund')
   @Scopes('payments:write')
+  @UseInterceptors(ClassSerializerInterceptor)
   @Auditable({ action: 'PAYMENT_REFUNDED', resource: 'payment' })
   @ApiOperation({ summary: 'Initiate a refund for a settled payment' })
   @ApiParam({ name: 'id', description: 'Payment UUID' })
@@ -161,6 +166,7 @@ export class PublicPaymentController {
   @ApiResponse({ status: 410, description: 'QR code expired' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   async getByReference(@Param('reference') reference: string): Promise<PublicPaymentViewDto> {
+    // Intentionally unscoped: only the unauthenticated pay page may call this. Authenticated callers must scope by merchantId (#853).
     const payment = await this.paymentsService.findByReference(reference);
     return PublicPaymentViewDto.from(payment);
   }
