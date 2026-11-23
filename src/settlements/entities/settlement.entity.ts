@@ -23,9 +23,7 @@ export enum SettlementStatus {
 }
 
 @Entity('settlements')
-@Index('IDX_SETTLEMENT_MERCHANT_ID', ['merchantId'])
 @Index('IDX_SETTLEMENT_STATUS', ['status'])
-@Index('IDX_SETTLEMENT_MERCHANT_STATUS', ['merchantId', 'status'])
 export class Settlement {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -34,6 +32,7 @@ export class Settlement {
   @JoinColumn({ name: 'merchantId' })
   merchant: Merchant;
 
+  @Index('IDX_SETTLEMENT_MERCHANT_ID')
   @Column()
   merchantId: string;
 
@@ -55,6 +54,7 @@ export class Settlement {
   @Column({ type: 'decimal', precision: 18, scale: 6, nullable: true, transformer: numericColumnTransformer })
   fiatAmount: string | null;
 
+  @Index('IDX_SETTLEMENT_MERCHANT_STATUS', ['merchantId', 'status'])
   @Column({ type: 'enum', enum: SettlementStatus, default: SettlementStatus.PENDING })
   status: SettlementStatus;
 
