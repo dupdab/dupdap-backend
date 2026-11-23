@@ -635,3 +635,6 @@ error codes and recovery actions.
 New to Stellar payments? Start with the [glossary](docs/glossary.md). For
 integration code, see the [Merchant API examples](docs/examples/README.md)
 (Node.js, Python and a [Postman collection](docs/dupdub-merchant-api.postman_collection.json)).
+
+<!-- handsoff-issue-934 -->
+- #934: admin: alert deduplication key not namespaced by type — different alert types can suppress each other

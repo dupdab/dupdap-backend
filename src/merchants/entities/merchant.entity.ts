@@ -196,6 +196,10 @@ export class Merchant {
   @Column({ default: false })
   sandboxMode: boolean;
 
+  /** Unverified merchants are restricted to sandbox mode (#888). */
+  @Column({ default: false })
+  emailVerified: boolean;
+
   @Exclude()
   @Column({ nullable: true })
   totpSecret: string | null;
