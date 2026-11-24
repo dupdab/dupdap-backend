@@ -33,6 +33,7 @@ import { PaymentConfirmedEventDto } from '../stellar/soroban-event.dto';
 
 const DEFAULT_EXPIRY_MINUTES = 30;
 const MAX_EXPIRY_MINUTES = 1440;
+const MAX_PAGE_LIMIT = 100;
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -370,23 +371,28 @@ export class PaymentsService {
     page = 1,
     limit = 20,
   ): Promise<PaginatedResponseDto<Payment>> {
+    // Defensive bounds (#847): never allow arbitrarily large result sets even
+    // when the service is called outside the validated HTTP layer.
+    const safePage = Math.max(1, Math.trunc(page) || 1);
+    const safeLimit = Math.min(MAX_PAGE_LIMIT, Math.max(1, Math.trunc(limit) || 1));
+
     const qb = this.paymentsRepo
       .createQueryBuilder('payment')
       .leftJoin('payment.merchant', 'merchant')
       .addSelect(['merchant.id', 'merchant.businessName'])
       .where('payment.merchantId = :merchantId', { merchantId })
       .orderBy('payment.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+      .skip((safePage - 1) * safeLimit)
+      .take(safeLimit);
 
     const [items, total] = await qb.getManyAndCount();
 
     return {
       items,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
     };
   }
 
