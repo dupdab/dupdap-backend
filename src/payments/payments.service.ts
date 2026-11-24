@@ -246,7 +246,7 @@ export class PaymentsService {
       this.logger.error(`AML check failed for payment ${saved.id}: ${(err as Error).message}`);
     }
 
-    await this.webhooks.dispatch(saved.merchantId, 'payment.confirmed', { id: saved.id, reference: saved.reference });
+    await this.webhooks.dispatch(saved.merchantId, 'payment.confirmed', { paymentId: saved.id });
     return saved;
   }
 
