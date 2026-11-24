@@ -247,7 +247,32 @@ export class PaymentsService {
     }
 
     await this.webhooks.dispatch(saved.merchantId, 'payment.confirmed', { paymentId: saved.id });
+    await this.notifyMerchantOfConfirmation(saved);
     return saved;
+  }
+
+  /**
+   * Email the merchant that a payment was confirmed, honouring their
+   * `paymentConfirmedEmailEnabled` preference. Never blocks confirmation.
+   */
+  private async notifyMerchantOfConfirmation(payment: Payment): Promise<void> {
+    try {
+      const merchant = await this.merchants.findOne(payment.merchantId);
+      if (!merchant?.paymentConfirmedEmailEnabled) return;
+
+      await this.notifications.notifyMerchant({
+        merchantEmail: merchant.email,
+        merchantName: merchant.businessName,
+        paymentId: payment.id,
+        reference: payment.reference,
+        amountUsd: payment.amountUsd,
+        amountUsdc: payment.amountUsdc,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Merchant confirmation notification failed for payment ${payment.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
