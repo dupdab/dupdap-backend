@@ -32,11 +32,19 @@ export class PaymentExpiryService {
     });
     if (!expired.length) return 0;
 
+    // Single bulk UPDATE: PENDING + expiresAt < NOW() -> EXPIRED (#850).
+    const ids = expired.map((payment) => payment.id);
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({ status: PaymentStatus.EXPIRED })
+      .where('id IN (:...ids)', { ids })
+      .andWhere('status = :status', { status: PaymentStatus.PENDING })
+      .andWhere('"expiresAt" < :now', { now })
+      .execute();
+
     for (const payment of expired) {
       try {
-        payment.status = PaymentStatus.EXPIRED;
-        await this.payments.save(payment);
-
         await this.events.save(
           this.events.create({
             paymentId: payment.id,

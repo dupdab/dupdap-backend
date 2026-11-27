@@ -33,6 +33,7 @@ import { PaymentConfirmedEventDto } from '../stellar/soroban-event.dto';
 
 const DEFAULT_EXPIRY_MINUTES = 30;
 const MAX_EXPIRY_MINUTES = 1440;
+const MAX_PAGE_LIMIT = 100;
 
 // Events emitted per payment in a batch — mirrors contract PaymentCreated events
 export interface PaymentCreatedEvent {
@@ -245,8 +246,33 @@ export class PaymentsService {
       this.logger.error(`AML check failed for payment ${saved.id}: ${(err as Error).message}`);
     }
 
-    await this.webhooks.dispatch(saved.merchantId, 'payment.confirmed', { id: saved.id, reference: saved.reference });
+    await this.webhooks.dispatch(saved.merchantId, 'payment.confirmed', { paymentId: saved.id });
+    await this.notifyMerchantOfConfirmation(saved);
     return saved;
+  }
+
+  /**
+   * Email the merchant that a payment was confirmed, honouring their
+   * `paymentConfirmedEmailEnabled` preference. Never blocks confirmation.
+   */
+  private async notifyMerchantOfConfirmation(payment: Payment): Promise<void> {
+    try {
+      const merchant = await this.merchants.findOne(payment.merchantId);
+      if (!merchant?.paymentConfirmedEmailEnabled) return;
+
+      await this.notifications.notifyMerchant({
+        merchantEmail: merchant.email,
+        merchantName: merchant.businessName,
+        paymentId: payment.id,
+        reference: payment.reference,
+        amountUsd: payment.amountUsd,
+        amountUsdc: payment.amountUsdc,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Merchant confirmation notification failed for payment ${payment.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -370,23 +396,28 @@ export class PaymentsService {
     page = 1,
     limit = 20,
   ): Promise<PaginatedResponseDto<Payment>> {
+    // Defensive bounds (#847): never allow arbitrarily large result sets even
+    // when the service is called outside the validated HTTP layer.
+    const safePage = Math.max(1, Math.trunc(page) || 1);
+    const safeLimit = Math.min(MAX_PAGE_LIMIT, Math.max(1, Math.trunc(limit) || 1));
+
     const qb = this.paymentsRepo
       .createQueryBuilder('payment')
       .leftJoin('payment.merchant', 'merchant')
       .addSelect(['merchant.id', 'merchant.businessName'])
       .where('payment.merchantId = :merchantId', { merchantId })
       .orderBy('payment.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+      .skip((safePage - 1) * safeLimit)
+      .take(safeLimit);
 
     const [items, total] = await qb.getManyAndCount();
 
     return {
       items,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
     };
   }
 
