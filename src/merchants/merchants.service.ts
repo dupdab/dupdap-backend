@@ -121,7 +121,9 @@ export class MerchantsService {
     scopes?: ApiScope[],
     expiresAt?: Date,
   ): Promise<{ apiKey: string; expiresAt: Date | null }> {
-    const invalidScopes = (scopes ?? []).filter((scope) => !API_KEY_SCOPES.includes(scope));
+    const invalidScopes = [
+      ...new Set((scopes ?? []).filter((scope) => !API_KEY_SCOPES.includes(scope))),
+    ];
     if (invalidScopes.length > 0) {
       throw new BadRequestException(`Invalid API key scopes: ${invalidScopes.join(', ')}`);
     }
